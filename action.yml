@@ -1,4 +1,4 @@
-name: AI Code Review
+name: Code Review Action
 description: Review pull requests with Claude or Cursor — inline severity-rated comments and an approval verdict.
 author: julien777z
 
