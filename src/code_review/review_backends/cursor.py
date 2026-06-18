@@ -1,4 +1,3 @@
-import asyncio
 import json
 import logging
 import re
@@ -92,16 +91,16 @@ async def run_agent(prompt: str) -> str:
         await agent.close()
 
 
-def run_cursor_review(pr: PullRequestContext) -> int:
+async def run_cursor_review(pr: PullRequestContext) -> int:
     """Review the PR with the Cursor backend and post the result."""
 
-    def _findings(inputs: ReviewInputs) -> list[Finding]:
+    async def _findings(inputs: ReviewInputs) -> list[Finding]:
         prompt = cursor_prompt(inputs)
         try:
-            reply = asyncio.run(run_agent(prompt))
+            reply = await run_agent(prompt)
         except CursorAgentError as exc:
             raise review.ReviewBackendError(f"Cursor agent run failed: {exc}") from exc
 
         return parse_cursor_reply(reply)
 
-    return review.run_review_round(pr, CONFIG["review_marker"], _findings)
+    return await review.run_review_round(pr, CONFIG["review_marker"], _findings)

@@ -1,3 +1,6 @@
+import asyncio
+from unittest.mock import AsyncMock
+
 import pytest
 
 from code_review.config import CONFIG
@@ -225,9 +228,9 @@ class TestExistingFindingTitles:
                 title="Human", path="src/app.py", body="### Human\n\n**Low Severity**\n\nA human note."
             ),
         ]
-        monkeypatch.setattr("code_review.review.list_review_threads", lambda repo, pr_number: threads)
+        monkeypatch.setattr("code_review.review.list_review_threads", AsyncMock(return_value=threads))
 
-        result = existing_finding_titles("octo/repo", 7, MARKER)
+        result = asyncio.run(existing_finding_titles("octo/repo", 7, MARKER))
 
         assert list(result) == ["src/app.py"]
         assert result["src/app.py"][0].title == "Mine"
@@ -250,10 +253,10 @@ class TestReconcileThreads:
                 id="gone-critical", title="GoneCrit", severity="Critical", path="src/app.py", marker=MARKER
             ),
         ]
-        monkeypatch.setattr("code_review.review.list_review_threads", lambda repo, pr_number: threads)
+        monkeypatch.setattr("code_review.review.list_review_threads", AsyncMock(return_value=threads))
 
-        posted, open_keys, stale_ids, kept_blocking = reconcile_threads(
-            "octo/repo", 7, MARKER, {("src/app.py", "Current")}, {"src/app.py"}
+        posted, open_keys, stale_ids, kept_blocking = asyncio.run(
+            reconcile_threads("octo/repo", 7, MARKER, {("src/app.py", "Current")}, {"src/app.py"})
         )
 
         assert ("src/app.py", "Current") in open_keys

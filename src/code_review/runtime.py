@@ -143,19 +143,19 @@ def select_backend(first_review: bool) -> Backend | None:
             return None
 
 
-def run(pr: PullRequestContext, backend: Backend) -> int:
+async def run(pr: PullRequestContext, backend: Backend) -> int:
     """Dispatch the resolved backend for the PR."""
 
     match backend:
         case Backend.CURSOR:
-            return run_cursor_review(pr)
+            return await run_cursor_review(pr)
         case Backend.CLAUDE_API:
-            return run_claude_api_review(pr)
+            return await run_claude_api_review(pr)
         case Backend.CLAUDE_ROUTINE:
-            return fire_claude_routine(pr)
+            return await fire_claude_routine(pr)
 
 
-def main() -> int:
+async def main() -> int:
     """Resolve the event, pick a backend, and run one review round."""
 
     event_name, event = load_event()
@@ -177,7 +177,7 @@ def main() -> int:
         return 0
 
     repo = os.environ.get("GITHUB_REPOSITORY", "")
-    pr = fetch_pull_request(repo, pr_number)
+    pr = await fetch_pull_request(repo, pr_number)
     if pr.state != "OPEN":
         logger.info("PR #%s is %s, not open; skipping.", pr_number, pr.state)
 
@@ -188,4 +188,4 @@ def main() -> int:
 
         return 0
 
-    return run(pr, backend)
+    return await run(pr, backend)

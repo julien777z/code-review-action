@@ -1,11 +1,10 @@
+import asyncio
 import json
 import logging
 import signal
 import subprocess
-import sys
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from fnmatch import fnmatch
-from types import FrameType
 
 from pydantic import ValidationError
 
@@ -29,7 +28,7 @@ from code_review.models.shared.threads import ThreadCommentNode
 
 logger = logging.getLogger("code_review.review")
 
-GetFindings = Callable[[ReviewInputs], list[Finding]]
+GetFindings = Callable[[ReviewInputs], Awaitable[list[Finding]]]
 
 
 class ReviewBackendError(Exception):
@@ -64,7 +63,7 @@ def thread_severity(comment: ThreadCommentNode) -> Severity | None:
 
 
 def is_tier_comment(comment: ThreadCommentNode | None, marker: str) -> bool:
-    """Return True when the comment is this tier's own posting (github-actions bot plus the marker)."""
+    """Return True when the comment is the runner's own posting (github-actions bot plus the marker)."""
 
     if comment is None:
         return False
@@ -74,11 +73,11 @@ def is_tier_comment(comment: ThreadCommentNode | None, marker: str) -> bool:
     return author in ("github-actions", "github-actions[bot]") and marker in comment.body
 
 
-def existing_finding_titles(repo: str, pr_number: int, marker: str) -> dict[str, list[PostedFinding]]:
-    """Return this tier's posted (severity, title) pairs per file (open and resolved); best-effort."""
+async def existing_finding_titles(repo: str, pr_number: int, marker: str) -> dict[str, list[PostedFinding]]:
+    """Return the runner's posted (severity, title) pairs per file (open and resolved); best-effort."""
 
     try:
-        threads = list_review_threads(repo, pr_number)
+        threads = await list_review_threads(repo, pr_number)
     except (subprocess.CalledProcessError, json.JSONDecodeError, KeyError, TypeError, ValidationError):
         return {}
 
@@ -98,16 +97,16 @@ def existing_finding_titles(repo: str, pr_number: int, marker: str) -> dict[str,
     return findings
 
 
-def reconcile_threads(
+async def reconcile_threads(
     repo: str,
     pr_number: int,
     marker: str,
     current_keys: set[tuple[str, str]],
     reviewed_files: set[str],
 ) -> tuple[set[tuple[str, str]], set[tuple[str, str]], list[str], set[tuple[str, str]]]:
-    """Classify this tier's threads read-only into posted, open, stale, and kept-blocking keys."""
+    """Classify the runner's threads read-only into posted, open, stale, and kept-blocking keys."""
 
-    threads = list_review_threads(repo, pr_number)
+    threads = await list_review_threads(repo, pr_number)
 
     posted_keys: set[tuple[str, str]] = set()
     open_keys: set[tuple[str, str]] = set()
@@ -297,10 +296,10 @@ def build_review(
     return ReviewPayload(commit_id=head_sha, event=event, body=body, comments=comments)
 
 
-def post_review_with_fallback(repo: str, pr_number: int, payload: ReviewPayload, event: str) -> None:
+async def post_review_with_fallback(repo: str, pr_number: int, payload: ReviewPayload, event: str) -> None:
     """Post the review, re-posting an APPROVE the bot cannot submit as a COMMENT."""
 
-    if post_review(repo, pr_number, payload):
+    if await post_review(repo, pr_number, payload):
         return
 
     # github-actions[bot] cannot APPROVE a PR, so re-post a clean verdict as a COMMENT (the check
@@ -308,52 +307,52 @@ def post_review_with_fallback(repo: str, pr_number: int, payload: ReviewPayload,
     if event == "APPROVE":
         payload.event = "COMMENT"
 
-    if event != "APPROVE" or not post_review(repo, pr_number, payload):
+    if event != "APPROVE" or not await post_review(repo, pr_number, payload):
         logger.warning("Could not post the %s review; the check run still records the verdict.", event)
 
 
-def run_review_round(pr: PullRequestContext, marker: str, get_findings: GetFindings) -> int:
+async def run_review_round(pr: PullRequestContext, marker: str, get_findings: GetFindings) -> int:
     """Gather inputs, run a backend to get findings, then reconcile, post, and record the verdict."""
 
     # The verdict of record is the check run (approval on) or the review marker (approval off).
     already = (
-        already_reviewed(pr.repo, pr.number, pr.head_sha, marker)
+        await already_reviewed(pr.repo, pr.number, pr.head_sha, marker)
         if SETTINGS.approval_disable
-        else head_check_concluded(pr.repo, pr.head_sha)
+        else await head_check_concluded(pr.repo, pr.head_sha)
     )
     if already:
         logger.info("Head %s already reviewed; skipping.", pr.head_sha)
 
         return 0
 
-    diff = pull_request_diff(pr.repo, pr.number)
-    anchors, unpatched = diff_anchors(pr.repo, pr.number)
-    inputs = ReviewInputs(
-        pr=pr, diff=diff, posted_findings=existing_finding_titles(pr.repo, pr.number, marker)
+    diff, (anchors, unpatched), posted_findings = await asyncio.gather(
+        pull_request_diff(pr.repo, pr.number),
+        diff_anchors(pr.repo, pr.number),
+        existing_finding_titles(pr.repo, pr.number, marker),
     )
+    inputs = ReviewInputs(pr=pr, diff=diff, posted_findings=posted_findings)
 
-    check_id = None if SETTINGS.approval_disable else start_check_run(pr.repo, pr.head_sha)
+    check_id = None if SETTINGS.approval_disable else await start_check_run(pr.repo, pr.head_sha)
     concluded = False
+    loop = asyncio.get_running_loop()
+    review_task = asyncio.current_task()
 
     # cancel-in-progress would leave this head's check stuck in_progress; conclude it on cancellation.
-    def _conclude_on_signal(signum: int, frame: FrameType | None) -> None:
-        """Conclude the pending check run when the job is cancelled, then exit."""
+    def _cancel_on_signal() -> None:
+        """Cancel the in-flight review so the check run concludes when the job is cancelled."""
 
-        nonlocal concluded
-        complete_check_run(pr.repo, check_id, "cancelled", "Superseded", "The review job was cancelled.")
-        concluded = True
-
-        sys.exit(1)
+        if review_task is not None:
+            review_task.cancel()
 
     for cancel_signal in (signal.SIGTERM, signal.SIGINT):
-        signal.signal(cancel_signal, _conclude_on_signal)
+        loop.add_signal_handler(cancel_signal, _cancel_on_signal)
 
     try:
         try:
-            findings = get_findings(inputs)
+            findings = await get_findings(inputs)
         except ReviewBackendError as exc:
             logger.error("Review backend failed: %s", exc)
-            complete_check_run(pr.repo, check_id, "action_required", "Review failed", str(exc))
+            await complete_check_run(pr.repo, check_id, "action_required", "Review failed", str(exc))
             concluded = True
 
             return 1
@@ -362,15 +361,15 @@ def run_review_round(pr: PullRequestContext, marker: str, get_findings: GetFindi
         current_keys = {(finding.path, finding.title.strip()) for finding in findings}
 
         # Re-gate: never anchor a review to a head that advanced while the backend ran.
-        if current_head_sha(pr.repo, pr.number) != pr.head_sha:
+        if await current_head_sha(pr.repo, pr.number) != pr.head_sha:
             logger.info("Head moved during review; skipping (the new commit reviews next).")
-            complete_check_run(pr.repo, check_id, "cancelled", "Superseded", "The head moved during review.")
+            await complete_check_run(pr.repo, check_id, "cancelled", "Superseded", "The head moved during review.")
             concluded = True
 
             return 0
 
         reviewed_files = set(anchors) | unpatched
-        posted_keys, open_existing, stale_ids, kept_blocking = reconcile_threads(
+        posted_keys, open_existing, stale_ids, kept_blocking = await reconcile_threads(
             pr.repo, pr.number, marker, current_keys, reviewed_files
         )
 
@@ -404,27 +403,35 @@ def run_review_round(pr: PullRequestContext, marker: str, get_findings: GetFindi
         summary = verdict_summary(event, open_count, previous_count)
 
         # Re-check the head right before mutating: it can advance during reconciliation.
-        if current_head_sha(pr.repo, pr.number) != pr.head_sha:
+        if await current_head_sha(pr.repo, pr.number) != pr.head_sha:
             logger.info("Head moved before posting; skipping (the new commit reviews next).")
-            complete_check_run(pr.repo, check_id, "cancelled", "Superseded", "The head moved before posting.")
+            await complete_check_run(pr.repo, check_id, "cancelled", "Superseded", "The head moved before posting.")
             concluded = True
 
             return 0
 
         # Post only when there are new comments; otherwise the check run carries the verdict.
-        if new_findings and not already_reviewed(pr.repo, pr.number, pr.head_sha, marker):
+        if new_findings and not await already_reviewed(pr.repo, pr.number, pr.head_sha, marker):
             payload = build_review(pr.head_sha, new_findings, anchors, event, summary, marker)
-            post_review_with_fallback(pr.repo, pr.number, payload, event)
+            await post_review_with_fallback(pr.repo, pr.number, payload, event)
 
         logger.info("Resolving %d stale thread(s); %d open issue(s) remain.", len(stale_ids), open_count)
-        resolve_threads(pr.repo, stale_ids)
+        await resolve_threads(pr.repo, stale_ids)
 
-        complete_check_run(pr.repo, check_id, conclusion, title, summary)
+        await complete_check_run(pr.repo, check_id, conclusion, title, summary)
         concluded = True
 
         return 0
+    except asyncio.CancelledError:
+        await complete_check_run(pr.repo, check_id, "cancelled", "Superseded", "The review job was cancelled.")
+        concluded = True
+
+        return 1
     finally:
+        for cancel_signal in (signal.SIGTERM, signal.SIGINT):
+            loop.remove_signal_handler(cancel_signal)
+
         if not concluded:
-            complete_check_run(
+            await complete_check_run(
                 pr.repo, check_id, "action_required", "Review failed", "The review run did not complete."
             )

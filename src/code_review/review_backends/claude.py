@@ -18,26 +18,26 @@ logger = logging.getLogger("code_review.claude")
 CLAUDE_MAX_TOKENS: Final[int] = 16000
 
 
-def run_claude_api_review(pr: PullRequestContext) -> int:
+async def run_claude_api_review(pr: PullRequestContext) -> int:
     """Review the PR with the Claude Messages API (structured output) and post the result."""
 
-    def _findings(inputs: ReviewInputs) -> list[Finding]:
-        client = anthropic.Anthropic(api_key=SETTINGS.anthropic_api_key)
+    async def _findings(inputs: ReviewInputs) -> list[Finding]:
         try:
-            response = client.messages.parse(
-                model=SETTINGS.claude_model,
-                max_tokens=CLAUDE_MAX_TOKENS,
-                thinking={"type": "adaptive"},
-                system=[
-                    {
-                        "type": "text",
-                        "text": review_instructions(),
-                        "cache_control": {"type": "ephemeral"},
-                    }
-                ],
-                messages=[{"role": "user", "content": pull_request_message(inputs)}],
-                output_format=ClaudeReply,
-            )
+            async with anthropic.AsyncAnthropic(api_key=SETTINGS.anthropic_api_key) as client:
+                response = await client.messages.parse(
+                    model=SETTINGS.claude_model,
+                    max_tokens=CLAUDE_MAX_TOKENS,
+                    thinking={"type": "adaptive"},
+                    system=[
+                        {
+                            "type": "text",
+                            "text": review_instructions(),
+                            "cache_control": {"type": "ephemeral"},
+                        }
+                    ],
+                    messages=[{"role": "user", "content": pull_request_message(inputs)}],
+                    output_format=ClaudeReply,
+                )
         except anthropic.APIError as exc:
             raise review.ReviewBackendError(f"Claude review request failed: {exc}") from exc
 
@@ -47,7 +47,7 @@ def run_claude_api_review(pr: PullRequestContext) -> int:
 
         return list(parsed.findings)
 
-    return review.run_review_round(pr, CONFIG["review_marker"], _findings)
+    return await review.run_review_round(pr, CONFIG["review_marker"], _findings)
 
 
 def build_routine_text(pr: PullRequestContext) -> str:
@@ -71,7 +71,7 @@ def build_routine_text(pr: PullRequestContext) -> str:
     return " ".join(lines)
 
 
-def fire_claude_routine(pr: PullRequestContext) -> int:
+async def fire_claude_routine(pr: PullRequestContext) -> int:
     """Fire the hosted Claude review routine for the current PR (the routine posts the review itself)."""
 
     if not SETTINGS.claude_routine_id or not SETTINGS.claude_routine_api_key:
@@ -79,30 +79,30 @@ def fire_claude_routine(pr: PullRequestContext) -> int:
 
         return 1
 
-    if already_reviewed(pr.repo, pr.number, pr.head_sha, CONFIG["review_marker"]):
+    if await already_reviewed(pr.repo, pr.number, pr.head_sha, CONFIG["review_marker"]):
         logger.info("Head %s already reviewed by Claude; not firing the routine.", pr.head_sha)
 
         return 0
 
-    if current_head_sha(pr.repo, pr.number) != pr.head_sha:
+    if await current_head_sha(pr.repo, pr.number) != pr.head_sha:
         logger.info("Head moved since the event; not firing for superseded commit %s.", pr.head_sha)
 
         return 0
 
     request_body = RoutineFireRequest(text=build_routine_text(pr))
     try:
-        response = httpx.post(
-            f"{CONFIG['routine_host']}/{SETTINGS.claude_routine_id}/fire",
-            content=request_body.model_dump_json(),
-            headers={
-                "Authorization": f"Bearer {SETTINGS.claude_routine_api_key}",
-                "anthropic-version": CONFIG["anthropic_version"],
-                "anthropic-beta": CONFIG["routine_beta"],
-                "Content-Type": "application/json",
-            },
-            timeout=30.0,
-        )
-        response.raise_for_status()
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                f"{CONFIG['routine_host']}/{SETTINGS.claude_routine_id}/fire",
+                content=request_body.model_dump_json(),
+                headers={
+                    "Authorization": f"Bearer {SETTINGS.claude_routine_api_key}",
+                    "anthropic-version": CONFIG["anthropic_version"],
+                    "anthropic-beta": CONFIG["routine_beta"],
+                    "Content-Type": "application/json",
+                },
+            )
+            response.raise_for_status()
     except httpx.HTTPStatusError as exc:
         logger.error("Routine fire failed (%s): %s", exc.response.status_code, exc.response.text)
 
