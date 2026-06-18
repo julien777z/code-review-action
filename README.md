@@ -1,4 +1,4 @@
-# AI Code Review
+# Code Review Action
 
 A GitHub Action that reviews pull requests with **Claude** or **Cursor** and posts severity-rated
 **inline comments** plus an **Approval Verdict** check run. It reviews only the lines a PR changes,
@@ -24,7 +24,6 @@ permissions:
 jobs:
   review:
     runs-on: ubuntu-latest
-    # A newer push supersedes an in-flight review for the same PR.
     concurrency:
       group: code-review-${{ github.event.pull_request.number || github.event.issue.number }}
       cancel-in-progress: true
@@ -32,12 +31,49 @@ jobs:
       - uses: julien777z/code-review-action@v1
         with:
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
-          # Optional second backend; enables review-model/first-review-model=cursor
-          cursor-api-key: ${{ secrets.CURSOR_API_KEY }}
 ```
 
 Provide at least one backend credential (`anthropic-api-key`, `cursor-api-key`, or the
 `claude-routine-*` pair). Comment `agent review` on a PR to trigger a manual review.
+
+## Examples
+
+Each snippet is the `with:` block for the step in the Quick start workflow — swap it in.
+
+Use Cursor instead of Claude:
+
+```yaml
+with:
+  cursor-api-key: ${{ secrets.CURSOR_API_KEY }}
+```
+
+Claude on the first review, Cursor on later pushes:
+
+```yaml
+with:
+  anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+  cursor-api-key: ${{ secrets.CURSOR_API_KEY }}
+  first-review-model: claude
+  review-model: cursor
+```
+
+Comment only, scoped to source files:
+
+```yaml
+with:
+  anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+  approval-disable: "true"
+  include-paths: "src/**"
+  exclude-paths: "**/*.lock"
+```
+
+Request changes only on critical or high findings:
+
+```yaml
+with:
+  anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+  approval-include: "critical, high"
+```
 
 ## Choosing the model
 
