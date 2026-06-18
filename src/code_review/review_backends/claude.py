@@ -1,14 +1,13 @@
 import logging
-import urllib.error
-import urllib.request
 from typing import Final
 
 import anthropic
+import httpx
 
 from code_review import review
 from code_review.config import CONFIG, SETTINGS
 from code_review.github import already_reviewed, current_head_sha
-from code_review.models.claude.findings import ReviewFindings
+from code_review.models.claude.reply import ClaudeReply
 from code_review.models.claude.routine import RoutineFireRequest
 from code_review.models.shared.findings import Finding
 from code_review.models.shared.pull_request import PullRequestContext, ReviewInputs
@@ -37,7 +36,7 @@ def run_claude_api_review(pr: PullRequestContext) -> int:
                     }
                 ],
                 messages=[{"role": "user", "content": pull_request_message(inputs)}],
-                output_format=ReviewFindings,
+                output_format=ClaudeReply,
             )
         except anthropic.APIError as exc:
             raise review.ReviewBackendError(f"Claude review request failed: {exc}") from exc
@@ -48,7 +47,7 @@ def run_claude_api_review(pr: PullRequestContext) -> int:
 
         return list(parsed.findings)
 
-    return review.run_review_round(pr, CONFIG["claude_marker"], _findings)
+    return review.run_review_round(pr, CONFIG["review_marker"], _findings)
 
 
 def build_routine_text(pr: PullRequestContext) -> str:
@@ -80,7 +79,7 @@ def fire_claude_routine(pr: PullRequestContext) -> int:
 
         return 1
 
-    if already_reviewed(pr.repo, pr.number, pr.head_sha, CONFIG["claude_marker"]):
+    if already_reviewed(pr.repo, pr.number, pr.head_sha, CONFIG["review_marker"]):
         logger.info("Head %s already reviewed by Claude; not firing the routine.", pr.head_sha)
 
         return 0
@@ -91,24 +90,28 @@ def fire_claude_routine(pr: PullRequestContext) -> int:
         return 0
 
     request_body = RoutineFireRequest(text=build_routine_text(pr))
-    request = urllib.request.Request(
-        f"{CONFIG['routine_host']}/{SETTINGS.claude_routine_id}/fire",
-        data=request_body.model_dump_json().encode(),
-        method="POST",
-        headers={
-            "Authorization": f"Bearer {SETTINGS.claude_routine_api_key}",
-            "anthropic-version": CONFIG["anthropic_version"],
-            "anthropic-beta": CONFIG["routine_beta"],
-            "Content-Type": "application/json",
-        },
-    )
-
     try:
-        with urllib.request.urlopen(request) as response:
-            logger.info("Fired Claude review routine (%s).", response.status)
-
-        return 0
-    except urllib.error.HTTPError as exc:
-        logger.error("Routine fire failed (%s): %s", exc.code, exc.read().decode(errors="replace"))
+        response = httpx.post(
+            f"{CONFIG['routine_host']}/{SETTINGS.claude_routine_id}/fire",
+            content=request_body.model_dump_json(),
+            headers={
+                "Authorization": f"Bearer {SETTINGS.claude_routine_api_key}",
+                "anthropic-version": CONFIG["anthropic_version"],
+                "anthropic-beta": CONFIG["routine_beta"],
+                "Content-Type": "application/json",
+            },
+            timeout=30.0,
+        )
+        response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        logger.error("Routine fire failed (%s): %s", exc.response.status_code, exc.response.text)
 
         return 1
+    except httpx.HTTPError as exc:
+        logger.error("Routine fire failed: %s", exc)
+
+        return 1
+
+    logger.info("Fired Claude review routine (%s).", response.status_code)
+
+    return 0

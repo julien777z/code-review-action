@@ -174,19 +174,18 @@ def list_review_threads(repo: str, pr_number: int) -> list[ReviewThread]:
 
     owner, _, name = repo.partition("/")
     list_query = (
-        "query($owner:String!,$name:String!,$number:Int!,$after:String){"
+        "query($owner:String!,$name:String!,$number:Int!,$endCursor:String){"
         "repository(owner:$owner,name:$name){pullRequest(number:$number){"
-        "reviewThreads(first:100,after:$after){pageInfo{hasNextPage endCursor} "
+        "reviewThreads(first:100,after:$endCursor){pageInfo{hasNextPage endCursor} "
         "nodes{id isResolved isOutdated comments(first:1){nodes{author{login} body path}}}}}}}"
     )
 
-    threads: list[ReviewThread] = []
-    after = None
     try:
-        while True:
-            args = [
+        raw = run_gh(
+            [
                 "api",
                 "graphql",
+                "--paginate",
                 "-f",
                 f"query={list_query}",
                 "-f",
@@ -195,16 +194,11 @@ def list_review_threads(repo: str, pr_number: int) -> list[ReviewThread]:
                 f"name={name}",
                 "-F",
                 f"number={pr_number}",
+                "--jq",
+                ".data.repository.pullRequest.reviewThreads.nodes[]",
             ]
-            if after is not None:
-                args += ["-f", f"after={after}"]
-
-            page = json.loads(run_gh(args))["data"]["repository"]["pullRequest"]["reviewThreads"]
-            threads.extend(ReviewThread.model_validate(node) for node in page["nodes"])
-            if not page["pageInfo"]["hasNextPage"]:
-                break
-
-            after = page["pageInfo"]["endCursor"]
+        )
+        threads = [ReviewThread.model_validate(json.loads(line)) for line in raw.splitlines() if line.strip()]
     except (subprocess.CalledProcessError, json.JSONDecodeError, KeyError, TypeError) as exc:
         # Fail loudly: approving over open threads dropped by a partial fetch would be a false success.
         logger.error("Could not list review threads to reconcile: %s", exc)

@@ -1,9 +1,9 @@
-import os
 import re
 from enum import StrEnum
-from typing import Final, Self, TypedDict
+from typing import Annotated, Final, Self, TypedDict
 
-from pydantic import BaseModel
+from pydantic import field_validator, model_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 from code_review.models.shared.severity import Severity
 
@@ -39,18 +39,20 @@ class ReviewConfig(TypedDict):
     routine_host: str
     anthropic_version: str
     routine_beta: str
-    cursor_marker: str
-    claude_marker: str
+    review_marker: str
     status_check_name: str
+    default_claude_model: str
+    default_cursor_model: str
 
 
 CONFIG: Final[ReviewConfig] = ReviewConfig(
     routine_host="https://api.anthropic.com/v1/claude_code/routines",
     anthropic_version="2023-06-01",
     routine_beta="experimental-cc-routine-2026-04-01",
-    cursor_marker="<!-- code-review:cursor -->",
-    claude_marker="<!-- code-review:claude -->",
+    review_marker="<!-- code-review -->",
     status_check_name="Approval Verdict",
+    default_claude_model="claude-opus-4-8",
+    default_cursor_model="composer-2.5",
 )
 
 
@@ -88,72 +90,87 @@ def parse_bool(value: str) -> bool:
     return value.strip().lower() in ("1", "true", "yes", "on")
 
 
-class Settings(BaseModel):
+class Settings(BaseSettings):
     """Runtime configuration assembled from the action inputs (environment)."""
 
-    github_token: str
-    anthropic_api_key: str
-    cursor_api_key: str
-    claude_routine_api_key: str
-    claude_routine_id: str | None
-    review_model: ReviewModel
-    first_review_model: ReviewModel | None
-    claude_mode: ClaudeMode
-    claude_model: str
-    cursor_model: str
-    additional_context: str
-    approval_include: frozenset[Severity]
-    approval_disable: bool
-    min_severity: Severity
-    low_findings_cap: int
-    max_findings: int | None
-    include_paths: tuple[str, ...]
-    exclude_paths: tuple[str, ...]
-    trigger_phrase: str
-    review_drafts: bool
-    author_associations: tuple[str, ...]
-    pr_number: int | None
+    model_config = SettingsConfigDict(case_sensitive=False, extra="ignore")
 
+    github_token: str = ""
+    anthropic_api_key: str = ""
+    cursor_api_key: str = ""
+    claude_routine_api_key: str = ""
+    claude_routine_id: str | None = None
+    claude_routine_url: str = ""
+    review_model: ReviewModel = ReviewModel.AUTO
+    first_review_model: ReviewModel | None = None
+    claude_mode: ClaudeMode = ClaudeMode.API
+    claude_model: str = CONFIG["default_claude_model"]
+    cursor_model: str = CONFIG["default_cursor_model"]
+    additional_context: str = ""
+    approval_include: Annotated[frozenset[Severity], NoDecode] = frozenset({Severity.CRITICAL})
+    approval_disable: bool = False
+    min_severity: Severity = Severity.LOW
+    low_findings_cap: int = 3
+    max_findings: int | None = None
+    include_paths: Annotated[tuple[str, ...], NoDecode] = ()
+    exclude_paths: Annotated[tuple[str, ...], NoDecode] = ()
+    trigger_phrase: str = "agent review"
+    review_drafts: bool = True
+    author_associations: Annotated[tuple[str, ...], NoDecode] = ()
+    pr_number: int | None = None
+
+    @model_validator(mode="before")
     @classmethod
-    def from_env(cls) -> Self:
-        """Build settings from the environment populated by the composite action."""
+    def strip_blank_inputs(cls, data: dict[str, str]) -> dict[str, str]:
+        """Strip whitespace from inputs and drop blanks so field defaults apply."""
 
-        max_findings_raw = os.environ.get("MAX_FINDINGS", "").strip()
-        pr_number_raw = os.environ.get("PR_NUMBER", "").strip()
-        approval_include = frozenset(
-            Severity.from_str(item)
-            for item in split_list(os.environ.get("APPROVAL_INCLUDE", "critical"))
-        )
+        return {key: stripped for key, value in data.items() if (stripped := value.strip())}
 
-        return cls(
-            github_token=os.environ.get("GITHUB_TOKEN", ""),
-            anthropic_api_key=os.environ.get("ANTHROPIC_API_KEY", ""),
-            cursor_api_key=os.environ.get("CURSOR_API_KEY", ""),
-            claude_routine_api_key=os.environ.get("CLAUDE_ROUTINE_API_KEY", ""),
-            claude_routine_id=resolve_routine_id(
-                os.environ.get("CLAUDE_ROUTINE_ID", ""),
-                os.environ.get("CLAUDE_ROUTINE_URL", ""),
-            ),
-            review_model=ReviewModel.parse(os.environ.get("REVIEW_MODEL", "auto")) or ReviewModel.AUTO,
-            first_review_model=ReviewModel.parse(os.environ.get("FIRST_REVIEW_MODEL", "")),
-            claude_mode=ClaudeMode((os.environ.get("CLAUDE_MODE", "api").strip().lower()) or "api"),
-            claude_model=os.environ.get("CLAUDE_MODEL", "claude-opus-4-8").strip() or "claude-opus-4-8",
-            cursor_model=os.environ.get("CURSOR_MODEL", "composer-2.5").strip() or "composer-2.5",
-            additional_context=os.environ.get("ADDITIONAL_CONTEXT", "").strip(),
-            approval_include=approval_include or frozenset({Severity.CRITICAL}),
-            approval_disable=parse_bool(os.environ.get("APPROVAL_DISABLE", "false")),
-            min_severity=Severity.from_str(os.environ.get("MIN_SEVERITY", "low") or "low"),
-            low_findings_cap=int(os.environ.get("LOW_FINDINGS_CAP", "3") or "3"),
-            max_findings=int(max_findings_raw) if max_findings_raw else None,
-            include_paths=split_list(os.environ.get("INCLUDE_PATHS", "")),
-            exclude_paths=split_list(os.environ.get("EXCLUDE_PATHS", "")),
-            trigger_phrase=os.environ.get("TRIGGER_PHRASE", "agent review").strip() or "agent review",
-            review_drafts=parse_bool(os.environ.get("REVIEW_DRAFTS", "true")),
-            author_associations=tuple(
-                item.upper() for item in split_list(os.environ.get("AUTHOR_ASSOCIATIONS", ""))
-            ),
-            pr_number=int(pr_number_raw) if pr_number_raw else None,
-        )
+    @field_validator("review_model", "first_review_model", "claude_mode", "min_severity", mode="before")
+    @classmethod
+    def normalize_enum(cls, value: str | None) -> str | None:
+        """Trim and lower-case an enum input so it matches the enum's values."""
+
+        return value.strip().lower() if value is not None else value
+
+    @field_validator("approval_disable", "review_drafts", mode="before")
+    @classmethod
+    def normalize_bool(cls, value: str | bool) -> bool:
+        """Parse a boolean input from its string form."""
+
+        return parse_bool(value) if isinstance(value, str) else value
+
+    @field_validator("approval_include", mode="before")
+    @classmethod
+    def normalize_severities(cls, value: str | frozenset[Severity]) -> frozenset[Severity]:
+        """Parse a comma-separated severity list, defaulting to critical when empty."""
+
+        if not isinstance(value, str):
+            return value
+
+        return frozenset(Severity.from_str(item) for item in split_list(value)) or frozenset({Severity.CRITICAL})
+
+    @field_validator("include_paths", "exclude_paths", mode="before")
+    @classmethod
+    def normalize_paths(cls, value: str | tuple[str, ...]) -> tuple[str, ...]:
+        """Split a comma/newline glob list into a tuple."""
+
+        return split_list(value) if isinstance(value, str) else value
+
+    @field_validator("author_associations", mode="before")
+    @classmethod
+    def normalize_associations(cls, value: str | tuple[str, ...]) -> tuple[str, ...]:
+        """Split and upper-case the author-association allowlist."""
+
+        return tuple(item.upper() for item in split_list(value)) if isinstance(value, str) else value
+
+    @model_validator(mode="after")
+    def resolve_routine(self) -> Self:
+        """Resolve the routine id from the id/url inputs, rejecting both at once."""
+
+        self.claude_routine_id = resolve_routine_id(self.claude_routine_id or "", self.claude_routine_url)
+
+        return self
 
 
-SETTINGS: Final[Settings] = Settings.from_env()
+SETTINGS: Final[Settings] = Settings()

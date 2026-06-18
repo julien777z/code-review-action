@@ -19,7 +19,7 @@ from code_review.review import (
     verdict_summary,
 )
 
-CURSOR_MARKER = CONFIG["cursor_marker"]
+MARKER = CONFIG["review_marker"]
 
 
 class TestComputeVerdict:
@@ -168,12 +168,12 @@ class TestBuildReview:
             finding_factory(path="big.txt", line=1, title="Big"),
         ]
 
-        payload = build_review("sha1", findings, anchors, "COMMENT", "Found 2 issues.", CURSOR_MARKER)
+        payload = build_review("sha1", findings, anchors, "COMMENT", "Found 2 issues.", MARKER)
 
         assert len(payload.comments) == 1
         assert payload.comments[0].path == "src/app.py"
         assert "On files too large to anchor inline:" in payload.body
-        assert payload.body.rstrip().endswith(CURSOR_MARKER)
+        assert payload.body.rstrip().endswith(MARKER)
 
 
 class TestCommentBody:
@@ -182,11 +182,11 @@ class TestCommentBody:
     def test_render(self, finding_factory) -> None:
         """Test that the comment carries the heading, severity line, and runner marker."""
 
-        body = comment_body(finding_factory(title="Leak", severity=Severity.CRITICAL), CURSOR_MARKER)
+        body = comment_body(finding_factory(title="Leak", severity=Severity.CRITICAL), MARKER)
 
         assert "### Leak" in body
         assert "**Critical Severity**" in body
-        assert body.rstrip().endswith(CURSOR_MARKER)
+        assert body.rstrip().endswith(MARKER)
 
 
 class TestThreadParsing:
@@ -195,12 +195,14 @@ class TestThreadParsing:
     def test_is_tier_comment(self, thread_comment_factory) -> None:
         """Test that a bot comment carrying the marker is recognized as this tier's."""
 
-        assert is_tier_comment(thread_comment_factory(marker=CURSOR_MARKER), CURSOR_MARKER) is True
+        assert is_tier_comment(thread_comment_factory(marker=MARKER), MARKER) is True
 
-    def test_other_marker_is_not_tier(self, thread_comment_factory) -> None:
-        """Test that a comment without this tier's marker is not recognized."""
+    def test_unmarked_comment_is_not_tier(self, thread_comment_factory) -> None:
+        """Test that a comment without the review marker is not recognized as the runner's."""
 
-        assert is_tier_comment(thread_comment_factory(marker=CONFIG["claude_marker"]), CURSOR_MARKER) is False
+        comment = thread_comment_factory(body="### Title\n\n**Critical Severity**\n\nA human note.")
+
+        assert is_tier_comment(comment, MARKER) is False
 
     def test_title_and_severity(self, thread_comment_factory) -> None:
         """Test that the title heading and severity line parse from the comment body."""
@@ -214,16 +216,18 @@ class TestThreadParsing:
 class TestExistingFindingTitles:
     """Test that the runner's posted findings are collected per file."""
 
-    def test_collects_this_tier(self, monkeypatch, review_thread_factory) -> None:
-        """Test that only this tier's threads contribute posted findings."""
+    def test_collects_runner_threads(self, monkeypatch, review_thread_factory) -> None:
+        """Test that only threads carrying the review marker contribute posted findings."""
 
         threads = [
-            review_thread_factory(title="Mine", severity="Critical", marker=CURSOR_MARKER, path="src/app.py"),
-            review_thread_factory(title="Theirs", marker=CONFIG["claude_marker"], path="src/app.py"),
+            review_thread_factory(title="Mine", severity="Critical", marker=MARKER, path="src/app.py"),
+            review_thread_factory(
+                title="Human", path="src/app.py", body="### Human\n\n**Low Severity**\n\nA human note."
+            ),
         ]
         monkeypatch.setattr("code_review.review.list_review_threads", lambda repo, pr_number: threads)
 
-        result = existing_finding_titles("octo/repo", 7, CURSOR_MARKER)
+        result = existing_finding_titles("octo/repo", 7, MARKER)
 
         assert list(result) == ["src/app.py"]
         assert result["src/app.py"][0].title == "Mine"
@@ -238,18 +242,18 @@ class TestReconcileThreads:
 
         mock_config(approval_include=frozenset({Severity.CRITICAL}))
         threads = [
-            review_thread_factory(id="current", title="Current", path="src/app.py", marker=CURSOR_MARKER),
+            review_thread_factory(id="current", title="Current", path="src/app.py", marker=MARKER),
             review_thread_factory(
-                id="gone-low", title="GoneLow", severity="Medium", path="src/app.py", marker=CURSOR_MARKER
+                id="gone-low", title="GoneLow", severity="Medium", path="src/app.py", marker=MARKER
             ),
             review_thread_factory(
-                id="gone-critical", title="GoneCrit", severity="Critical", path="src/app.py", marker=CURSOR_MARKER
+                id="gone-critical", title="GoneCrit", severity="Critical", path="src/app.py", marker=MARKER
             ),
         ]
         monkeypatch.setattr("code_review.review.list_review_threads", lambda repo, pr_number: threads)
 
         posted, open_keys, stale_ids, kept_blocking = reconcile_threads(
-            "octo/repo", 7, CURSOR_MARKER, {("src/app.py", "Current")}, {"src/app.py"}
+            "octo/repo", 7, MARKER, {("src/app.py", "Current")}, {"src/app.py"}
         )
 
         assert ("src/app.py", "Current") in open_keys

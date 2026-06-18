@@ -95,7 +95,7 @@ def thread_comment_factory() -> Callable[..., ThreadCommentNode]:
         *,
         title: str = "Off-by-one error",
         severity: str = "Critical",
-        marker: str = CONFIG["cursor_marker"],
+        marker: str = CONFIG["review_marker"],
         author: str = "github-actions[bot]",
         path: str = "src/app.py",
         body: str | None = None,

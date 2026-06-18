@@ -63,11 +63,11 @@ def parse_cursor_reply(text: str) -> list[Finding]:
 
 
 async def run_agent(prompt: str) -> str:
-    """Launch the cheap Cursor model on the standard variant and return its reply text."""
+    """Launch the Cursor agent on the standard variant in non-fast mode and return its reply text."""
 
     client = await AsyncClient.launch_bridge()
 
-    # Composer defaults to the pricier "fast" variant; pick the non-default (standard) tier instead.
+    # Composer defaults to the "fast" variant; pick the non-default (standard) tier instead.
     catalog = await client.list_models(api_key=SETTINGS.cursor_api_key)
     sdk_model = next((entry for entry in catalog if entry.id == SETTINGS.cursor_model), None)
     standard_variant = next(
@@ -104,4 +104,4 @@ def run_cursor_review(pr: PullRequestContext) -> int:
 
         return parse_cursor_reply(reply)
 
-    return review.run_review_round(pr, CONFIG["cursor_marker"], _findings)
+    return review.run_review_round(pr, CONFIG["review_marker"], _findings)
