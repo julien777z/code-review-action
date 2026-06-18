@@ -1,0 +1,36 @@
+[project]
+name = "code-review-action"
+version = "0.1.0"
+description = "AI code review for pull requests using Claude or Cursor."
+authors = [{ name = "julien777z" }]
+license = "MIT"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "anthropic>=0.69.0",
+    "cursor-sdk>=0.1.7,<0.2",
+    "pydantic>=2,<3",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-env>=1",
+    "pyyaml>=6",
+    "rich>=14",
+]
+
+[tool.poetry]
+packages = [{ include = "code_review", from = "src" }]
+
+[build-system]
+requires = ["poetry-core>=2.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+env = [
+    "GITHUB_TOKEN=test-token",
+    "GITHUB_REPOSITORY=octo/repo",
+]
