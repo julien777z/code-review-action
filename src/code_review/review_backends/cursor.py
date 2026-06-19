@@ -17,6 +17,7 @@ from code_review.prompt import cursor_prompt
 logger = logging.getLogger("code_review.cursor")
 
 FENCE: Final[re.Pattern[str]] = re.compile(r"```(?:json)?\s*(\{.*\})\s*```", re.DOTALL)
+BRIDGE_LAUNCH_ATTEMPTS: Final[int] = 3
 
 
 def parse_cursor_reply(text: str) -> list[Finding]:
@@ -61,10 +62,25 @@ def parse_cursor_reply(text: str) -> list[Finding]:
     return findings
 
 
+async def launch_bridge_with_retry() -> AsyncClient:
+    """Launch the Cursor bridge, retrying the rare startup failure from a dash-leading callback token."""
+
+    # cursor-sdk mints a random tool-callback auth token and passes it as a bare CLI value; the ~1.5%
+    # of tokens that start with "-" make the bridge's arg parser reject it. Each launch mints a fresh
+    # token, so retrying clears the transient failure.
+    for _ in range(BRIDGE_LAUNCH_ATTEMPTS - 1):
+        try:
+            return await AsyncClient.launch_bridge()
+        except CursorAgentError as exc:
+            logger.warning("Cursor bridge launch failed; retrying: %s", exc)
+
+    return await AsyncClient.launch_bridge()
+
+
 async def run_agent(prompt: str) -> str:
     """Launch the Cursor agent on the standard variant in non-fast mode and return its reply text."""
 
-    client = await AsyncClient.launch_bridge()
+    client = await launch_bridge_with_retry()
 
     # Composer defaults to the "fast" variant; pick the non-default (standard) tier instead.
     catalog = await client.list_models(api_key=SETTINGS.cursor_api_key)
