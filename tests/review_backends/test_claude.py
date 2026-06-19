@@ -1,3 +1,4 @@
+from code_review.config import DISCLAIMER
 from code_review.models.shared.severity import Severity
 from code_review.review_backends.claude import build_routine_text
 
@@ -23,10 +24,11 @@ class TestBuildRoutineText:
 
         assert "comments only" in text.lower()
 
-    def test_marks_pr_content_untrusted(self, mock_config, pull_request_factory) -> None:
-        """Test that the text marks PR content as untrusted data."""
+    def test_includes_safety_and_disclaimer(self, mock_config, pull_request_factory) -> None:
+        """Test that the text marks PR content as untrusted and asks for the AI disclaimer line."""
 
         mock_config()
         text = build_routine_text(pull_request_factory())
 
         assert "untrusted" in text
+        assert DISCLAIMER in text
