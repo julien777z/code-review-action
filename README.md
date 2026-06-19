@@ -158,7 +158,7 @@ Pin the moving major tag for automatic patches:
 - uses: julien777z/code-review-action@v0
 ```
 
-Or pin an exact release with `@v0.1.0`.
+Or pin an exact release with `@v0.0.1`.
 
 ## License
 
