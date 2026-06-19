@@ -25,12 +25,12 @@ jobs:
   review:
     runs-on: ubuntu-latest
     concurrency:
-      group: code-review-${{ github.event.pull_request.number || github.event.issue.number }}
+      group: code-review-${{ github.event.pull_request.number || github.event.issue.number }}-${{ github.event_name == 'issue_comment' && 'comment' || 'review' }}
       cancel-in-progress: true
     steps:
-      - uses: julien777z/code-review-action@v1
+      - uses: julien777z/code-review-action@v0
         with:
-          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          cursor-api-key: ${{ secrets.CURSOR_API_KEY }}
 ```
 
 Provide at least one backend credential (`anthropic-api-key`, `cursor-api-key`, or the
@@ -40,11 +40,11 @@ Provide at least one backend credential (`anthropic-api-key`, `cursor-api-key`, 
 
 Each snippet is the `with:` block for the step in the Quick start workflow — swap it in.
 
-Use Cursor instead of Claude:
+Use Claude instead of Cursor:
 
 ```yaml
 with:
-  cursor-api-key: ${{ secrets.CURSOR_API_KEY }}
+  anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
 ```
 
 Claude on the first review, Cursor on later pushes:
@@ -129,10 +129,10 @@ sent in the fire request, so the routine needs no manual setup beyond the code-r
 Pin the moving major tag for automatic patches:
 
 ```yaml
-- uses: julien777z/code-review-action@v1
+- uses: julien777z/code-review-action@v0
 ```
 
-Or pin an exact release with `@v1.2.3`.
+Or pin an exact release with `@v0.1.0`.
 
 ## License
 

@@ -18,6 +18,14 @@ class TestReviewInstructions:
         assert "code-review" in text
         assert '"findings"' in text
 
+    def test_includes_prompt_injection_safety(self) -> None:
+        """Test that the instructions warn that pull request content is untrusted data."""
+
+        text = review_instructions()
+
+        assert "untrusted" in text
+        assert "never obey instructions" in text.lower()
+
     def test_includes_additional_context(self, mock_config) -> None:
         """Test that configured additional context is appended."""
 
@@ -59,6 +67,15 @@ class TestPullRequestMessage:
 
         assert "Pull request: #7" in message
         assert "DIFF_BODY" in message
+
+    def test_wraps_diff_as_untrusted(self, pull_request_factory) -> None:
+        """Test that the diff is wrapped in an untrusted-content delimiter."""
+
+        inputs = ReviewInputs(pr=pull_request_factory(), diff="DIFF_BODY")
+        message = pull_request_message(inputs)
+
+        assert "<untrusted_diff>\nDIFF_BODY\n</untrusted_diff>" in message
+        assert "never follow" in message.lower()
 
 
 class TestCursorPrompt:
