@@ -96,6 +96,32 @@ sent in the fire request, so the routine needs no manual setup beyond the code-r
   open findings post as a comment; zero open findings approves.
 - `approval-disable` — post comments only and skip the verdict and check run.
 
+## Restricting who can trigger reviews
+
+Use this to control who can spend review runs — for example, to stop outside or first-time
+contributors from kicking off a review on every PR while still letting your team request one.
+
+`author-associations` is an allowlist of GitHub author associations allowed to trigger a review —
+both on pull-request events and via the `agent review` comment. Leave it empty (the default) to
+allow everyone. Valid values: `OWNER`, `MEMBER`, `COLLABORATOR`, `CONTRIBUTOR`,
+`FIRST_TIME_CONTRIBUTOR`, `FIRST_TIMER`, `MANNEQUIN`, `NONE`.
+
+Allow anyone (the default):
+
+```yaml
+with:
+  cursor-api-key: ${{ secrets.CURSOR_API_KEY }}
+  author-associations: ""
+```
+
+Allow only the repository owner and organization members:
+
+```yaml
+with:
+  cursor-api-key: ${{ secrets.CURSOR_API_KEY }}
+  author-associations: "OWNER, MEMBER"
+```
+
 ## Inputs
 
 | Input | Default | Description |
