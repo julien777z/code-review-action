@@ -1,6 +1,6 @@
 [project]
 name = "code-review-action"
-version = "0.1.0"
+version = "0.0.0"
 description = "AI code review for pull requests using Claude or Cursor."
 authors = [{ name = "julien777z" }]
 license = "MIT"
