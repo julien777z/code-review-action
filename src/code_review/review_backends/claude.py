@@ -12,6 +12,7 @@ from code_review.models.claude.routine import RoutineFireRequest
 from code_review.models.shared.findings import Finding
 from code_review.models.shared.pull_request import PullRequestContext, ReviewInputs
 from code_review.prompt import pull_request_message, review_instructions
+from code_review.utils.http import http_client
 
 logger = logging.getLogger("code_review.claude")
 
@@ -91,7 +92,7 @@ async def fire_claude_routine(pr: PullRequestContext) -> int:
 
     request_body = RoutineFireRequest(text=build_routine_text(pr))
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with http_client() as client:
             response = await client.post(
                 f"{CONFIG['routine_host']}/{SETTINGS.claude_routine_id}/fire",
                 content=request_body.model_dump_json(),
