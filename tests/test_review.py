@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from code_review.config import CONFIG
+from code_review.config import CONFIG, DISCLAIMER
 from code_review.models.shared.severity import DiffSide, Severity
 from code_review.review import (
     build_review,
@@ -176,6 +176,9 @@ class TestBuildReview:
         assert len(payload.comments) == 1
         assert payload.comments[0].path == "src/app.py"
         assert "On files too large to anchor inline:" in payload.body
+        assert CONFIG["untrusted_input_open"] in payload.body
+        assert CONFIG["untrusted_input_close"] in payload.body
+        assert DISCLAIMER in payload.body
         assert payload.body.rstrip().endswith(MARKER)
 
 
@@ -189,6 +192,9 @@ class TestCommentBody:
 
         assert "### Leak" in body
         assert "**Critical Severity**" in body
+        assert CONFIG["untrusted_input_open"] in body
+        assert CONFIG["untrusted_input_close"] in body
+        assert DISCLAIMER in body
         assert body.rstrip().endswith(MARKER)
 
 

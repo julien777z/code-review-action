@@ -8,7 +8,7 @@ from fnmatch import fnmatch
 
 from pydantic import ValidationError
 
-from code_review.config import SETTINGS
+from code_review.config import CONFIG, DISCLAIMER, SETTINGS
 from code_review.github import (
     already_reviewed,
     complete_check_run,
@@ -207,8 +207,11 @@ def comment_body(finding: Finding, marker: str) -> str:
     """Render one inline comment body in the severity format."""
 
     return (
+        f"{CONFIG['untrusted_input_open']}\n"
         f"### {finding.title}\n\n**{finding.severity.value.capitalize()} Severity**\n\n"
-        f"{finding.body}\n\n{marker}"
+        f"{finding.body}\n"
+        f"{CONFIG['untrusted_input_close']}\n\n"
+        f"{DISCLAIMER}\n\n{marker}"
     )
 
 
@@ -291,7 +294,10 @@ def build_review(
     if summary:
         body = f"{body}\n\nOn files too large to anchor inline:\n" + "\n".join(summary)
 
-    body = f"{body}\n\n{marker}"
+    body = (
+        f"{CONFIG['untrusted_input_open']}\n{body}\n{CONFIG['untrusted_input_close']}\n\n"
+        f"{DISCLAIMER}\n\n{marker}"
+    )
 
     return ReviewPayload(commit_id=head_sha, event=event, body=body, comments=comments)
 
