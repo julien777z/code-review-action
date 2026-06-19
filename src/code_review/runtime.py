@@ -5,7 +5,7 @@ from enum import StrEnum
 from pathlib import Path
 
 from code_review.config import SETTINGS, ClaudeMode, ReviewModel
-from code_review.github import fetch_pull_request
+from code_review.github import add_reaction, fetch_pull_request, remove_reaction
 from code_review.models.shared.github_event import GithubEvent
 from code_review.models.shared.pull_request import PullRequestContext
 from code_review.review_backends.claude import fire_claude_routine, run_claude_api_review
@@ -105,6 +105,15 @@ def is_first_review_event(event_name: str, event: GithubEvent) -> bool:
     return event_name == "pull_request" and event.action in FIRST_REVIEW_ACTIONS
 
 
+def reaction_subject(event_name: str, event: GithubEvent, repo: str, pr_number: int) -> str:
+    """Return the API path to react on: the trigger comment for a manual trigger, otherwise the PR."""
+
+    if event_name == "issue_comment" and event.comment is not None and event.comment.id is not None:
+        return f"repos/{repo}/issues/comments/{event.comment.id}"
+
+    return f"repos/{repo}/issues/{pr_number}"
+
+
 def claude_available() -> bool:
     """Return whether Claude can run in the configured mode (api key, or routine creds)."""
 
@@ -188,4 +197,16 @@ async def main() -> int:
 
         return 0
 
-    return await run(pr, backend)
+    if backend is Backend.CLAUDE_ROUTINE:
+        return await run(pr, backend)
+
+    # React with eyes on the trigger (the comment for a manual trigger, otherwise the PR) while the
+    # synchronous backends review, then remove it once the round finishes.
+    subject = reaction_subject(event_name, event, repo, pr_number)
+    reaction_id = await add_reaction(subject)
+
+    try:
+        return await run(pr, backend)
+    finally:
+        if reaction_id is not None:
+            await remove_reaction(subject, reaction_id)

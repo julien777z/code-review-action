@@ -312,3 +312,25 @@ async def post_review(repo: str, pr_number: int, payload: ReviewPayload) -> bool
     logger.info("Posted review: %s", stdout.strip())
 
     return True
+
+
+async def add_reaction(subject_path: str) -> int | None:
+    """React with eyes on an issue or comment to show a review is in progress; return the reaction id."""
+
+    try:
+        raw = await run_gh(["api", "--method", "POST", f"{subject_path}/reactions", "-f", "content=eyes"])
+
+        return int(json.loads(raw)["id"])
+    except (subprocess.CalledProcessError, json.JSONDecodeError, KeyError, ValueError) as exc:
+        logger.warning("Could not add the reviewing reaction: %s", exc)
+
+        return None
+
+
+async def remove_reaction(subject_path: str, reaction_id: int) -> None:
+    """Remove a previously-added reviewing reaction; best-effort."""
+
+    try:
+        await run_gh(["api", "--method", "DELETE", f"{subject_path}/reactions/{reaction_id}"])
+    except subprocess.CalledProcessError as exc:
+        logger.warning("Could not remove the reviewing reaction: %s", exc)

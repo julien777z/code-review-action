@@ -35,6 +35,7 @@ class EventComment(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
+    id: int | None = None
     body: str = ""
     author_association: str | None = None
 

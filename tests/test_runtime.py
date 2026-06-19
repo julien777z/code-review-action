@@ -7,6 +7,7 @@ from code_review.runtime import (
     association_allowed,
     is_eligible,
     is_first_review_event,
+    reaction_subject,
     resolve_pr_number,
     select_backend,
 )
@@ -48,6 +49,23 @@ class TestIsFirstReviewEvent:
         """Test that a comment event is never the first review."""
 
         assert is_first_review_event("issue_comment", issue_comment_event_factory()) is False
+
+
+class TestReactionSubject:
+    """Test that the reviewing reaction targets the trigger comment or the pull request."""
+
+    def test_comment_trigger_targets_the_comment(self, issue_comment_event_factory) -> None:
+        """Test that a trigger-phrase comment is the reaction subject."""
+
+        event = issue_comment_event_factory(comment_id=555)
+
+        assert reaction_subject("issue_comment", event, "octo/repo", 7) == "repos/octo/repo/issues/comments/555"
+
+    @pytest.mark.parametrize("event_name", ["pull_request", "workflow_dispatch"], ids=["pull_request", "dispatch"])
+    def test_other_events_target_the_pull_request(self, pull_request_event_factory, event_name: str) -> None:
+        """Test that pull_request and manual-dispatch events react on the PR itself."""
+
+        assert reaction_subject(event_name, pull_request_event_factory(), "octo/repo", 7) == "repos/octo/repo/issues/7"
 
 
 class TestResolvePrNumber:

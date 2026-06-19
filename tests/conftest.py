@@ -161,12 +161,13 @@ def issue_comment_event_factory() -> Callable[..., GithubEvent]:
         sender_type: str = "User",
         is_pull_request: bool = True,
         number: int = 7,
+        comment_id: int = 555,
     ) -> GithubEvent:
         return GithubEvent.model_validate(
             {
                 "action": "created",
                 "issue": {"number": number, "pull_request": {"url": "x"} if is_pull_request else None},
-                "comment": {"body": body, "author_association": author_association},
+                "comment": {"id": comment_id, "body": body, "author_association": author_association},
                 "sender": {"type": sender_type},
             }
         )
