@@ -65,6 +65,7 @@ def parse_cursor_reply(text: str) -> list[Finding]:
 async def launch_bridge_with_retry() -> AsyncClient:
     """Launch the Cursor bridge, retrying the rare startup failure from a dash-leading callback token."""
 
+    # TODO: remove this retry once cursor-sdk no longer emits a dash-leading tool-callback token.
     # cursor-sdk mints a random tool-callback auth token and passes it as a bare CLI value; the ~1.5%
     # of tokens that start with "-" make the bridge's arg parser reject it. Each launch mints a fresh
     # token, so retrying clears the transient failure.
