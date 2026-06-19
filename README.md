@@ -61,7 +61,7 @@ Comment only, scoped to source files:
 
 ```yaml
 with:
-  anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+  cursor-api-key: ${{ secrets.CURSOR_API_KEY }}
   approval-disable: "true"
   include-paths: "src/**"
   exclude-paths: "**/*.lock"
@@ -71,7 +71,7 @@ Request changes only on critical or high findings:
 
 ```yaml
 with:
-  anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+  cursor-api-key: ${{ secrets.CURSOR_API_KEY }}
   approval-include: "critical, high"
 ```
 
