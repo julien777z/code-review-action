@@ -5,7 +5,7 @@ import anthropic
 import httpx
 
 from code_review import review
-from code_review.config import CONFIG, DISCLAIMER, SETTINGS
+from code_review.config import CONFIG, SETTINGS
 from code_review.github import already_reviewed, current_head_sha
 from code_review.models.claude.reply import ClaudeReply
 from code_review.models.claude.routine import RoutineFireRequest
@@ -70,8 +70,6 @@ def build_routine_text(pr: PullRequestContext) -> str:
 
     if SETTINGS.additional_context:
         lines.append(f"Additional reviewer context: {SETTINGS.additional_context}")
-
-    lines.append(f"End every comment you post with this exact line: {DISCLAIMER}")
 
     return " ".join(lines)
 
