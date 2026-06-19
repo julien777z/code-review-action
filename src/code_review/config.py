@@ -1,0 +1,176 @@
+import re
+from enum import StrEnum
+from typing import Annotated, Final, Self, TypedDict
+
+from pydantic import field_validator, model_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+
+from code_review.models.shared.severity import Severity
+
+ROUTINE_URL_PATTERN: Final[re.Pattern[str]] = re.compile(r"/routines/([^/]+)/fire")
+
+
+class ReviewModel(StrEnum):
+    """Which backend reviews the PR."""
+
+    AUTO = "auto"
+    CLAUDE = "claude"
+    CURSOR = "cursor"
+
+    @classmethod
+    def parse(cls, value: str) -> Self | None:
+        """Parse a review-model input, returning None when the value is empty."""
+
+        normalized = value.strip().lower()
+
+        return cls(normalized) if normalized else None
+
+
+class ClaudeMode(StrEnum):
+    """How the Claude backend runs."""
+
+    API = "api"
+    ROUTINE = "routine"
+
+
+class ReviewConfig(TypedDict):
+    """Static, non-configurable runner constants."""
+
+    routine_host: str
+    anthropic_version: str
+    routine_beta: str
+    review_marker: str
+    status_check_name: str
+    default_claude_model: str
+    default_cursor_model: str
+
+
+CONFIG: Final[ReviewConfig] = ReviewConfig(
+    routine_host="https://api.anthropic.com/v1/claude_code/routines",
+    anthropic_version="2023-06-01",
+    routine_beta="experimental-cc-routine-2026-04-01",
+    review_marker="<!-- code-review -->",
+    status_check_name="Approval Verdict",
+    default_claude_model="claude-opus-4-8",
+    default_cursor_model="composer-2.5",
+)
+
+
+def resolve_routine_id(routine_id: str, routine_url: str) -> str | None:
+    """Resolve the routine id from an explicit id or a fire URL; the two are mutually exclusive."""
+
+    routine_id = routine_id.strip()
+    routine_url = routine_url.strip()
+
+    if routine_id and routine_url:
+        raise ValueError("Set only one of claude-routine-id or claude-routine-url, not both.")
+
+    if routine_id:
+        return routine_id
+
+    if not routine_url:
+        return None
+
+    match = ROUTINE_URL_PATTERN.search(routine_url)
+    if match is None:
+        raise ValueError(f"Could not parse a routine id from claude-routine-url: {routine_url}")
+
+    return match.group(1)
+
+
+def split_list(value: str) -> tuple[str, ...]:
+    """Split a comma/newline-separated input into a tuple of non-empty items."""
+
+    return tuple(part.strip() for part in re.split(r"[,\n]", value) if part.strip())
+
+
+def parse_bool(value: str) -> bool:
+    """Parse a boolean action input."""
+
+    return value.strip().lower() in ("1", "true", "yes", "on")
+
+
+class Settings(BaseSettings):
+    """Runtime configuration assembled from the action inputs (environment)."""
+
+    model_config = SettingsConfigDict(case_sensitive=False, extra="ignore")
+
+    github_token: str = ""
+    anthropic_api_key: str = ""
+    cursor_api_key: str = ""
+    claude_routine_api_key: str = ""
+    claude_routine_id: str | None = None
+    claude_routine_url: str = ""
+    review_model: ReviewModel = ReviewModel.AUTO
+    first_review_model: ReviewModel | None = None
+    claude_mode: ClaudeMode = ClaudeMode.API
+    claude_model: str = CONFIG["default_claude_model"]
+    cursor_model: str = CONFIG["default_cursor_model"]
+    additional_context: str = ""
+    approval_include: Annotated[frozenset[Severity], NoDecode] = frozenset({Severity.CRITICAL})
+    approval_disable: bool = False
+    min_severity: Severity = Severity.LOW
+    low_findings_cap: int = 3
+    max_findings: int | None = None
+    include_paths: Annotated[tuple[str, ...], NoDecode] = ()
+    exclude_paths: Annotated[tuple[str, ...], NoDecode] = ()
+    trigger_phrase: str = "agent review"
+    review_drafts: bool = True
+    author_associations: Annotated[tuple[str, ...], NoDecode] = ()
+    pr_number: int | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def strip_blank_inputs(cls, data: dict[str, str]) -> dict[str, str]:
+        """Strip whitespace from inputs and drop blanks so field defaults apply."""
+
+        return {key: stripped for key, value in data.items() if (stripped := value.strip())}
+
+    @field_validator("review_model", "first_review_model", "claude_mode", "min_severity", mode="before")
+    @classmethod
+    def normalize_enum(cls, value: str | None) -> str | None:
+        """Trim and lower-case an enum input so it matches the enum's values."""
+
+        return value.strip().lower() if value is not None else value
+
+    @field_validator("approval_disable", "review_drafts", mode="before")
+    @classmethod
+    def normalize_bool(cls, value: str | bool) -> bool:
+        """Parse a boolean input from its string form."""
+
+        return parse_bool(value) if isinstance(value, str) else value
+
+    @field_validator("approval_include", mode="before")
+    @classmethod
+    def normalize_severities(cls, value: str | frozenset[Severity]) -> frozenset[Severity]:
+        """Parse a comma-separated severity list, defaulting to critical when empty."""
+
+        if not isinstance(value, str):
+            return value
+
+        return frozenset(Severity.from_str(item) for item in split_list(value)) or frozenset({Severity.CRITICAL})
+
+    @field_validator("include_paths", "exclude_paths", mode="before")
+    @classmethod
+    def normalize_paths(cls, value: str | tuple[str, ...]) -> tuple[str, ...]:
+        """Split a comma/newline glob list into a tuple."""
+
+        return split_list(value) if isinstance(value, str) else value
+
+    @field_validator("author_associations", mode="before")
+    @classmethod
+    def normalize_associations(cls, value: str | tuple[str, ...]) -> tuple[str, ...]:
+        """Split and upper-case the author-association allowlist."""
+
+        return tuple(item.upper() for item in split_list(value)) if isinstance(value, str) else value
+
+    @model_validator(mode="after")
+    def resolve_routine(self) -> Self:
+        """Resolve the routine id from the id/url inputs, rejecting both at once."""
+
+        self.claude_routine_id = resolve_routine_id(self.claude_routine_id or "", self.claude_routine_url)
+
+        return self
+
+
+SETTINGS: Final[Settings] = Settings()
