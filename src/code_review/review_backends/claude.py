@@ -71,8 +71,6 @@ def build_routine_text(pr: PullRequestContext) -> str:
     if SETTINGS.additional_context:
         lines.append(f"Additional reviewer context: {SETTINGS.additional_context}")
 
-    # The runner posts the API/Cursor reviews and appends the disclaimer itself; the routine posts
-    # directly, so it must add the AI-disclosure line to every comment it leaves.
     lines.append(f"End every comment you post with this exact line: {DISCLAIMER}")
 
     return " ".join(lines)
