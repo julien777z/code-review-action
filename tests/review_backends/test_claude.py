@@ -1,3 +1,5 @@
+import re
+
 from code_review.config import DISCLAIMER
 from code_review.models.shared.severity import Severity
 from code_review.review_backends.claude import build_routine_text
@@ -32,3 +34,11 @@ class TestBuildRoutineText:
 
         assert "untrusted" in text
         assert DISCLAIMER in text
+
+    def test_fences_pr_metadata(self, mock_config, pull_request_factory) -> None:
+        """Test that the PR metadata is fenced as untrusted content."""
+
+        mock_config()
+        text = build_routine_text(pull_request_factory())
+
+        assert re.search(r"<untrusted_pr_metadata [0-9a-f]+>", text) is not None

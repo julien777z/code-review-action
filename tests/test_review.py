@@ -176,6 +176,8 @@ class TestBuildReview:
         assert len(payload.comments) == 1
         assert payload.comments[0].path == "src/app.py"
         assert "On files too large to anchor inline:" in payload.body
+        assert CONFIG["security_open"] in payload.body
+        assert CONFIG["security_close"] in payload.body
         assert DISCLAIMER in payload.body
         assert payload.body.rstrip().endswith(MARKER)
 
@@ -190,6 +192,8 @@ class TestCommentBody:
 
         assert "### Leak" in body
         assert "**Critical Severity**" in body
+        assert CONFIG["security_open"] in body
+        assert CONFIG["security_close"] in body
         assert DISCLAIMER in body
         assert body.rstrip().endswith(MARKER)
 

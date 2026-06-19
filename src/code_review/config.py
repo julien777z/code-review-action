@@ -45,6 +45,8 @@ class ReviewConfig(TypedDict):
     anthropic_version: str
     routine_beta: str
     review_marker: str
+    security_open: str
+    security_close: str
     status_check_name: str
     default_claude_model: str
     default_cursor_model: str
@@ -55,6 +57,8 @@ CONFIG: Final[ReviewConfig] = ReviewConfig(
     anthropic_version="2023-06-01",
     routine_beta="experimental-cc-routine-2026-04-01",
     review_marker="<!-- code-review -->",
+    security_open="<!-- code-review:security ai-generated start -->",
+    security_close="<!-- code-review:security ai-generated end -->",
     status_check_name="Approval Verdict",
     default_claude_model="claude-opus-4-8",
     default_cursor_model="composer-2.5",

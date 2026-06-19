@@ -50,6 +50,18 @@ class TestExistingFindingsBlock:
 
         assert "src/app.py: [critical] Leak" in existing_findings_block(inputs)
 
+    def test_fences_posted_as_untrusted(self, pull_request_factory) -> None:
+        """Test that the prior-findings list is fenced as untrusted content."""
+
+        inputs = ReviewInputs(
+            pr=pull_request_factory(),
+            diff="diff",
+            posted_findings={"src/app.py": [PostedFinding(severity="critical", title="Leak")]},
+        )
+        block = existing_findings_block(inputs)
+
+        assert re.search(r"<untrusted_prior_findings [0-9a-f]+>", block) is not None
+
     def test_empty_when_none(self, pull_request_factory) -> None:
         """Test that the block is empty when nothing was posted."""
 
