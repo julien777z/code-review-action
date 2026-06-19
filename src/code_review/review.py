@@ -207,10 +207,10 @@ def comment_body(finding: Finding, marker: str) -> str:
     """Render one inline comment body in the severity format."""
 
     return (
-        f"{CONFIG['security_open']}\n"
+        f"{CONFIG['untrusted_input_open']}\n"
         f"### {finding.title}\n\n**{finding.severity.value.capitalize()} Severity**\n\n"
         f"{finding.body}\n"
-        f"{CONFIG['security_close']}\n\n"
+        f"{CONFIG['untrusted_input_close']}\n\n"
         f"{DISCLAIMER}\n\n{marker}"
     )
 
@@ -295,7 +295,7 @@ def build_review(
         body = f"{body}\n\nOn files too large to anchor inline:\n" + "\n".join(summary)
 
     body = (
-        f"{CONFIG['security_open']}\n{body}\n{CONFIG['security_close']}\n\n"
+        f"{CONFIG['untrusted_input_open']}\n{body}\n{CONFIG['untrusted_input_close']}\n\n"
         f"{DISCLAIMER}\n\n{marker}"
     )
 
