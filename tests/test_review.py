@@ -6,6 +6,8 @@ import pytest
 from code_review.config import CONFIG, DISCLAIMER
 from code_review.models.shared.severity import DiffSide, Severity
 from code_review.review import (
+    REVIEW_BACKEND_ATTEMPTS,
+    ReviewBackendError,
     build_review,
     cap_findings,
     comment_body,
@@ -14,6 +16,7 @@ from code_review.review import (
     existing_finding_titles,
     filter_findings,
     finding_anchors,
+    findings_with_retry,
     is_postable,
     is_tier_comment,
     reconcile_threads,
@@ -23,6 +26,47 @@ from code_review.review import (
 )
 
 MARKER = CONFIG["review_marker"]
+
+
+class TestFindingsWithRetry:
+    """Test that the shared model-execution step retries transient backend failures."""
+
+    def test_retries_then_succeeds(self, flaky_findings_factory, review_inputs_factory, finding_factory) -> None:
+        """Test that a retryable backend failure is retried until the model returns findings."""
+
+        finding = finding_factory()
+        get_findings, calls = flaky_findings_factory(
+            failures=1, error=ReviewBackendError("Bridge request timed out", retryable=True), result=[finding]
+        )
+
+        result = asyncio.run(findings_with_retry(get_findings, review_inputs_factory()))
+
+        assert result == [finding]
+        assert len(calls) == 2
+
+    def test_raises_after_exhausting_attempts(self, flaky_findings_factory, review_inputs_factory) -> None:
+        """Test that a persistently failing backend gives up after the attempt budget."""
+
+        get_findings, calls = flaky_findings_factory(
+            failures=REVIEW_BACKEND_ATTEMPTS, error=ReviewBackendError("timed out", retryable=True)
+        )
+
+        with pytest.raises(ReviewBackendError):
+            asyncio.run(findings_with_retry(get_findings, review_inputs_factory()))
+
+        assert len(calls) == REVIEW_BACKEND_ATTEMPTS
+
+    def test_non_retryable_error_not_retried(self, flaky_findings_factory, review_inputs_factory) -> None:
+        """Test that a non-retryable backend error surfaces immediately without further attempts."""
+
+        get_findings, calls = flaky_findings_factory(
+            failures=REVIEW_BACKEND_ATTEMPTS, error=ReviewBackendError("unparseable reply", retryable=False)
+        )
+
+        with pytest.raises(ReviewBackendError):
+            asyncio.run(findings_with_retry(get_findings, review_inputs_factory()))
+
+        assert len(calls) == 1
 
 
 class TestComputeVerdict:

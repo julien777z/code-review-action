@@ -1,37 +1,8 @@
-import asyncio
-from collections.abc import Callable
-from datetime import timedelta
-
 import pytest
-from cursor_sdk import APITimeoutError, AuthenticationError, CursorAgentError
 
 from code_review.models.shared.severity import DiffSide, Severity
 from code_review.review import ReviewBackendError
-from code_review.review_backends import cursor
-from code_review.review_backends.cursor import AGENT_RUN_ATTEMPTS, parse_cursor_reply, run_agent
-
-
-@pytest.fixture
-def flaky_run_agent_once(monkeypatch) -> Callable[..., list[int]]:
-    """Patch run_agent_once to fail a set number of times before returning a reply."""
-
-    monkeypatch.setattr(cursor, "AGENT_RETRY_BACKOFF", timedelta(0))
-
-    def _build(*, failures: int, error: CursorAgentError, reply: str = "{}") -> list[int]:
-        calls: list[int] = []
-
-        async def _run_once(prompt: str) -> str:
-            calls.append(len(calls))
-            if len(calls) <= failures:
-                raise error
-
-            return reply
-
-        monkeypatch.setattr(cursor, "run_agent_once", _run_once)
-
-        return calls
-
-    return _build
+from code_review.review_backends.cursor import parse_cursor_reply
 
 
 class TestParseCursorReply:
@@ -84,47 +55,3 @@ class TestParseCursorReply:
 
         with pytest.raises(ReviewBackendError):
             parse_cursor_reply("not json at all")
-
-
-class TestRunAgentRetry:
-    """Test that run_agent retries transient bridge failures and surfaces fatal ones."""
-
-    @pytest.mark.parametrize(
-        "error",
-        [
-            APITimeoutError("Bridge request timed out: ReadTimeout", is_retryable=True),
-            CursorAgentError("Bridge request failed: ConnectError", is_retryable=True),
-        ],
-        ids=["timeout", "network"],
-    )
-    def test_retries_then_succeeds(self, flaky_run_agent_once, error: CursorAgentError) -> None:
-        """Test that a retryable failure is retried until the agent run succeeds."""
-
-        calls = flaky_run_agent_once(failures=1, error=error, reply='{"findings":[]}')
-
-        result = asyncio.run(run_agent("prompt"))
-
-        assert result == '{"findings":[]}'
-        assert len(calls) == 2
-
-    def test_raises_after_exhausting_attempts(self, flaky_run_agent_once) -> None:
-        """Test that a persistently timing-out run gives up after the attempt budget."""
-
-        error = APITimeoutError("Bridge request timed out: ReadTimeout", is_retryable=True)
-        calls = flaky_run_agent_once(failures=AGENT_RUN_ATTEMPTS, error=error)
-
-        with pytest.raises(APITimeoutError):
-            asyncio.run(run_agent("prompt"))
-
-        assert len(calls) == AGENT_RUN_ATTEMPTS
-
-    def test_non_retryable_error_not_retried(self, flaky_run_agent_once) -> None:
-        """Test that a non-retryable error surfaces immediately without further attempts."""
-
-        error = AuthenticationError("Invalid API key")
-        calls = flaky_run_agent_once(failures=AGENT_RUN_ATTEMPTS, error=error)
-
-        with pytest.raises(AuthenticationError):
-            asyncio.run(run_agent("prompt"))
-
-        assert len(calls) == 1
