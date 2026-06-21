@@ -1,6 +1,8 @@
+import asyncio
 import json
 import logging
 import re
+from datetime import timedelta
 from typing import Final
 
 from cursor_sdk import AsyncAgent, AsyncClient, CloudAgentOptions, CursorAgentError, ModelSelection
@@ -18,6 +20,8 @@ logger = logging.getLogger("code_review.cursor")
 
 FENCE: Final[re.Pattern[str]] = re.compile(r"```(?:json)?\s*(\{.*\})\s*```", re.DOTALL)
 BRIDGE_LAUNCH_ATTEMPTS: Final[int] = 3
+AGENT_RUN_ATTEMPTS: Final[int] = 3
+AGENT_RETRY_BACKOFF: Final[timedelta] = timedelta(seconds=2)
 
 
 def parse_cursor_reply(text: str) -> list[Finding]:
@@ -78,7 +82,7 @@ async def launch_bridge_with_retry() -> AsyncClient:
     return await AsyncClient.launch_bridge()
 
 
-async def run_agent(prompt: str) -> str:
+async def run_agent_once(prompt: str) -> str:
     """Launch the Cursor agent on the standard variant in non-fast mode and return its reply text."""
 
     client = await launch_bridge_with_retry()
@@ -106,6 +110,24 @@ async def run_agent(prompt: str) -> str:
         return await run.text()
     finally:
         await agent.close()
+
+
+async def run_agent(prompt: str) -> str:
+    """Run the Cursor agent, retrying transient bridge timeouts and network failures with backoff."""
+
+    for attempt in range(AGENT_RUN_ATTEMPTS - 1):
+        try:
+            return await run_agent_once(prompt)
+        except CursorAgentError as exc:
+            if not exc.is_retryable:
+                raise
+
+            backoff = AGENT_RETRY_BACKOFF * (2**attempt)
+            logger.warning("Cursor agent run failed; retrying in %ss: %s", backoff.total_seconds(), exc)
+
+            await asyncio.sleep(backoff.total_seconds())
+
+    return await run_agent_once(prompt)
 
 
 async def run_cursor_review(pr: PullRequestContext) -> int:
