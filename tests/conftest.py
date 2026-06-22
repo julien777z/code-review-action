@@ -1,13 +1,15 @@
 from collections.abc import Callable
+from datetime import timedelta
 
 import pytest
 
 from code_review.config import CONFIG, ClaudeMode, ReviewModel
 from code_review.models.shared.findings import Finding
 from code_review.models.shared.github_event import GithubEvent
-from code_review.models.shared.pull_request import PullRequestContext
+from code_review.models.shared.pull_request import PullRequestContext, ReviewInputs
 from code_review.models.shared.severity import DiffSide, Severity
 from code_review.models.shared.threads import ReviewThread, ThreadCommentAuthor, ThreadCommentNode, ThreadComments
+from code_review.review import GetFindings, ReviewBackendError
 
 
 @pytest.fixture
@@ -62,6 +64,42 @@ def finding_factory() -> Callable[..., Finding]:
         }
 
         return Finding(**{**defaults, **overrides})
+
+    return _build
+
+
+@pytest.fixture
+def review_inputs_factory(pull_request_factory) -> Callable[..., ReviewInputs]:
+    """Build ReviewInputs with a default PR and empty diff."""
+
+    def _build(**overrides) -> ReviewInputs:
+        defaults = {"pr": pull_request_factory(), "diff": "", "posted_findings": {}}
+
+        return ReviewInputs(**{**defaults, **overrides})
+
+    return _build
+
+
+@pytest.fixture
+def flaky_findings_factory(monkeypatch) -> Callable[..., tuple[GetFindings, list[int]]]:
+    """Build a get_findings double that fails a set number of times before returning findings."""
+
+    monkeypatch.setattr("code_review.review.REVIEW_RETRY_BACKOFF", timedelta(0))
+
+    def _build(
+        *, failures: int, error: ReviewBackendError, result: list[Finding] | None = None
+    ) -> tuple[GetFindings, list[int]]:
+        calls: list[int] = []
+        findings = result if result is not None else []
+
+        async def _get_findings(inputs: ReviewInputs) -> list[Finding]:
+            calls.append(len(calls))
+            if len(calls) <= failures:
+                raise error
+
+            return findings
+
+        return _get_findings, calls
 
     return _build
 

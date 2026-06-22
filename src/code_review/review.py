@@ -4,7 +4,9 @@ import logging
 import signal
 import subprocess
 from collections.abc import Awaitable, Callable
+from datetime import timedelta
 from fnmatch import fnmatch
+from typing import Final
 
 from pydantic import ValidationError
 
@@ -30,9 +32,34 @@ logger = logging.getLogger("code_review.review")
 
 GetFindings = Callable[[ReviewInputs], Awaitable[list[Finding]]]
 
+REVIEW_BACKEND_ATTEMPTS: Final[int] = 3
+REVIEW_RETRY_BACKOFF: Final[timedelta] = timedelta(seconds=2)
+
 
 class ReviewBackendError(Exception):
     """A backend failed to produce findings (model error or unparseable reply)."""
+
+    def __init__(self, message: str, *, retryable: bool = False) -> None:
+        super().__init__(message)
+        self.retryable = retryable
+
+
+async def findings_with_retry(get_findings: GetFindings, inputs: ReviewInputs) -> list[Finding]:
+    """Run the chosen backend's model, retrying transient (retryable) failures with backoff."""
+
+    for attempt in range(REVIEW_BACKEND_ATTEMPTS - 1):
+        try:
+            return await get_findings(inputs)
+        except ReviewBackendError as exc:
+            if not exc.retryable:
+                raise
+
+            backoff = REVIEW_RETRY_BACKOFF * (2**attempt)
+            logger.warning("Review backend failed; retrying in %ss: %s", backoff.total_seconds(), exc)
+
+            await asyncio.sleep(backoff.total_seconds())
+
+    return await get_findings(inputs)
 
 
 def thread_title(comment: ThreadCommentNode) -> str | None:
@@ -355,7 +382,7 @@ async def run_review_round(pr: PullRequestContext, marker: str, get_findings: Ge
 
     try:
         try:
-            findings = await get_findings(inputs)
+            findings = await findings_with_retry(get_findings, inputs)
         except ReviewBackendError as exc:
             logger.error("Review backend failed: %s", exc)
             await complete_check_run(pr.repo, check_id, "action_required", "Review failed", str(exc))

@@ -116,7 +116,7 @@ async def run_cursor_review(pr: PullRequestContext) -> int:
         try:
             reply = await run_agent(prompt)
         except CursorAgentError as exc:
-            raise review.ReviewBackendError(f"Cursor agent run failed: {exc}") from exc
+            raise review.ReviewBackendError(f"Cursor agent run failed: {exc}", retryable=exc.is_retryable) from exc
 
         return parse_cursor_reply(reply)
 

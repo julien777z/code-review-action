@@ -40,7 +40,17 @@ async def run_claude_api_review(pr: PullRequestContext) -> int:
                     output_format=ClaudeReply,
                 )
         except anthropic.APIError as exc:
-            raise review.ReviewBackendError(f"Claude review request failed: {exc}") from exc
+            retryable = isinstance(
+                exc,
+                (
+                    anthropic.APIConnectionError,
+                    anthropic.InternalServerError,
+                    anthropic.OverloadedError,
+                    anthropic.RateLimitError,
+                ),
+            )
+
+            raise review.ReviewBackendError(f"Claude review request failed: {exc}", retryable=retryable) from exc
 
         parsed = response.parsed_output
         if parsed is None:
