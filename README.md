@@ -97,6 +97,20 @@ sent in the fire request, so the routine needs no manual setup beyond the code-r
   open findings post as a comment; zero open findings approves.
 - `approval-disable` — post comments only and skip the verdict and check run.
 
+## Resolving the action's own threads
+
+As the PR evolves the action resolves the review threads whose findings no longer apply. The default
+`GITHUB_TOKEN` **cannot** resolve review threads — GitHub rejects `resolveReviewThread` with "Resource
+not accessible by integration" — so by default stale threads stay open even though the verdict count is
+correct. To enable auto-resolution, set `resolve-token` to a PAT or GitHub App token with pull-request
+write; it is used only to resolve threads, so review comments stay authored by `github-actions[bot]`.
+
+```yaml
+with:
+  cursor-api-key: ${{ secrets.CURSOR_API_KEY }}
+  resolve-token: ${{ secrets.REVIEW_RESOLVE_TOKEN }}
+```
+
 ## Restricting who can trigger reviews
 
 Use this to control who can spend review runs — for example, to stop outside or first-time
@@ -128,6 +142,7 @@ with:
 | Input | Default | Description |
 |---|---|---|
 | `github-token` | `${{ github.token }}` | Token to read the diff and post reviews/checks |
+| `resolve-token` | — | Token to resolve the action's own threads; needs a PAT/App token (see below) |
 | `anthropic-api-key` | — | Anthropic key for the Claude API backend |
 | `cursor-api-key` | — | Cursor key for the Cursor backend |
 | `claude-routine-api-key` | — | Key for firing a hosted Claude routine |

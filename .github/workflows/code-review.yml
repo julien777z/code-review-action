@@ -22,3 +22,4 @@ jobs:
       - uses: julien777z/code-review-action@claude/tender-hawking-46eyib-2
         with:
           cursor-api-key: ${{ secrets.CURSOR_API_KEY }}
+          resolve-token: ${{ secrets.REVIEW_RESOLVE_TOKEN }}

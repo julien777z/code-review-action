@@ -20,6 +20,7 @@ def mock_config(monkeypatch) -> Callable[..., None]:
     def _mock_config(**overrides) -> None:
         defaults = {
             "github_token": "test-token",
+            "resolve_token": "",
             "anthropic_api_key": "",
             "cursor_api_key": "",
             "claude_routine_api_key": "",

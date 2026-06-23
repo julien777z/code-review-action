@@ -16,8 +16,8 @@ logger = logging.getLogger("code_review.github")
 HUNK_HEADER: Final[re.Pattern[str]] = re.compile(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 
 
-async def run_gh(args: list[str], stdin: str | None = None) -> str:
-    """Run a `gh` command with the configured token and return stdout."""
+async def run_gh(args: list[str], stdin: str | None = None, token: str | None = None) -> str:
+    """Run a `gh` command with the given token (or the default github token) and return stdout."""
 
     process = await asyncio.create_subprocess_exec(
         "gh",
@@ -25,7 +25,7 @@ async def run_gh(args: list[str], stdin: str | None = None) -> str:
         stdin=asyncio.subprocess.PIPE if stdin is not None else None,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
-        env={**os.environ, "GH_TOKEN": SETTINGS.github_token},
+        env={**os.environ, "GH_TOKEN": token or SETTINGS.github_token},
     )
     stdout, stderr = await process.communicate(stdin.encode() if stdin is not None else None)
 
@@ -219,13 +219,16 @@ async def list_review_threads(repo: str, pr_number: int) -> list[ReviewThread]:
 
 
 async def resolve_threads(repo: str, thread_ids: list[str]) -> None:
-    """Resolve the given review threads — run only after the head is confirmed and the review posted."""
+    """Resolve the given review threads with the resolve token; the default github token cannot resolve."""
 
+    # The default Actions GITHUB_TOKEN cannot call resolveReviewThread (GitHub rejects it with
+    # "Resource not accessible by integration"), so use the elevated resolve token when one is set.
+    token = SETTINGS.resolve_token or SETTINGS.github_token
     mutation = "mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{id}}}"
 
     for thread_id in thread_ids:
         try:
-            await run_gh(["api", "graphql", "-f", f"query={mutation}", "-f", f"id={thread_id}"])
+            await run_gh(["api", "graphql", "-f", f"query={mutation}", "-f", f"id={thread_id}"], token=token)
         except subprocess.CalledProcessError as exc:
             logger.warning("Could not resolve review thread %s: %s", thread_id, (exc.stderr or "").strip())
 
