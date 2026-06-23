@@ -7,7 +7,7 @@ import subprocess
 from typing import Final
 
 from code_review.config import CONFIG, SETTINGS
-from code_review.models.shared.findings import ReviewCommentRequest, ReviewPayload
+from code_review.models.shared.findings import ReviewPayload
 from code_review.models.shared.pull_request import PullRequestContext
 from code_review.models.shared.threads import ReviewThread
 
@@ -310,24 +310,6 @@ async def post_review(repo: str, pr_number: int, payload: ReviewPayload) -> bool
         return False
 
     logger.info("Posted review: %s", stdout.strip())
-
-    return True
-
-
-async def post_comment(repo: str, pr_number: int, payload: ReviewCommentRequest) -> bool:
-    """Post one standalone inline review comment; return False if GitHub rejects it."""
-
-    try:
-        stdout = await run_gh(
-            ["api", "--method", "POST", f"repos/{repo}/pulls/{pr_number}/comments", "--input", "-"],
-            stdin=payload.model_dump_json(),
-        )
-    except subprocess.CalledProcessError as exc:
-        logger.error("Comment POST failed (%s): %s", exc.returncode, (exc.stderr or "").strip())
-
-        return False
-
-    logger.info("Posted inline comment: %s", stdout.strip())
 
     return True
 

@@ -14,17 +14,6 @@ class Finding(BaseModel):
     body: str
 
 
-class RawFinding(BaseModel):
-    """A finding as a backend streams it on one JSONL line, before severity/side normalization."""
-
-    path: str
-    line: int
-    side: str = "RIGHT"
-    severity: str
-    title: str
-    body: str
-
-
 class ReviewComment(BaseModel):
     """An inline review comment to post on the PR."""
 
@@ -34,18 +23,8 @@ class ReviewComment(BaseModel):
     body: str
 
 
-class ReviewCommentRequest(BaseModel):
-    """A single inline review comment posted on its own to the PR comments endpoint."""
-
-    commit_id: str
-    path: str
-    line: int
-    side: DiffSide
-    body: str
-
-
 class ReviewPayload(BaseModel):
-    """A review payload (verdict event, summary body, and any inline comments) for the reviews endpoint."""
+    """The full review payload posted in one GitHub API call."""
 
     commit_id: str
     event: str

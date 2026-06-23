@@ -10,16 +10,15 @@ from code_review.prompt import (
 
 
 class TestReviewInstructions:
-    """Test that the instructions bundle the skill, JSONL contract, and extra context."""
+    """Test that the instructions bundle the skill, JSON contract, and extra context."""
 
     def test_includes_skill_and_contract(self) -> None:
-        """Test that the bundled skill and JSONL findings contract are present."""
+        """Test that the bundled skill and findings contract are present."""
 
         text = review_instructions()
 
         assert "code-review" in text
-        assert "JSONL" in text
-        assert '"severity"' in text
+        assert '"findings"' in text
 
     def test_includes_prompt_injection_safety(self) -> None:
         """Test that the instructions warn that pull request content is untrusted data."""
@@ -108,5 +107,5 @@ class TestCursorPrompt:
         inputs = ReviewInputs(pr=pull_request_factory(), diff="DIFF_BODY")
         prompt = cursor_prompt(inputs)
 
-        assert '"severity"' in prompt
+        assert '"findings"' in prompt
         assert "DIFF_BODY" in prompt

@@ -1,10 +1,4 @@
-from code_review.models.shared.findings import (
-    Finding,
-    RawFinding,
-    ReviewComment,
-    ReviewCommentRequest,
-    ReviewPayload,
-)
+from code_review.models.shared.findings import Finding, ReviewComment, ReviewPayload
 from code_review.models.shared.github_event import (
     EventComment,
     EventIssue,
@@ -42,9 +36,7 @@ __all__ = [
     "IssuePullRequestRef",
     "PostedFinding",
     "PullRequestContext",
-    "RawFinding",
     "ReviewComment",
-    "ReviewCommentRequest",
     "ReviewInputs",
     "ReviewPayload",
     "ReviewThread",
