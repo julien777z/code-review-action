@@ -307,7 +307,7 @@ def build_verdict_review(
             f"- {finding.path}:{finding.line} — {finding.severity.value.capitalize()} — {finding.body}"
             for finding in out_of_bounds
         )
-        body = f"{body}\n\nOn files too large to anchor inline:\n{listed}"
+        body = f"{body}\n\nFindings not posted inline:\n{listed}"
 
     body = (
         f"{CONFIG['untrusted_input_open']}\n{body}\n{CONFIG['untrusted_input_close']}\n\n"
@@ -418,10 +418,13 @@ async def run_review_round(pr: PullRequestContext, marker: str, get_findings: Ge
                 if not cap_decision(finding, low_count, total_count):
                     continue
 
-                if finding_anchors(finding, anchors):
-                    if not await post_comment(pr.repo, pr.number, build_inline_comment(pr.head_sha, finding, marker)):
-                        continue
-
+                # A finding that anchors and posts inline counts as posted; one that does not anchor, or
+                # whose inline post GitHub rejects, falls back to the verdict body so it stays visible
+                # and counted rather than vanishing while still inflating the open count.
+                posted_inline = finding_anchors(finding, anchors) and await post_comment(
+                    pr.repo, pr.number, build_inline_comment(pr.head_sha, finding, marker)
+                )
+                if posted_inline:
                     posted_any = True
                 else:
                     out_of_bounds.append(finding)

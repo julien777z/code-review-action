@@ -234,7 +234,7 @@ class TestBuildVerdictReview:
         assert payload.comments == []
         assert payload.commit_id == "sha1"
         assert "Found 1 issue." in payload.body
-        assert "On files too large to anchor inline:" in payload.body
+        assert "Findings not posted inline:" in payload.body
         assert "big.txt:1" in payload.body
         assert CONFIG["untrusted_input_open"] in payload.body
         assert CONFIG["untrusted_input_close"] in payload.body
@@ -389,7 +389,7 @@ class TestRunReviewRound:
         payload = review_github_mocks["post_review"].await_args.args[2]
 
         assert payload.comments == []
-        assert "On files too large to anchor inline:" in payload.body
+        assert "Findings not posted inline:" in payload.body
 
     @pytest.mark.parametrize(
         ("config_overrides", "severities", "expected_posts"),
@@ -477,23 +477,24 @@ class TestRunReviewRound:
         assert review_github_mocks["post_review"].await_count == 0
         assert review_github_mocks["complete_check_run"].await_args.args[2] == "action_required"
 
-    def test_rejected_inline_post_does_not_consume_cap_or_post_verdict(
+    def test_rejected_inline_post_falls_back_to_verdict_body(
         self, mock_config, review_github_mocks, stream_findings_factory, pull_request_factory, finding_factory
     ) -> None:
-        """Test that a rejected inline comment neither consumes cap budget nor triggers a verdict review."""
+        """Test that a finding whose inline post is rejected is shown in the verdict body and still counted."""
 
-        mock_config(max_findings=1)
         review_github_mocks["post_comment"].return_value = False
-        review_github_mocks["diff_anchors"].return_value = ({"src/app.py": ({1, 2}, set())}, set())
-        findings = [
-            finding_factory(path="src/app.py", line=1, title="A"),
-            finding_factory(path="src/app.py", line=2, title="B"),
-        ]
+        review_github_mocks["diff_anchors"].return_value = ({"src/app.py": ({10}, set())}, set())
+        findings = [finding_factory(path="src/app.py", line=10, title="Off-by-one error", severity=Severity.HIGH)]
 
         asyncio.run(run_review_round(pull_request_factory(), MARKER, stream_findings_factory(findings)))
 
-        assert review_github_mocks["post_comment"].await_count == 2
-        assert review_github_mocks["post_review"].await_count == 0
+        assert review_github_mocks["post_comment"].await_count == 1
+        assert review_github_mocks["post_review"].await_count == 1
+
+        payload = review_github_mocks["post_review"].await_args.args[2]
+
+        assert "Findings not posted inline:" in payload.body
+        assert "src/app.py:10" in payload.body
 
     def test_approval_disable_posts_verdict_review_to_record_head(
         self, mock_config, review_github_mocks, stream_findings_factory, pull_request_factory
