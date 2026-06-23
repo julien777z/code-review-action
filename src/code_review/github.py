@@ -227,7 +227,7 @@ async def resolve_threads(repo: str, thread_ids: list[str]) -> None:
         try:
             await run_gh(["api", "graphql", "-f", f"query={mutation}", "-f", f"id={thread_id}"])
         except subprocess.CalledProcessError as exc:
-            logger.warning("Could not resolve a review thread: %s", exc)
+            logger.warning("Could not resolve review thread %s: %s", thread_id, (exc.stderr or "").strip())
 
 
 def parse_patch(patch: str) -> tuple[set[int], set[int]]:

@@ -19,6 +19,6 @@ jobs:
       cancel-in-progress: true
     steps:
       # TEMP: run this PR's own action code to dogfood the streaming change; revert to @v0 before merge.
-      - uses: julien777z/code-review-action@claude/tender-hawking-46eyib
+      - uses: julien777z/code-review-action@claude/tender-hawking-46eyib-2
         with:
           cursor-api-key: ${{ secrets.CURSOR_API_KEY }}
