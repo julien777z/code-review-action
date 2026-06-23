@@ -1,5 +1,4 @@
 import logging
-from collections.abc import AsyncIterator
 from typing import Final
 
 import anthropic
@@ -8,11 +7,11 @@ import httpx
 from code_review import review
 from code_review.config import CONFIG, DISCLAIMER, SETTINGS
 from code_review.github import already_reviewed, current_head_sha
+from code_review.models.claude.reply import ClaudeReply
 from code_review.models.claude.routine import RoutineFireRequest
 from code_review.models.shared.findings import Finding
 from code_review.models.shared.pull_request import PullRequestContext, ReviewInputs
 from code_review.prompt import fence_untrusted, pull_request_message, review_instructions
-from code_review.review_backends.jsonl import iter_findings
 from code_review.utils.http import http_client
 
 logger = logging.getLogger("code_review.claude")
@@ -21,12 +20,12 @@ CLAUDE_MAX_TOKENS: Final[int] = 16000
 
 
 async def run_claude_api_review(pr: PullRequestContext) -> int:
-    """Review the PR with the Claude Messages API, streaming each finding as the model emits it."""
+    """Review the PR with the Claude Messages API (structured output) and post the result."""
 
-    async def _findings(inputs: ReviewInputs) -> AsyncIterator[Finding]:
+    async def _findings(inputs: ReviewInputs) -> list[Finding]:
         try:
             async with anthropic.AsyncAnthropic(api_key=SETTINGS.anthropic_api_key) as client:
-                async with client.messages.stream(
+                response = await client.messages.parse(
                     model=SETTINGS.claude_model,
                     max_tokens=CLAUDE_MAX_TOKENS,
                     thinking={"type": "adaptive"},
@@ -38,9 +37,8 @@ async def run_claude_api_review(pr: PullRequestContext) -> int:
                         }
                     ],
                     messages=[{"role": "user", "content": pull_request_message(inputs)}],
-                ) as stream:
-                    async for finding in iter_findings(stream.text_stream):
-                        yield finding
+                    output_format=ClaudeReply,
+                )
         except anthropic.APIError as exc:
             retryable = isinstance(
                 exc,
@@ -53,6 +51,12 @@ async def run_claude_api_review(pr: PullRequestContext) -> int:
             )
 
             raise review.ReviewBackendError(f"Claude review request failed: {exc}", retryable=retryable) from exc
+
+        parsed = response.parsed_output
+        if parsed is None:
+            raise review.ReviewBackendError("Claude returned no structured findings.")
+
+        return list(parsed.findings)
 
     return await review.run_review_round(pr, CONFIG["review_marker"], _findings)
 

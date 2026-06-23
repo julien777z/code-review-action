@@ -46,24 +46,21 @@ def load_skill() -> str:
 
 
 def output_contract() -> str:
-    """Describe the JSONL findings contract and the severity bar for this round."""
+    """Describe the JSON findings contract and the severity bar for this round."""
 
     return (
         "You are a single agent running in CI: you have no sub-agents and no GitHub posting tools, "
         "so ignore any skill steps about launching parallel agents or posting via tools — the runner "
         "posts the review. Apply the skill's review lenses and severity bar to the diff yourself and "
-        "stream findings as JSONL: emit exactly one finding per line as a compact JSON object, with "
-        "no enclosing array, no wrapper object, no markdown fences, and no prose before, between, or "
-        "after the lines. Each line has the form:\n"
-        '{"path": "<repo-relative>", "line": <int>, "side": "RIGHT|LEFT", '
-        '"severity": "critical|high|medium|low", "title": "<short>", "body": "<1-3 sentences>"}\n'
-        "Keep each finding on one physical line; write any newline inside `body` as the escape `\\n` "
-        "so a finding is never split across lines. Use RIGHT with new-file line numbers for "
-        "added/current lines and LEFT with base-file line numbers for removed lines. Only report "
-        "findings on the diff's changed lines. Severities are lowercase. Report no finding below "
+        "report findings as a JSON object of the form:\n"
+        '{"findings": [{"path": "<repo-relative>", "line": <int>, "side": "RIGHT|LEFT", '
+        '"severity": "critical|high|medium|low", "title": "<short>", "body": "<1-3 sentences>"}]}\n'
+        "Use RIGHT with new-file line numbers for added/current lines and LEFT with base-file line "
+        "numbers for removed lines. Only report findings on the diff's changed lines. Severities are "
+        "lowercase. Report no finding below "
         f"`{SETTINGS.min_severity.value}` severity. Post every finding at or above that bar, but at "
-        f"most the {SETTINGS.low_findings_cap} most important `low` findings. Emit findings "
-        "most-important-first, and emit no lines at all when there are none.\n"
+        f"most the {SETTINGS.low_findings_cap} most important `low` findings. Order findings "
+        'most-important-first. Return an empty list ({"findings": []}) when there are none.\n'
         "Report every issue that still applies to the diff at the location where it occurs — include "
         "a finding even when a similar review comment already exists, and never skip a still-valid "
         "finding. The runner reconciles your full set against the existing threads, so omitting a "

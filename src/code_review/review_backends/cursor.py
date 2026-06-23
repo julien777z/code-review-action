@@ -1,19 +1,65 @@
+import json
 import logging
-from collections.abc import AsyncIterator
+import re
 from typing import Final
 
 from cursor_sdk import AsyncAgent, AsyncClient, CloudAgentOptions, CursorAgentError, ModelSelection
+from pydantic import ValidationError
 
 from code_review import review
 from code_review.config import CONFIG, SETTINGS
+from code_review.models.cursor.reply import CursorReply
 from code_review.models.shared.findings import Finding
 from code_review.models.shared.pull_request import PullRequestContext, ReviewInputs
+from code_review.models.shared.severity import DiffSide, Severity
 from code_review.prompt import cursor_prompt
-from code_review.review_backends.jsonl import iter_findings
 
 logger = logging.getLogger("code_review.cursor")
 
+FENCE: Final[re.Pattern[str]] = re.compile(r"```(?:json)?\s*(\{.*\})\s*```", re.DOTALL)
 BRIDGE_LAUNCH_ATTEMPTS: Final[int] = 3
+
+
+def parse_cursor_reply(text: str) -> list[Finding]:
+    """Parse the Cursor agent's JSON reply into normalized findings."""
+
+    cleaned = text.strip()
+    fenced = FENCE.search(cleaned)
+    if fenced is not None:
+        cleaned = fenced.group(1)
+
+    try:
+        data = json.loads(cleaned)
+    except json.JSONDecodeError as exc:
+        raise review.ReviewBackendError(f"Could not parse the Cursor reply: {exc}") from exc
+
+    if isinstance(data, list):
+        data = {"findings": data}
+
+    try:
+        reply = CursorReply.model_validate(data)
+    except ValidationError as exc:
+        raise review.ReviewBackendError(f"Unexpected Cursor findings shape: {exc}") from exc
+
+    findings: list[Finding] = []
+    for raw in reply.findings:
+        try:
+            severity = Severity.from_str(raw.severity)
+        except ValueError:
+            continue
+
+        findings.append(
+            Finding(
+                path=raw.path,
+                line=raw.line,
+                side=DiffSide.from_str(raw.side),
+                severity=severity,
+                title=raw.title,
+                body=raw.body,
+            )
+        )
+
+    return findings
 
 
 async def launch_bridge_with_retry() -> AsyncClient:
@@ -32,8 +78,8 @@ async def launch_bridge_with_retry() -> AsyncClient:
     return await AsyncClient.launch_bridge()
 
 
-async def run_agent(prompt: str) -> AsyncIterator[str]:
-    """Launch the Cursor agent on the standard variant and stream its reply text in chunks."""
+async def run_agent(prompt: str) -> str:
+    """Launch the Cursor agent on the standard variant in non-fast mode and return its reply text."""
 
     client = await launch_bridge_with_retry()
 
@@ -56,20 +102,22 @@ async def run_agent(prompt: str) -> AsyncIterator[str]:
 
     try:
         run = await agent.send(prompt)
-        async for chunk in run.iter_text():
-            yield chunk
+
+        return await run.text()
     finally:
         await agent.close()
 
 
 async def run_cursor_review(pr: PullRequestContext) -> int:
-    """Review the PR with the Cursor backend, streaming each finding as the agent emits it."""
+    """Review the PR with the Cursor backend and post the result."""
 
-    async def _findings(inputs: ReviewInputs) -> AsyncIterator[Finding]:
+    async def _findings(inputs: ReviewInputs) -> list[Finding]:
+        prompt = cursor_prompt(inputs)
         try:
-            async for finding in iter_findings(run_agent(cursor_prompt(inputs))):
-                yield finding
+            reply = await run_agent(prompt)
         except CursorAgentError as exc:
             raise review.ReviewBackendError(f"Cursor agent run failed: {exc}", retryable=exc.is_retryable) from exc
+
+        return parse_cursor_reply(reply)
 
     return await review.run_review_round(pr, CONFIG["review_marker"], _findings)
