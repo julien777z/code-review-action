@@ -137,3 +137,20 @@ class TestIterFindings:
 
         with pytest.raises(ReviewBackendError):
             asyncio.run(collect("This PR looks great, no issues found!\n"))
+
+    def test_raises_on_truncated_final_finding(self) -> None:
+        """Test that a stream cut off mid-finding after earlier findings raises instead of dropping it."""
+
+        complete = '{"path":"a.py","line":1,"side":"RIGHT","severity":"high","title":"A","body":"B"}'
+
+        with pytest.raises(ReviewBackendError):
+            asyncio.run(collect(f'{complete}\n{{"path":"b.py","line":2,"sev'))
+
+    def test_trailing_prose_after_findings_is_clean(self) -> None:
+        """Test that non-JSON trailing text after a finding is ignored rather than treated as truncation."""
+
+        complete = '{"path":"a.py","line":1,"side":"RIGHT","severity":"high","title":"A","body":"B"}'
+
+        findings = asyncio.run(collect(f"{complete}\nDone."))
+
+        assert [finding.title for finding in findings] == ["A"]

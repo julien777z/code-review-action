@@ -98,8 +98,14 @@ async def iter_findings(chunks: AsyncIterator[str]) -> AsyncIterator[Finding]:
     if trailing is not None:
         produced = True
         yield trailing
+        buffer = ""
 
     if produced:
+        # A leftover that opens a JSON object is a finding the stream cut off mid-line (for example a
+        # max-tokens truncation); fail loudly rather than dropping it after earlier findings posted.
+        if buffer.strip().startswith("{"):
+            raise review.ReviewBackendError("The review model output was truncated mid-finding.", retryable=True)
+
         return
 
     # No JSONL findings parsed: recover a legacy/fenced whole-blob reply, and otherwise fail loudly on
