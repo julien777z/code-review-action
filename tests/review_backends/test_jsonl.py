@@ -5,6 +5,7 @@ import pytest
 
 from code_review.models.shared.findings import Finding
 from code_review.models.shared.severity import DiffSide, Severity
+from code_review.review import ReviewBackendError
 from code_review.review_backends.jsonl import iter_findings, parse_finding_line
 
 
@@ -102,3 +103,37 @@ class TestIterFindings:
         findings = asyncio.run(collect(f"Let me review.\n{line}\nDone.\n"))
 
         assert [finding.title for finding in findings] == ["A"]
+
+    def test_recovers_legacy_findings_object(self) -> None:
+        """Test that a whole-reply {"findings": [...]} object is recovered when JSONL parsing finds none."""
+
+        blob = '{"findings": [{"path":"a.py","line":1,"side":"RIGHT","severity":"high","title":"A","body":"B"}]}'
+
+        findings = asyncio.run(collect(blob))
+
+        assert [finding.title for finding in findings] == ["A"]
+
+    def test_recovers_fenced_json_array(self) -> None:
+        """Test that a fenced JSON array reply is recovered when JSONL parsing finds none."""
+
+        blob = '```json\n[{"path":"a.py","line":1,"side":"LEFT","severity":"low","title":"A","body":"B"}]\n```'
+
+        findings = asyncio.run(collect(blob))
+
+        assert [finding.side for finding in findings] == [DiffSide.LEFT]
+
+    def test_empty_findings_object_is_clean(self) -> None:
+        """Test that an explicit empty {"findings": []} reply yields no findings without raising."""
+
+        assert asyncio.run(collect('{"findings": []}')) == []
+
+    def test_blank_output_is_clean(self) -> None:
+        """Test that blank model output yields no findings without raising."""
+
+        assert asyncio.run(collect("   \n")) == []
+
+    def test_raises_on_unparseable_output(self) -> None:
+        """Test that non-empty output with no parseable findings raises instead of approving silently."""
+
+        with pytest.raises(ReviewBackendError):
+            asyncio.run(collect("This PR looks great, no issues found!\n"))
