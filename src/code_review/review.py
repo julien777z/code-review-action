@@ -3,7 +3,7 @@ import json
 import logging
 import signal
 import subprocess
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Callable
 from datetime import timedelta
 from fnmatch import fnmatch
 from typing import Final
@@ -18,19 +18,20 @@ from code_review.github import (
     diff_anchors,
     head_check_concluded,
     list_review_threads,
+    post_comment,
     post_review,
     pull_request_diff,
     resolve_threads,
     start_check_run,
 )
-from code_review.models.shared.findings import Finding, ReviewComment, ReviewPayload
+from code_review.models.shared.findings import Finding, ReviewCommentRequest, ReviewPayload
 from code_review.models.shared.pull_request import PostedFinding, PullRequestContext, ReviewInputs
 from code_review.models.shared.severity import DiffSide, Severity
-from code_review.models.shared.threads import ThreadCommentNode
+from code_review.models.shared.threads import ReviewThread, ThreadCommentNode
 
 logger = logging.getLogger("code_review.review")
 
-GetFindings = Callable[[ReviewInputs], Awaitable[list[Finding]]]
+GetFindings = Callable[[ReviewInputs], AsyncIterator[Finding]]
 
 REVIEW_BACKEND_ATTEMPTS: Final[int] = 3
 REVIEW_RETRY_BACKOFF: Final[timedelta] = timedelta(seconds=2)
@@ -44,22 +45,27 @@ class ReviewBackendError(Exception):
         self.retryable = retryable
 
 
-async def findings_with_retry(get_findings: GetFindings, inputs: ReviewInputs) -> list[Finding]:
-    """Run the chosen backend's model, retrying transient (retryable) failures with backoff."""
+async def stream_findings_with_retry(
+    get_findings: GetFindings, inputs: ReviewInputs
+) -> AsyncIterator[Finding]:
+    """Stream the backend's findings, retrying transient failures only before the first one arrives."""
 
-    for attempt in range(REVIEW_BACKEND_ATTEMPTS - 1):
+    for attempt in range(REVIEW_BACKEND_ATTEMPTS):
+        produced = False
         try:
-            return await get_findings(inputs)
+            async for finding in get_findings(inputs):
+                produced = True
+                yield finding
+
+            return
         except ReviewBackendError as exc:
-            if not exc.retryable:
+            if produced or not exc.retryable or attempt == REVIEW_BACKEND_ATTEMPTS - 1:
                 raise
 
             backoff = REVIEW_RETRY_BACKOFF * (2**attempt)
             logger.warning("Review backend failed; retrying in %ss: %s", backoff.total_seconds(), exc)
 
             await asyncio.sleep(backoff.total_seconds())
-
-    return await get_findings(inputs)
 
 
 def thread_title(comment: ThreadCommentNode) -> str | None:
@@ -124,18 +130,33 @@ async def existing_finding_titles(repo: str, pr_number: int, marker: str) -> dic
     return findings
 
 
-async def reconcile_threads(
-    repo: str,
-    pr_number: int,
+def extract_posted_keys(threads: list[ReviewThread], marker: str) -> set[tuple[str, str]]:
+    """Return every (path, title) the runner has already posted, open or resolved."""
+
+    keys: set[tuple[str, str]] = set()
+
+    for thread in threads:
+        comment = next(iter(thread.comments.nodes), None)
+        if not is_tier_comment(comment, marker) or comment is None:
+            continue
+
+        title = thread_title(comment)
+        if title is None:
+            continue
+
+        keys.add((comment.path or "", title))
+
+    return keys
+
+
+def classify_threads(
+    threads: list[ReviewThread],
     marker: str,
     current_keys: set[tuple[str, str]],
     reviewed_files: set[str],
-) -> tuple[set[tuple[str, str]], set[tuple[str, str]], list[str], set[tuple[str, str]]]:
-    """Classify the runner's threads read-only into posted, open, stale, and kept-blocking keys."""
+) -> tuple[set[tuple[str, str]], list[str], set[tuple[str, str]]]:
+    """Split the runner's threads into still-open, stale (to resolve), and kept-blocking keys."""
 
-    threads = await list_review_threads(repo, pr_number)
-
-    posted_keys: set[tuple[str, str]] = set()
     open_keys: set[tuple[str, str]] = set()
     stale_ids: list[str] = []
     kept_blocking_keys: set[tuple[str, str]] = set()
@@ -150,7 +171,6 @@ async def reconcile_threads(
             continue
 
         key = (comment.path or "", title)
-        posted_keys.add(key)
         if thread.is_resolved:
             continue
 
@@ -171,7 +191,7 @@ async def reconcile_threads(
             if is_blocking:
                 kept_blocking_keys.add(key)
 
-    return posted_keys, open_keys, stale_ids, kept_blocking_keys
+    return open_keys, stale_ids, kept_blocking_keys
 
 
 def path_allowed(path: str) -> bool:
@@ -183,51 +203,22 @@ def path_allowed(path: str) -> bool:
     return not any(fnmatch(path, glob) for glob in SETTINGS.exclude_paths)
 
 
-def filter_findings(findings: list[Finding]) -> list[Finding]:
-    """Drop findings below the severity threshold or outside the path filters."""
+def finding_kept(finding: Finding) -> bool:
+    """Return True when a finding passes the severity bar and the path filters."""
 
-    return [
-        finding
-        for finding in findings
-        if finding.severity.meets(SETTINGS.min_severity) and path_allowed(finding.path)
-    ]
+    return finding.severity.meets(SETTINGS.min_severity) and path_allowed(finding.path)
 
 
-def dedupe_findings(findings: list[Finding]) -> list[Finding]:
-    """Drop repeat findings sharing a path, line, side, and title."""
+def cap_decision(finding: Finding, low_count: int, total_count: int) -> bool:
+    """Return whether to post a finding given the running Low and total caps."""
 
-    seen: set[tuple[str, int, DiffSide, str]] = set()
-    deduped: list[Finding] = []
+    if SETTINGS.max_findings is not None and total_count >= SETTINGS.max_findings:
+        return False
 
-    for finding in findings:
-        key = (finding.path, finding.line, finding.side, finding.title.strip())
-        if key in seen:
-            continue
+    if finding.severity is Severity.LOW and low_count >= SETTINGS.low_findings_cap:
+        return False
 
-        seen.add(key)
-        deduped.append(finding)
-
-    return deduped
-
-
-def cap_findings(findings: list[Finding]) -> list[Finding]:
-    """Keep findings most-important-first under the Low and total caps."""
-
-    capped: list[Finding] = []
-    low_count = 0
-
-    for finding in findings:
-        if finding.severity is Severity.LOW:
-            if low_count >= SETTINGS.low_findings_cap:
-                continue
-
-            low_count += 1
-
-        capped.append(finding)
-        if SETTINGS.max_findings is not None and len(capped) >= SETTINGS.max_findings:
-            break
-
-    return capped
+    return True
 
 
 def comment_body(finding: Finding, marker: str) -> str:
@@ -289,44 +280,41 @@ def verdict_summary(event: str, open_count: int, previous_count: int) -> str:
     return line
 
 
-def build_review(
+def build_inline_comment(head_sha: str, finding: Finding, marker: str) -> ReviewCommentRequest:
+    """Build the standalone inline comment request for one anchorable finding."""
+
+    return ReviewCommentRequest(
+        commit_id=head_sha,
+        path=finding.path,
+        line=finding.line,
+        side=finding.side,
+        body=comment_body(finding, marker),
+    )
+
+
+def build_verdict_review(
     head_sha: str,
-    findings: list[Finding],
-    anchors: dict[str, tuple[set[int], set[int]]],
+    out_of_bounds: list[Finding],
     event: str,
     summary_line: str,
     marker: str,
 ) -> ReviewPayload:
-    """Build the round's review: inline comments for the new findings plus the verdict summary body."""
-
-    comments: list[ReviewComment] = []
-    summary: list[str] = []
-
-    for finding in findings:
-        if finding_anchors(finding, anchors):
-            comments.append(
-                ReviewComment(
-                    path=finding.path,
-                    line=finding.line,
-                    side=finding.side,
-                    body=comment_body(finding, marker),
-                )
-            )
-        else:
-            summary.append(
-                f"- {finding.path}:{finding.line} — {finding.severity.value.capitalize()} — {finding.body}"
-            )
+    """Build the final verdict review: the summary body plus any findings too large to anchor inline."""
 
     body = summary_line
-    if summary:
-        body = f"{body}\n\nOn files too large to anchor inline:\n" + "\n".join(summary)
+    if out_of_bounds:
+        listed = "\n".join(
+            f"- {finding.path}:{finding.line} — {finding.severity.value.capitalize()} — {finding.body}"
+            for finding in out_of_bounds
+        )
+        body = f"{body}\n\nOn files too large to anchor inline:\n{listed}"
 
     body = (
         f"{CONFIG['untrusted_input_open']}\n{body}\n{CONFIG['untrusted_input_close']}\n\n"
         f"{DISCLAIMER}\n\n{marker}"
     )
 
-    return ReviewPayload(commit_id=head_sha, event=event, body=body, comments=comments)
+    return ReviewPayload(commit_id=head_sha, event=event, body=body, comments=[])
 
 
 async def post_review_with_fallback(repo: str, pr_number: int, payload: ReviewPayload, event: str) -> None:
@@ -345,7 +333,7 @@ async def post_review_with_fallback(repo: str, pr_number: int, payload: ReviewPa
 
 
 async def run_review_round(pr: PullRequestContext, marker: str, get_findings: GetFindings) -> int:
-    """Gather inputs, run a backend to get findings, then reconcile, post, and record the verdict."""
+    """Stream a backend's findings, posting each anchorable one as it arrives, then record the verdict."""
 
     # The verdict of record is the check run (approval on) or the review marker (approval off).
     already = (
@@ -367,6 +355,7 @@ async def run_review_round(pr: PullRequestContext, marker: str, get_findings: Ge
 
     check_id = None if SETTINGS.approval_disable else await start_check_run(pr.repo, pr.head_sha)
     concluded = False
+    posted_any = False
     loop = asyncio.get_running_loop()
     review_task = asyncio.current_task()
 
@@ -381,8 +370,63 @@ async def run_review_round(pr: PullRequestContext, marker: str, get_findings: Ge
         loop.add_signal_handler(cancel_signal, _cancel_on_signal)
 
     try:
+        # With streaming the comments post mid-run, so the head is gated once here, before the first
+        # one. A mid-stream advance posts on the prior head and self-heals on the next run's reconcile.
+        if await current_head_sha(pr.repo, pr.number) != pr.head_sha:
+            logger.info("Head moved before review; skipping (the new commit reviews next).")
+            await complete_check_run(pr.repo, check_id, "cancelled", "Superseded", "The head moved before review.")
+            concluded = True
+
+            return 0
+
+        reviewed_files = set(anchors) | unpatched
+        threads = await list_review_threads(pr.repo, pr.number)
+        posted_keys = extract_posted_keys(threads, marker)
+
+        seen_anchor_keys: set[tuple[str, int, DiffSide, str]] = set()
+        seen_new_keys: set[tuple[str, str]] = set()
+        current_keys: set[tuple[str, str]] = set()
+        severity_by_key: dict[tuple[str, str], Severity] = {}
+        out_of_bounds: list[Finding] = []
+        low_count = 0
+        total_count = 0
+
         try:
-            findings = await findings_with_retry(get_findings, inputs)
+            async for finding in stream_findings_with_retry(get_findings, inputs):
+                if not finding_kept(finding):
+                    continue
+
+                anchor_key = (finding.path, finding.line, finding.side, finding.title.strip())
+                if anchor_key in seen_anchor_keys:
+                    continue
+
+                seen_anchor_keys.add(anchor_key)
+                title_key = (finding.path, finding.title.strip())
+                current_keys.add(title_key)
+                severity_by_key[title_key] = finding.severity
+
+                if title_key in posted_keys or title_key in seen_new_keys:
+                    continue
+
+                if not is_postable(finding, anchors, unpatched):
+                    continue
+
+                # Claim the (path, title) slot for the first postable finding before the cap check, so a
+                # later same-titled finding cannot slip past a capped earlier one.
+                seen_new_keys.add(title_key)
+
+                if not cap_decision(finding, low_count, total_count):
+                    continue
+
+                if finding_anchors(finding, anchors):
+                    await post_comment(pr.repo, pr.number, build_inline_comment(pr.head_sha, finding, marker))
+                    posted_any = True
+                else:
+                    out_of_bounds.append(finding)
+
+                total_count += 1
+                if finding.severity is Severity.LOW:
+                    low_count += 1
         except ReviewBackendError as exc:
             logger.error("Review backend failed: %s", exc)
             await complete_check_run(pr.repo, check_id, "action_required", "Review failed", str(exc))
@@ -390,36 +434,8 @@ async def run_review_round(pr: PullRequestContext, marker: str, get_findings: Ge
 
             return 1
 
-        findings = filter_findings(dedupe_findings(findings))
-        current_keys = {(finding.path, finding.title.strip()) for finding in findings}
+        open_existing, stale_ids, kept_blocking = classify_threads(threads, marker, current_keys, reviewed_files)
 
-        # Re-gate: never anchor a review to a head that advanced while the backend ran.
-        if await current_head_sha(pr.repo, pr.number) != pr.head_sha:
-            logger.info("Head moved during review; skipping (the new commit reviews next).")
-            await complete_check_run(pr.repo, check_id, "cancelled", "Superseded", "The head moved during review.")
-            concluded = True
-
-            return 0
-
-        reviewed_files = set(anchors) | unpatched
-        posted_keys, open_existing, stale_ids, kept_blocking = await reconcile_threads(
-            pr.repo, pr.number, marker, current_keys, reviewed_files
-        )
-
-        postable = [finding for finding in findings if is_postable(finding, anchors, unpatched)]
-        new_findings: list[Finding] = []
-        seen_new_keys: set[tuple[str, str]] = set()
-        for finding in postable:
-            key = (finding.path, finding.title.strip())
-            if key in posted_keys or key in seen_new_keys:
-                continue
-
-            seen_new_keys.add(key)
-            new_findings.append(finding)
-
-        new_findings = cap_findings(new_findings)
-
-        severity_by_key = {(f.path, f.title.strip()): f.severity for f in findings}
         new_open_keys = {key for key in current_keys if key not in posted_keys}
         open_keys = open_existing | new_open_keys
         open_count = len(open_keys)
@@ -435,17 +451,10 @@ async def run_review_round(pr: PullRequestContext, marker: str, get_findings: Ge
 
         summary = verdict_summary(event, open_count, previous_count)
 
-        # Re-check the head right before mutating: it can advance during reconciliation.
-        if await current_head_sha(pr.repo, pr.number) != pr.head_sha:
-            logger.info("Head moved before posting; skipping (the new commit reviews next).")
-            await complete_check_run(pr.repo, check_id, "cancelled", "Superseded", "The head moved before posting.")
-            concluded = True
-
-            return 0
-
-        # Post only when there are new comments; otherwise the check run carries the verdict.
-        if new_findings and not await already_reviewed(pr.repo, pr.number, pr.head_sha, marker):
-            payload = build_review(pr.head_sha, new_findings, anchors, event, summary, marker)
+        # Post the verdict review only when this round produced something new; otherwise the check run
+        # carries the verdict.
+        if (posted_any or out_of_bounds) and not await already_reviewed(pr.repo, pr.number, pr.head_sha, marker):
+            payload = build_verdict_review(pr.head_sha, out_of_bounds, event, summary, marker)
             await post_review_with_fallback(pr.repo, pr.number, payload, event)
 
         logger.info("Resolving %d stale thread(s); %d open issue(s) remain.", len(stale_ids), open_count)

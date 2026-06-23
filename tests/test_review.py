@@ -1,25 +1,29 @@
 import asyncio
+from collections.abc import AsyncIterator
 from unittest.mock import AsyncMock
 
 import pytest
 
 from code_review.config import CONFIG, DISCLAIMER
+from code_review.models.shared.findings import Finding
 from code_review.models.shared.severity import DiffSide, Severity
 from code_review.review import (
     REVIEW_BACKEND_ATTEMPTS,
     ReviewBackendError,
-    build_review,
-    cap_findings,
+    build_inline_comment,
+    build_verdict_review,
+    cap_decision,
+    classify_threads,
     comment_body,
     compute_verdict,
-    dedupe_findings,
     existing_finding_titles,
-    filter_findings,
+    extract_posted_keys,
     finding_anchors,
-    findings_with_retry,
+    finding_kept,
     is_postable,
     is_tier_comment,
-    reconcile_threads,
+    run_review_round,
+    stream_findings_with_retry,
     thread_severity,
     thread_title,
     verdict_summary,
@@ -28,43 +32,66 @@ from code_review.review import (
 MARKER = CONFIG["review_marker"]
 
 
-class TestFindingsWithRetry:
-    """Test that the shared model-execution step retries transient backend failures."""
+async def collect(stream: AsyncIterator[Finding]) -> list[Finding]:
+    """Drain an async finding stream into a list."""
 
-    def test_retries_then_succeeds(self, flaky_findings_factory, review_inputs_factory, finding_factory) -> None:
-        """Test that a retryable backend failure is retried until the model returns findings."""
+    return [finding async for finding in stream]
+
+
+class TestStreamFindingsWithRetry:
+    """Test that the streaming backend wrapper retries only before the first finding is produced."""
+
+    def test_retries_before_first_finding(self, flaky_stream_factory, review_inputs_factory, finding_factory) -> None:
+        """Test that a retryable failure before any finding is retried until findings stream."""
 
         finding = finding_factory()
-        get_findings, calls = flaky_findings_factory(
+        get_findings, calls = flaky_stream_factory(
             failures=1, error=ReviewBackendError("Bridge request timed out", retryable=True), result=[finding]
         )
 
-        result = asyncio.run(findings_with_retry(get_findings, review_inputs_factory()))
+        result = asyncio.run(collect(stream_findings_with_retry(get_findings, review_inputs_factory())))
 
         assert result == [finding]
         assert len(calls) == 2
 
-    def test_raises_after_exhausting_attempts(self, flaky_findings_factory, review_inputs_factory) -> None:
+    def test_no_retry_after_a_finding_is_yielded(
+        self, flaky_stream_factory, review_inputs_factory, finding_factory
+    ) -> None:
+        """Test that a retryable failure after a finding has streamed is not retried."""
+
+        get_findings, calls = flaky_stream_factory(
+            failures=1,
+            error=ReviewBackendError("dropped mid-stream", retryable=True),
+            result=[finding_factory()],
+            yield_before_error=True,
+        )
+
+        with pytest.raises(ReviewBackendError):
+            asyncio.run(collect(stream_findings_with_retry(get_findings, review_inputs_factory())))
+
+        assert len(calls) == 1
+
+    def test_raises_after_exhausting_attempts(self, flaky_stream_factory, review_inputs_factory) -> None:
         """Test that a persistently failing backend gives up after the attempt budget."""
 
-        get_findings, calls = flaky_findings_factory(
+        get_findings, calls = flaky_stream_factory(
             failures=REVIEW_BACKEND_ATTEMPTS, error=ReviewBackendError("timed out", retryable=True)
         )
 
         with pytest.raises(ReviewBackendError):
-            asyncio.run(findings_with_retry(get_findings, review_inputs_factory()))
+            asyncio.run(collect(stream_findings_with_retry(get_findings, review_inputs_factory())))
 
         assert len(calls) == REVIEW_BACKEND_ATTEMPTS
 
-    def test_non_retryable_error_not_retried(self, flaky_findings_factory, review_inputs_factory) -> None:
+    def test_non_retryable_error_not_retried(self, flaky_stream_factory, review_inputs_factory) -> None:
         """Test that a non-retryable backend error surfaces immediately without further attempts."""
 
-        get_findings, calls = flaky_findings_factory(
+        get_findings, calls = flaky_stream_factory(
             failures=REVIEW_BACKEND_ATTEMPTS, error=ReviewBackendError("unparseable reply", retryable=False)
         )
 
         with pytest.raises(ReviewBackendError):
-            asyncio.run(findings_with_retry(get_findings, review_inputs_factory()))
+            asyncio.run(collect(stream_findings_with_retry(get_findings, review_inputs_factory())))
 
         assert len(calls) == 1
 
@@ -107,75 +134,50 @@ class TestVerdictSummary:
         assert "requesting changes" in summary
 
 
-class TestFilterFindings:
-    """Test that findings below the severity bar or outside the path filters are dropped."""
+class TestFindingKept:
+    """Test that a finding is kept only when it clears the severity bar and the path filters."""
 
-    def test_drops_below_min_severity(self, mock_config, finding_factory) -> None:
-        """Test that findings below min-severity are removed."""
+    @pytest.mark.parametrize(
+        ("config_overrides", "finding_overrides", "kept"),
+        [
+            ({"min_severity": Severity.HIGH}, {"severity": Severity.LOW}, False),
+            ({"min_severity": Severity.HIGH}, {"severity": Severity.CRITICAL}, True),
+            ({"exclude_paths": ("*.lock",)}, {"path": "poetry.lock"}, False),
+            ({"include_paths": ("src/**",)}, {"path": "docs/readme.md"}, False),
+            ({"include_paths": ("src/**",)}, {"path": "src/app.py"}, True),
+        ],
+        ids=["below-min", "meets-min", "excluded", "not-included", "included"],
+    )
+    def test_finding_kept(self, mock_config, finding_factory, config_overrides, finding_overrides, kept) -> None:
+        """Test that severity and path filters decide whether a finding is kept."""
 
-        mock_config(min_severity=Severity.HIGH)
-        findings = [finding_factory(severity=Severity.LOW), finding_factory(severity=Severity.CRITICAL)]
+        mock_config(**config_overrides)
 
-        kept = filter_findings(findings)
-
-        assert [finding.severity for finding in kept] == [Severity.CRITICAL]
-
-    def test_applies_exclude_globs(self, mock_config, finding_factory) -> None:
-        """Test that findings on excluded paths are removed."""
-
-        mock_config(exclude_paths=("*.lock",))
-        findings = [finding_factory(path="poetry.lock"), finding_factory(path="src/app.py")]
-
-        kept = filter_findings(findings)
-
-        assert [finding.path for finding in kept] == ["src/app.py"]
-
-    def test_applies_include_globs(self, mock_config, finding_factory) -> None:
-        """Test that only findings under the include globs are kept."""
-
-        mock_config(include_paths=("src/**",))
-        findings = [finding_factory(path="src/app.py"), finding_factory(path="docs/readme.md")]
-
-        kept = filter_findings(findings)
-
-        assert [finding.path for finding in kept] == ["src/app.py"]
+        assert finding_kept(finding_factory(**finding_overrides)) is kept
 
 
-class TestDedupeFindings:
-    """Test that repeat findings sharing a path, line, side, and title collapse."""
+class TestCapDecision:
+    """Test that the cap decision honors the running Low and total caps."""
 
-    def test_dedupes(self, finding_factory) -> None:
-        """Test that an exact duplicate finding is dropped."""
+    @pytest.mark.parametrize(
+        ("config_overrides", "severity", "low_count", "total_count", "expected"),
+        [
+            ({"low_findings_cap": 1}, Severity.LOW, 0, 0, True),
+            ({"low_findings_cap": 1}, Severity.LOW, 1, 1, False),
+            ({"low_findings_cap": 1}, Severity.HIGH, 1, 1, True),
+            ({"max_findings": 2}, Severity.HIGH, 0, 2, False),
+            ({"max_findings": 2}, Severity.HIGH, 0, 1, True),
+        ],
+        ids=["low-under-cap", "low-over-cap", "high-ignores-low-cap", "total-cap-hit", "total-cap-under"],
+    )
+    def test_cap_decision(
+        self, mock_config, finding_factory, config_overrides, severity, low_count, total_count, expected
+    ) -> None:
+        """Test that the running low and total caps decide whether a finding posts."""
 
-        findings = [finding_factory(title="Bug"), finding_factory(title="Bug")]
+        mock_config(**config_overrides)
 
-        assert len(dedupe_findings(findings)) == 1
-
-
-class TestCapFindings:
-    """Test that the Low and total caps bound how many findings post."""
-
-    def test_caps_low(self, mock_config, finding_factory) -> None:
-        """Test that low findings are capped while higher severities are kept."""
-
-        mock_config(low_findings_cap=1)
-        findings = [
-            finding_factory(severity=Severity.LOW, title="a"),
-            finding_factory(severity=Severity.LOW, title="b"),
-            finding_factory(severity=Severity.HIGH, title="c"),
-        ]
-
-        capped = cap_findings(findings)
-
-        assert [finding.title for finding in capped] == ["a", "c"]
-
-    def test_caps_total(self, mock_config, finding_factory) -> None:
-        """Test that the total cap limits the number of findings."""
-
-        mock_config(max_findings=1)
-        findings = [finding_factory(title="a"), finding_factory(title="b")]
-
-        assert len(cap_findings(findings)) == 1
+        assert cap_decision(finding_factory(severity=severity), low_count, total_count) is expected
 
 
 class TestAnchoring:
@@ -203,27 +205,49 @@ class TestAnchoring:
         assert is_postable(finding, {"src/app.py": ({10}, set())}, set()) is False
 
 
-class TestBuildReview:
-    """Test that the review splits anchorable findings from too-large-file findings."""
+class TestBuildInlineComment:
+    """Test that an inline comment request carries the commit, location, and rendered body."""
 
-    def test_inline_and_summary(self, finding_factory) -> None:
-        """Test that anchorable findings become comments and others go to the summary body."""
+    def test_render(self, finding_factory) -> None:
+        """Test that the request carries the commit id, path, line, side, and severity body."""
 
-        anchors = {"src/app.py": ({10}, set())}
-        findings = [
-            finding_factory(path="src/app.py", line=10, title="Inline"),
-            finding_factory(path="big.txt", line=1, title="Big"),
-        ]
+        finding = finding_factory(path="src/app.py", line=12, side=DiffSide.RIGHT, title="Leak", severity=Severity.CRITICAL)
+        request = build_inline_comment("sha1", finding, MARKER)
 
-        payload = build_review("sha1", findings, anchors, "COMMENT", "Found 2 issues.", MARKER)
+        assert request.commit_id == "sha1"
+        assert (request.path, request.line, request.side) == ("src/app.py", 12, DiffSide.RIGHT)
+        assert "### Leak" in request.body
+        assert "**Critical Severity**" in request.body
+        assert request.body.rstrip().endswith(MARKER)
 
-        assert len(payload.comments) == 1
-        assert payload.comments[0].path == "src/app.py"
+
+class TestBuildVerdictReview:
+    """Test that the verdict review carries the summary and out-of-bounds findings without inline comments."""
+
+    def test_summary_and_out_of_bounds(self, finding_factory) -> None:
+        """Test that the verdict review lists out-of-bounds findings and carries no inline comments."""
+
+        out_of_bounds = [finding_factory(path="big.txt", line=1, title="Big", body="Too large to anchor.")]
+
+        payload = build_verdict_review("sha1", out_of_bounds, "COMMENT", "Found 1 issue.", MARKER)
+
+        assert payload.comments == []
+        assert payload.commit_id == "sha1"
+        assert "Found 1 issue." in payload.body
         assert "On files too large to anchor inline:" in payload.body
+        assert "big.txt:1" in payload.body
         assert CONFIG["untrusted_input_open"] in payload.body
         assert CONFIG["untrusted_input_close"] in payload.body
         assert DISCLAIMER in payload.body
         assert payload.body.rstrip().endswith(MARKER)
+
+    def test_summary_only_without_out_of_bounds(self) -> None:
+        """Test that with no out-of-bounds findings the body is just the summary."""
+
+        payload = build_verdict_review("sha1", [], "APPROVE", "No unresolved issues — approving.", MARKER)
+
+        assert "On files too large to anchor inline:" not in payload.body
+        assert "No unresolved issues — approving." in payload.body
 
 
 class TestCommentBody:
@@ -287,10 +311,26 @@ class TestExistingFindingTitles:
         assert result["src/app.py"][0].severity == "critical"
 
 
-class TestReconcileThreads:
-    """Test that gone findings resolve or stay open per outdated/blocking rules."""
+class TestExtractPostedKeys:
+    """Test that the runner's already-posted keys are pulled from the review threads."""
 
-    def test_classifies(self, mock_config, monkeypatch, review_thread_factory) -> None:
+    def test_collects_runner_keys(self, review_thread_factory) -> None:
+        """Test that only marker-carrying runner threads contribute posted keys."""
+
+        threads = [
+            review_thread_factory(title="Mine", path="src/app.py", marker=MARKER),
+            review_thread_factory(
+                title="Human", path="src/app.py", body="### Human\n\n**Low Severity**\n\nA human note."
+            ),
+        ]
+
+        assert extract_posted_keys(threads, MARKER) == {("src/app.py", "Mine")}
+
+
+class TestClassifyThreads:
+    """Test that gone findings resolve or stay open per the outdated/blocking rules."""
+
+    def test_classifies(self, mock_config, review_thread_factory) -> None:
         """Test that current threads stay open, non-blocking gone threads go stale, blocking ones stay."""
 
         mock_config(approval_include=frozenset({Severity.CRITICAL}))
@@ -303,13 +343,136 @@ class TestReconcileThreads:
                 id="gone-critical", title="GoneCrit", severity="Critical", path="src/app.py", marker=MARKER
             ),
         ]
-        monkeypatch.setattr("code_review.review.list_review_threads", AsyncMock(return_value=threads))
 
-        posted, open_keys, stale_ids, kept_blocking = asyncio.run(
-            reconcile_threads("octo/repo", 7, MARKER, {("src/app.py", "Current")}, {"src/app.py"})
+        open_keys, stale_ids, kept_blocking = classify_threads(
+            threads, MARKER, {("src/app.py", "Current")}, {"src/app.py"}
         )
 
         assert ("src/app.py", "Current") in open_keys
         assert stale_ids == ["gone-low"]
         assert ("src/app.py", "GoneCrit") in kept_blocking
         assert ("src/app.py", "GoneCrit") in open_keys
+
+
+class TestRunReviewRound:
+    """Test that the round streams findings, posts each inline, and records the verdict."""
+
+    def test_posts_each_anchorable_finding_inline(
+        self, mock_config, review_github_mocks, stream_findings_factory, pull_request_factory, finding_factory
+    ) -> None:
+        """Test that each anchorable finding is posted as its own inline comment as it streams."""
+
+        review_github_mocks["diff_anchors"].return_value = ({"src/app.py": ({10, 20}, set())}, set())
+        findings = [
+            finding_factory(path="src/app.py", line=10, title="A"),
+            finding_factory(path="src/app.py", line=20, title="B"),
+        ]
+
+        result = asyncio.run(run_review_round(pull_request_factory(), MARKER, stream_findings_factory(findings)))
+
+        assert result == 0
+        assert review_github_mocks["post_comment"].await_count == 2
+
+    def test_out_of_bounds_goes_to_verdict_body(
+        self, mock_config, review_github_mocks, stream_findings_factory, pull_request_factory, finding_factory
+    ) -> None:
+        """Test that a finding on a too-large unpatched file goes into the verdict review, not an inline comment."""
+
+        review_github_mocks["diff_anchors"].return_value = ({}, {"big.txt"})
+        findings = [finding_factory(path="big.txt", line=1, title="Big", severity=Severity.HIGH)]
+
+        asyncio.run(run_review_round(pull_request_factory(), MARKER, stream_findings_factory(findings)))
+
+        assert review_github_mocks["post_comment"].await_count == 0
+        assert review_github_mocks["post_review"].await_count == 1
+
+        payload = review_github_mocks["post_review"].await_args.args[2]
+
+        assert payload.comments == []
+        assert "On files too large to anchor inline:" in payload.body
+
+    @pytest.mark.parametrize(
+        ("config_overrides", "severities", "expected_posts"),
+        [
+            ({"low_findings_cap": 1}, [Severity.LOW, Severity.LOW, Severity.HIGH], 2),
+            ({"max_findings": 1}, [Severity.HIGH, Severity.HIGH], 1),
+        ],
+        ids=["low-cap", "total-cap"],
+    )
+    def test_caps_bound_inline_comments(
+        self,
+        mock_config,
+        review_github_mocks,
+        stream_findings_factory,
+        pull_request_factory,
+        finding_factory,
+        config_overrides,
+        severities,
+        expected_posts,
+    ) -> None:
+        """Test that the low and total caps bound how many inline comments post."""
+
+        mock_config(**config_overrides)
+        lines = list(range(1, len(severities) + 1))
+        review_github_mocks["diff_anchors"].return_value = ({"src/app.py": (set(lines), set())}, set())
+        findings = [
+            finding_factory(path="src/app.py", line=line, title=f"T{line}", severity=severity)
+            for line, severity in zip(lines, severities)
+        ]
+
+        asyncio.run(run_review_round(pull_request_factory(), MARKER, stream_findings_factory(findings)))
+
+        assert review_github_mocks["post_comment"].await_count == expected_posts
+
+    def test_does_not_repost_already_posted_finding(
+        self,
+        mock_config,
+        review_github_mocks,
+        stream_findings_factory,
+        pull_request_factory,
+        finding_factory,
+        review_thread_factory,
+    ) -> None:
+        """Test that a finding already posted on the PR is not posted again."""
+
+        review_github_mocks["diff_anchors"].return_value = ({"src/app.py": ({10}, set())}, set())
+        review_github_mocks["list_review_threads"].return_value = [
+            review_thread_factory(title="Off-by-one error", path="src/app.py", marker=MARKER)
+        ]
+        findings = [finding_factory(path="src/app.py", line=10, title="Off-by-one error")]
+
+        asyncio.run(run_review_round(pull_request_factory(), MARKER, stream_findings_factory(findings)))
+
+        assert review_github_mocks["post_comment"].await_count == 0
+
+    def test_head_moved_before_review_skips(
+        self, mock_config, review_github_mocks, stream_findings_factory, pull_request_factory, finding_factory
+    ) -> None:
+        """Test that a head that moved before streaming skips the round without posting."""
+
+        review_github_mocks["current_head_sha"].return_value = "moved-sha"
+        review_github_mocks["diff_anchors"].return_value = ({"src/app.py": ({10}, set())}, set())
+        findings = [finding_factory(path="src/app.py", line=10)]
+
+        result = asyncio.run(run_review_round(pull_request_factory(head_sha="abc123"), MARKER, stream_findings_factory(findings)))
+
+        assert result == 0
+        assert review_github_mocks["post_comment"].await_count == 0
+        assert review_github_mocks["post_review"].await_count == 0
+        assert review_github_mocks["complete_check_run"].await_args.args[2] == "cancelled"
+
+    def test_backend_failure_before_post_concludes_failed(
+        self, mock_config, review_github_mocks, flaky_stream_factory, pull_request_factory
+    ) -> None:
+        """Test that a backend failure before any comment concludes the check as failed and posts nothing."""
+
+        get_findings, _ = flaky_stream_factory(
+            failures=REVIEW_BACKEND_ATTEMPTS, error=ReviewBackendError("model error", retryable=False)
+        )
+
+        result = asyncio.run(run_review_round(pull_request_factory(), MARKER, get_findings))
+
+        assert result == 1
+        assert review_github_mocks["post_comment"].await_count == 0
+        assert review_github_mocks["post_review"].await_count == 0
+        assert review_github_mocks["complete_check_run"].await_args.args[2] == "action_required"

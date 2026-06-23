@@ -1,5 +1,6 @@
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from datetime import timedelta
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -81,27 +82,72 @@ def review_inputs_factory(pull_request_factory) -> Callable[..., ReviewInputs]:
 
 
 @pytest.fixture
-def flaky_findings_factory(monkeypatch) -> Callable[..., tuple[GetFindings, list[int]]]:
-    """Build a get_findings double that fails a set number of times before returning findings."""
+def flaky_stream_factory(monkeypatch) -> Callable[..., tuple[GetFindings, list[int]]]:
+    """Build a streaming get_findings double that fails a set number of times before yielding findings."""
 
     monkeypatch.setattr("code_review.review.REVIEW_RETRY_BACKOFF", timedelta(0))
 
     def _build(
-        *, failures: int, error: ReviewBackendError, result: list[Finding] | None = None
+        *,
+        failures: int,
+        error: ReviewBackendError,
+        result: list[Finding] | None = None,
+        yield_before_error: bool = False,
     ) -> tuple[GetFindings, list[int]]:
         calls: list[int] = []
         findings = result if result is not None else []
 
-        async def _get_findings(inputs: ReviewInputs) -> list[Finding]:
+        async def _get_findings(inputs: ReviewInputs) -> AsyncIterator[Finding]:
             calls.append(len(calls))
             if len(calls) <= failures:
+                if yield_before_error and findings:
+                    yield findings[0]
+
                 raise error
 
-            return findings
+            for finding in findings:
+                yield finding
 
         return _get_findings, calls
 
     return _build
+
+
+@pytest.fixture
+def stream_findings_factory() -> Callable[[list[Finding]], GetFindings]:
+    """Build a streaming get_findings double that yields a fixed list of findings."""
+
+    def _build(findings: list[Finding]) -> GetFindings:
+        async def _get_findings(inputs: ReviewInputs) -> AsyncIterator[Finding]:
+            for finding in findings:
+                yield finding
+
+        return _get_findings
+
+    return _build
+
+
+@pytest.fixture
+def review_github_mocks(monkeypatch) -> dict[str, AsyncMock]:
+    """Patch the GitHub seams run_review_round calls and return the mocks for assertion."""
+
+    mocks = {
+        "already_reviewed": AsyncMock(return_value=False),
+        "head_check_concluded": AsyncMock(return_value=False),
+        "current_head_sha": AsyncMock(return_value="abc123"),
+        "pull_request_diff": AsyncMock(return_value=""),
+        "diff_anchors": AsyncMock(return_value=({}, set())),
+        "list_review_threads": AsyncMock(return_value=[]),
+        "start_check_run": AsyncMock(return_value="check-1"),
+        "complete_check_run": AsyncMock(return_value=True),
+        "post_comment": AsyncMock(return_value=True),
+        "post_review": AsyncMock(return_value=True),
+        "resolve_threads": AsyncMock(return_value=None),
+    }
+    for name, mock in mocks.items():
+        monkeypatch.setattr(f"code_review.review.{name}", mock)
+
+    return mocks
 
 
 @pytest.fixture
