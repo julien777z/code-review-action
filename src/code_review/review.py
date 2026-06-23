@@ -419,7 +419,9 @@ async def run_review_round(pr: PullRequestContext, marker: str, get_findings: Ge
                     continue
 
                 if finding_anchors(finding, anchors):
-                    await post_comment(pr.repo, pr.number, build_inline_comment(pr.head_sha, finding, marker))
+                    if not await post_comment(pr.repo, pr.number, build_inline_comment(pr.head_sha, finding, marker)):
+                        continue
+
                     posted_any = True
                 else:
                     out_of_bounds.append(finding)
@@ -453,7 +455,9 @@ async def run_review_round(pr: PullRequestContext, marker: str, get_findings: Ge
 
         # Post the verdict review only when this round produced something new; otherwise the check run
         # carries the verdict.
-        if (posted_any or out_of_bounds) and not await already_reviewed(pr.repo, pr.number, pr.head_sha, marker):
+        if (posted_any or out_of_bounds or SETTINGS.approval_disable) and not await already_reviewed(
+            pr.repo, pr.number, pr.head_sha, marker
+        ):
             payload = build_verdict_review(pr.head_sha, out_of_bounds, event, summary, marker)
             await post_review_with_fallback(pr.repo, pr.number, payload, event)
 

@@ -476,3 +476,32 @@ class TestRunReviewRound:
         assert review_github_mocks["post_comment"].await_count == 0
         assert review_github_mocks["post_review"].await_count == 0
         assert review_github_mocks["complete_check_run"].await_args.args[2] == "action_required"
+
+    def test_rejected_inline_post_does_not_consume_cap_or_post_verdict(
+        self, mock_config, review_github_mocks, stream_findings_factory, pull_request_factory, finding_factory
+    ) -> None:
+        """Test that a rejected inline comment neither consumes cap budget nor triggers a verdict review."""
+
+        mock_config(max_findings=1)
+        review_github_mocks["post_comment"].return_value = False
+        review_github_mocks["diff_anchors"].return_value = ({"src/app.py": ({1, 2}, set())}, set())
+        findings = [
+            finding_factory(path="src/app.py", line=1, title="A"),
+            finding_factory(path="src/app.py", line=2, title="B"),
+        ]
+
+        asyncio.run(run_review_round(pull_request_factory(), MARKER, stream_findings_factory(findings)))
+
+        assert review_github_mocks["post_comment"].await_count == 2
+        assert review_github_mocks["post_review"].await_count == 0
+
+    def test_approval_disable_posts_verdict_review_to_record_head(
+        self, mock_config, review_github_mocks, stream_findings_factory, pull_request_factory
+    ) -> None:
+        """Test that approval-disable mode posts the verdict review even with no findings to record the head."""
+
+        mock_config(approval_disable=True)
+
+        asyncio.run(run_review_round(pull_request_factory(), MARKER, stream_findings_factory([])))
+
+        assert review_github_mocks["post_review"].await_count == 1
