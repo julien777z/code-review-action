@@ -102,14 +102,34 @@ sent in the fire request, so the routine needs no manual setup beyond the code-r
 As the PR evolves the action resolves the review threads whose findings no longer apply. The default
 `GITHUB_TOKEN` **cannot** resolve review threads — GitHub rejects `resolveReviewThread` with "Resource
 not accessible by integration" — so by default stale threads stay open even though the verdict count is
-correct. To enable auto-resolution, set `resolve-token` to a PAT or GitHub App token with pull-request
-write; it is used only to resolve threads, so review comments stay authored by `github-actions[bot]`.
+correct.
+
+To enable auto-resolution, give the action a GitHub App installation token via `resolve-token`. It is
+used only to resolve threads, so review comments stay authored by `github-actions[bot]`.
+
+1. Create a GitHub App (your account → **Settings → Developer settings → GitHub Apps → New GitHub App**).
+   Under **Permissions → Repository → Pull requests** select **Read and write**; leave everything else off.
+2. **Install** the App on the repositories whose threads it should resolve.
+3. On the App's settings page, note its **Client ID** and **Generate a private key** (downloads a `.pem`).
+4. Add the Client ID as a repository **variable** `REVIEW_RESOLVE_APP_CLIENT_ID` and the private key as a
+   repository **secret** `REVIEW_RESOLVE_APP_PRIVATE_KEY`.
+5. Mint a token in the workflow and pass it to `resolve-token`:
 
 ```yaml
-with:
-  cursor-api-key: ${{ secrets.CURSOR_API_KEY }}
-  resolve-token: ${{ secrets.REVIEW_RESOLVE_TOKEN }}
+steps:
+  - uses: actions/create-github-app-token@v3
+    id: app-token
+    with:
+      client-id: ${{ vars.REVIEW_RESOLVE_APP_CLIENT_ID }}
+      private-key: ${{ secrets.REVIEW_RESOLVE_APP_PRIVATE_KEY }}
+  - uses: julien777z/code-review-action@v0
+    with:
+      cursor-api-key: ${{ secrets.CURSOR_API_KEY }}
+      resolve-token: ${{ steps.app-token.outputs.token }}
 ```
+
+The token is short-lived — it expires after an hour and is revoked when the job ends — so nothing
+long-lived is stored. A fine-grained PAT with **Pull requests: write** also works if you prefer.
 
 ## Restricting who can trigger reviews
 
@@ -142,7 +162,7 @@ with:
 | Input | Default | Description |
 |---|---|---|
 | `github-token` | `${{ github.token }}` | Token to read the diff and post reviews/checks |
-| `resolve-token` | — | Token to resolve the action's own threads; needs a PAT/App token (see below) |
+| `resolve-token` | — | Token to resolve the action's own threads; needs a GitHub App token (see above) |
 | `anthropic-api-key` | — | Anthropic key for the Claude API backend |
 | `cursor-api-key` | — | Cursor key for the Cursor backend |
 | `claude-routine-api-key` | — | Key for firing a hosted Claude routine |
