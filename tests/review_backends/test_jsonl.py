@@ -158,6 +158,14 @@ class TestIterFindings:
 
         assert asyncio.run(collect(output)) == []
 
+    def test_inline_marker_mention_still_raises(self) -> None:
+        """Test that output merely mentioning the marker inline (not alone on a line) is still unparseable."""
+
+        output = f"I would emit {CONFIG['no_findings_marker']} but the JSON got mangled here."
+
+        with pytest.raises(ReviewBackendError):
+            asyncio.run(collect(output))
+
     def test_raises_on_unparseable_output(self) -> None:
         """Test that non-empty output with no parseable findings raises instead of approving silently."""
 

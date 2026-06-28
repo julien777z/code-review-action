@@ -126,7 +126,7 @@ async def iter_findings(chunks: AsyncIterator[str]) -> AsyncIterator[Finding]:
 
         return
 
-    if CONFIG["no_findings_marker"] in full:
+    if any(line.strip() == CONFIG["no_findings_marker"] for line in full.splitlines()):
         return
 
     if full.strip():
