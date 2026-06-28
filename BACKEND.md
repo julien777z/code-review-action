@@ -61,4 +61,8 @@ The container must be reachable by GitHub over **public HTTPS** — put it behin
   the key in a real secret store and rotate it if exposed.
 - The Claude (Anthropic) backend runs out of the box. The Cursor backend depends on whatever
   `cursor-sdk` needs at runtime; verify it in the container if you use Cursor.
-- One review runs at a time; bursts queue in memory and are processed in order.
+- One review runs at a time; bursts queue in memory and are processed in order. On shutdown the queue
+  is drained for up to `shutdown_drain_seconds` (default 25s) before the consumer is cancelled. The
+  queue is in-memory, so a crash — or a drain that exceeds that window — can still drop accepted but
+  unfinished jobs, since GitHub does not redeliver a `202`-ed delivery. Put a persistent queue in front
+  for stronger durability.

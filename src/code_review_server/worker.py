@@ -36,10 +36,16 @@ class ReviewWorker:
         self.task = asyncio.create_task(self.consume())
 
     async def stop(self) -> None:
-        """Cancel the background consumer task and wait for it to unwind."""
+        """Drain accepted jobs within the configured window, then cancel the background consumer."""
 
         if self.task is None:
             return
+
+        if self.queue is not None:
+            # GitHub got a 202 for each accepted job and will not redeliver, so let the consumer finish
+            # the queue before cancelling — bounded so a long review cannot hang shutdown indefinitely.
+            with suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(self.queue.join(), SERVER_SETTINGS.shutdown_drain_seconds)
 
         self.task.cancel()
         with suppress(asyncio.CancelledError):
