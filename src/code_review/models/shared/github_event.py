@@ -65,6 +65,14 @@ class EventSender(BaseModel):
     type: str | None = None
 
 
+class EventInstallation(BaseModel):
+    """GitHub App installation reference carried on webhook deliveries."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    id: int | None = None
+
+
 class GithubEvent(BaseModel):
     """The subset of the GitHub event payload the runner reads."""
 
@@ -75,3 +83,5 @@ class GithubEvent(BaseModel):
     issue: EventIssue | None = None
     comment: EventComment | None = None
     sender: EventSender | None = None
+    repository: EventRepo | None = None
+    installation: EventInstallation | None = None
