@@ -7,7 +7,7 @@ import subprocess
 from typing import Final
 
 from code_review.config import CONFIG, SETTINGS
-from code_review.models.shared.findings import ReviewPayload
+from code_review.models.shared.findings import ReviewCommentRequest, ReviewPayload
 from code_review.models.shared.pull_request import PullRequestContext
 from code_review.models.shared.threads import ReviewThread
 
@@ -16,8 +16,8 @@ logger = logging.getLogger("code_review.github")
 HUNK_HEADER: Final[re.Pattern[str]] = re.compile(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 
 
-async def run_gh(args: list[str], stdin: str | None = None) -> str:
-    """Run a `gh` command with the configured token and return stdout."""
+async def run_gh(args: list[str], stdin: str | None = None, token: str | None = None) -> str:
+    """Run a `gh` command with the given token (or the default github token) and return stdout."""
 
     process = await asyncio.create_subprocess_exec(
         "gh",
@@ -25,7 +25,7 @@ async def run_gh(args: list[str], stdin: str | None = None) -> str:
         stdin=asyncio.subprocess.PIPE if stdin is not None else None,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
-        env={**os.environ, "GH_TOKEN": SETTINGS.github_token},
+        env={**os.environ, "GH_TOKEN": token or SETTINGS.github_token},
     )
     stdout, stderr = await process.communicate(stdin.encode() if stdin is not None else None)
 
@@ -219,15 +219,18 @@ async def list_review_threads(repo: str, pr_number: int) -> list[ReviewThread]:
 
 
 async def resolve_threads(repo: str, thread_ids: list[str]) -> None:
-    """Resolve the given review threads — run only after the head is confirmed and the review posted."""
+    """Resolve the given review threads with the resolve token; the default github token cannot resolve."""
 
+    # The default Actions GITHUB_TOKEN cannot call resolveReviewThread (GitHub rejects it with
+    # "Resource not accessible by integration"), so use the elevated resolve token when one is set.
+    token = SETTINGS.resolve_token or SETTINGS.github_token
     mutation = "mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{id}}}"
 
     for thread_id in thread_ids:
         try:
-            await run_gh(["api", "graphql", "-f", f"query={mutation}", "-f", f"id={thread_id}"])
+            await run_gh(["api", "graphql", "-f", f"query={mutation}", "-f", f"id={thread_id}"], token=token)
         except subprocess.CalledProcessError as exc:
-            logger.warning("Could not resolve a review thread: %s", exc)
+            logger.warning("Could not resolve review thread %s: %s", thread_id, (exc.stderr or "").strip())
 
 
 def parse_patch(patch: str) -> tuple[set[int], set[int]]:
@@ -310,6 +313,24 @@ async def post_review(repo: str, pr_number: int, payload: ReviewPayload) -> bool
         return False
 
     logger.info("Posted review: %s", stdout.strip())
+
+    return True
+
+
+async def post_comment(repo: str, pr_number: int, payload: ReviewCommentRequest) -> bool:
+    """Post one standalone inline review comment; return False if GitHub rejects it."""
+
+    try:
+        stdout = await run_gh(
+            ["api", "--method", "POST", f"repos/{repo}/pulls/{pr_number}/comments", "--input", "-"],
+            stdin=payload.model_dump_json(),
+        )
+    except subprocess.CalledProcessError as exc:
+        logger.error("Comment POST failed (%s): %s", exc.returncode, (exc.stderr or "").strip())
+
+        return False
+
+    logger.info("Posted inline comment: %s", stdout.strip())
 
     return True
 

@@ -105,6 +105,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(case_sensitive=False, extra="ignore")
 
     github_token: str = ""
+    resolve_token: str = ""
     anthropic_api_key: str = ""
     cursor_api_key: str = ""
     claude_routine_api_key: str = ""
