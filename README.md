@@ -117,8 +117,8 @@ yours and lives in your account; no server to run.
 2. **Install** the App on every repository whose threads it should resolve.
 3. On the App's settings page, note its **Client ID** and **Generate a private key** (downloads a `.pem`).
 4. Expose the credentials to those repos' workflows:
-   - **Organization repos:** add an organization **variable** `REVIEW_RESOLVE_APP_CLIENT_ID` and
-     organization **secret** `REVIEW_RESOLVE_APP_PRIVATE_KEY` once, scoped to the repos that use the action.
+   - **Organization repos:** add an organization **variable** `CODE_REVIEW_APP_CLIENT_ID` and
+     organization **secret** `CODE_REVIEW_APP_PRIVATE_KEY` once, scoped to the repos that use the action.
    - **Personal repos:** add the same **variable** and **secret** to each repo (personal accounts have no
      secrets shared across repos).
 5. Mint a token in the workflow and pass it to `resolve-token`:
@@ -128,8 +128,8 @@ steps:
   - uses: actions/create-github-app-token@v3
     id: app-token
     with:
-      client-id: ${{ vars.REVIEW_RESOLVE_APP_CLIENT_ID }}
-      private-key: ${{ secrets.REVIEW_RESOLVE_APP_PRIVATE_KEY }}
+      client-id: ${{ vars.CODE_REVIEW_APP_CLIENT_ID }}
+      private-key: ${{ secrets.CODE_REVIEW_APP_PRIVATE_KEY }}
   - uses: julien777z/code-review-action@v0
     with:
       cursor-api-key: ${{ secrets.CURSOR_API_KEY }}

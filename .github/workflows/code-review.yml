@@ -25,8 +25,8 @@ jobs:
         id: app-token
         continue-on-error: true
         with:
-          client-id: ${{ vars.REVIEW_RESOLVE_APP_CLIENT_ID }}
-          private-key: ${{ secrets.REVIEW_RESOLVE_APP_PRIVATE_KEY }}
+          client-id: ${{ vars.CODE_REVIEW_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CODE_REVIEW_APP_PRIVATE_KEY }}
       # TEMP: run this PR's own action code to dogfood the streaming change; revert to @v0 before merge.
       - uses: julien777z/code-review-action@claude/tender-hawking-46eyib-2
         with:
