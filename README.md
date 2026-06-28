@@ -137,7 +137,7 @@ steps:
 ```
 
 For a single repository, a fine-grained PAT with **Pull requests: write** stored as the
-`REVIEW_RESOLVE_TOKEN` secret also works (`resolve-token: ${{ secrets.REVIEW_RESOLVE_TOKEN }}`), but it is
+`CODE_REVIEW_TOKEN` secret also works (`resolve-token: ${{ secrets.CODE_REVIEW_TOKEN }}`), but it is
 tied to your account and expires, so the App scales better.
 
 ## Restricting who can trigger reviews
