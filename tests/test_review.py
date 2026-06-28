@@ -269,10 +269,17 @@ class TestCommentBody:
 class TestThreadParsing:
     """Test that runner threads are recognized and their title/severity parsed."""
 
-    def test_is_tier_comment(self, thread_comment_factory) -> None:
-        """Test that a bot comment carrying the marker is recognized as this tier's."""
+    @pytest.mark.parametrize(
+        "author",
+        ["github-actions[bot]", "code-review-app[bot]", "reviewer-pat"],
+        ids=["github-actions", "github-app", "pat-user"],
+    )
+    def test_marked_comment_is_tier_for_any_author(self, thread_comment_factory, author: str) -> None:
+        """Test that a comment carrying the marker is recognized as the runner's whatever the author."""
 
-        assert is_tier_comment(thread_comment_factory(marker=MARKER), MARKER) is True
+        comment = thread_comment_factory(marker=MARKER, author=author)
+
+        assert is_tier_comment(comment, MARKER) is True
 
     def test_unmarked_comment_is_not_tier(self, thread_comment_factory) -> None:
         """Test that a comment without the review marker is not recognized as the runner's."""

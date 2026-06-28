@@ -96,14 +96,14 @@ def thread_severity(comment: ThreadCommentNode) -> Severity | None:
 
 
 def is_tier_comment(comment: ThreadCommentNode | None, marker: str) -> bool:
-    """Return True when the comment is the runner's own posting (github-actions bot plus the marker)."""
+    """Return True when the comment is the runner's own posting, identified by the marker."""
 
     if comment is None:
         return False
 
-    author = comment.author.login if comment.author else None
-
-    return author in ("github-actions", "github-actions[bot]") and marker in comment.body
+    # Match on the marker alone, not the author: the action may post as github-actions[bot], a GitHub
+    # App, or a PAT user, but every comment it writes carries the marker.
+    return marker in comment.body
 
 
 async def existing_finding_titles(repo: str, pr_number: int, marker: str) -> dict[str, list[PostedFinding]]:
