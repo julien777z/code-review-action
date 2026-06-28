@@ -59,7 +59,13 @@ def parse_findings_blob(text: str) -> list[Finding] | None:
         return None
 
     if isinstance(data, dict):
-        data = data.get("findings", [])
+        # A legacy object reply must carry a findings key; a dict without it (e.g. {}) is malformed,
+        # not an empty review, so reject it as unparseable rather than a clean zero-finding result.
+        if "findings" not in data:
+            return None
+
+        data = data["findings"]
+
     if not isinstance(data, list):
         return None
 

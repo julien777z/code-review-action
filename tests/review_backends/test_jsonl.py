@@ -127,6 +127,12 @@ class TestIterFindings:
 
         assert asyncio.run(collect('{"findings": []}')) == []
 
+    def test_raises_on_object_without_findings_key(self) -> None:
+        """Test that a JSON object lacking a findings key raises instead of approving as zero findings."""
+
+        with pytest.raises(ReviewBackendError):
+            asyncio.run(collect("{}"))
+
     def test_blank_output_is_clean(self) -> None:
         """Test that blank model output yields no findings without raising."""
 
