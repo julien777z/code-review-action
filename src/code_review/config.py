@@ -45,6 +45,7 @@ class ReviewConfig(TypedDict):
     anthropic_version: str
     routine_beta: str
     review_marker: str
+    no_findings_marker: str
     untrusted_input_open: str
     untrusted_input_close: str
     status_check_name: str
@@ -57,6 +58,7 @@ CONFIG: Final[ReviewConfig] = ReviewConfig(
     anthropic_version="2023-06-01",
     routine_beta="experimental-cc-routine-2026-04-01",
     review_marker="<!-- code-review -->",
+    no_findings_marker="NO_FINDINGS",
     untrusted_input_open="<!-- UNTRUSTED_INPUT START -->",
     untrusted_input_close="<!-- UNTRUSTED_INPUT END -->",
     status_check_name="Approval Verdict",

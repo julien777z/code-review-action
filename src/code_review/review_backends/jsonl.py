@@ -6,6 +6,7 @@ from typing import Final
 from pydantic import ValidationError
 
 from code_review import review
+from code_review.config import CONFIG
 from code_review.models.shared.findings import Finding, RawFinding
 from code_review.models.shared.severity import DiffSide, Severity
 
@@ -123,6 +124,11 @@ async def iter_findings(chunks: AsyncIterator[str]) -> AsyncIterator[Finding]:
         for finding in blob:
             yield finding
 
+        return
+
+    # An explicit no-findings marker is a clean review, not a parse failure, so a narrated "no findings"
+    # reply (no JSONL lines) is not mistaken for garbage and does not fail the run.
+    if CONFIG["no_findings_marker"] in full:
         return
 
     if full.strip():

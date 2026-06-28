@@ -3,6 +3,7 @@ from collections.abc import AsyncIterator
 
 import pytest
 
+from code_review.config import CONFIG
 from code_review.models.shared.findings import Finding
 from code_review.models.shared.severity import DiffSide, Severity
 from code_review.review import ReviewBackendError
@@ -149,6 +150,13 @@ class TestIterFindings:
         """Test that blank model output yields no findings without raising."""
 
         assert asyncio.run(collect("   \n")) == []
+
+    def test_no_findings_marker_is_clean(self) -> None:
+        """Test that an explicit no-findings marker is treated as a clean review even amid narration."""
+
+        output = f"Reviewed the diff per the skill.\nThe review is complete.\n{CONFIG['no_findings_marker']}"
+
+        assert asyncio.run(collect(output)) == []
 
     def test_raises_on_unparseable_output(self) -> None:
         """Test that non-empty output with no parseable findings raises instead of approving silently."""
