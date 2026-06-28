@@ -24,6 +24,10 @@ RUN pip install --no-cache-dir --disable-pip-version-check -r requirements-serve
 
 COPY src ./src
 
+# The review engine loads .agents/skills/code-review/SKILL.md relative to the app root at runtime, so
+# the skill must ship in the image (action_root() resolves to /app here).
+COPY .agents/skills/code-review ./.agents/skills/code-review
+
 EXPOSE 8080
 
 CMD ["python", "-m", "code_review_server"]
