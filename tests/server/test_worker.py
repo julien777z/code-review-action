@@ -29,3 +29,33 @@ class TestRunJob:
         assert SETTINGS.github_token == "ghs_job"
 
         review.assert_awaited_once_with("pull_request", job.event, "octo/repo")
+
+
+class TestStop:
+    """Test that shutdown drains already-accepted jobs before cancelling the consumer."""
+
+    def test_drains_queued_jobs_before_stopping(self, monkeypatch) -> None:
+        """Test that stop processes an accepted job instead of dropping it on shutdown."""
+
+        review_worker = ReviewWorker()
+        processed: list[ReviewJob] = []
+
+        async def fake_run_job(job: ReviewJob) -> None:
+            processed.append(job)
+
+        monkeypatch.setattr(review_worker, "run_job", fake_run_job)
+        job = ReviewJob(
+            event_name="pull_request",
+            event=GithubEvent(action="opened"),
+            repo="octo/repo",
+            installation_id=42,
+        )
+
+        async def scenario() -> None:
+            review_worker.start()
+            await review_worker.submit(job)
+            await review_worker.stop()
+
+        asyncio.run(scenario())
+
+        assert processed == [job]

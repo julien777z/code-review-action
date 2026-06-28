@@ -14,6 +14,7 @@ class ServerSettings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8080
     log_level: str = "info"
+    shutdown_drain_seconds: float = 25.0
 
     @property
     def is_configured(self) -> bool:
