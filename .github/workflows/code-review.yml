@@ -18,9 +18,9 @@ jobs:
       group: code-review-${{ github.event.pull_request.number || github.event.issue.number }}-${{ github.event_name == 'issue_comment' && 'comment' || 'review' }}
       cancel-in-progress: true
     steps:
-      # Mint a short-lived GitHub App installation token used only to resolve the action's own
-      # review threads (the default GITHUB_TOKEN cannot). continue-on-error so reviews still run
-      # when the App secrets are absent: resolve-token is then empty and the action keeps threads open.
+      # Mint a short-lived GitHub App installation token so the action posts reviews, the check run, and
+      # thread resolutions as the App rather than github-actions[bot]. continue-on-error plus the
+      # "|| github.token" fallback keep reviews running as github-actions[bot] when the App is unconfigured.
       - uses: actions/create-github-app-token@v3
         id: app-token
         continue-on-error: true
@@ -30,5 +30,5 @@ jobs:
       # TEMP: run this PR's own action code to dogfood the streaming change; revert to @v0 before merge.
       - uses: julien777z/code-review-action@claude/tender-hawking-46eyib-2
         with:
+          github-token: ${{ steps.app-token.outputs.token || github.token }}
           cursor-api-key: ${{ secrets.CURSOR_API_KEY }}
-          resolve-token: ${{ steps.app-token.outputs.token }}

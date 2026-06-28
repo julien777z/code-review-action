@@ -97,31 +97,30 @@ sent in the fire request, so the routine needs no manual setup beyond the code-r
   open findings post as a comment; zero open findings approves.
 - `approval-disable` — post comments only and skip the verdict and check run.
 
-## Resolving the action's own threads
+## Posting and resolving as a GitHub App
 
-As the PR evolves the action resolves the review threads whose findings no longer apply. The default
-`GITHUB_TOKEN` **cannot** resolve review threads — GitHub rejects `resolveReviewThread` with "Resource
-not accessible by integration" — so by default stale threads stay open even though the verdict count is
-correct.
+By default the action posts as `github-actions[bot]`, and that token **cannot** resolve review threads —
+GitHub rejects `resolveReviewThread` with "Resource not accessible by integration" — so stale threads stay
+open as the PR evolves.
 
-To enable auto-resolution, give the action a token with pull-request write via `resolve-token`. It is
-used **only** to resolve threads, so review comments stay authored by `github-actions[bot]`.
-
-A **GitHub App** is the best fit across several repos: create it once, install it on each repo, and the
-same workflow snippet below mints a per-repo token automatically. The minted token is short-lived — it
-expires after an hour and is revoked when the job ends — so nothing long-lived is stored. The App is
-yours and lives in your account; no server to run.
+Running the action as a **GitHub App** fixes both: the inline comments, the verdict review, and the check
+run are posted under the App's identity, and the App resolves its own stale threads. Create the App once,
+install it on each repo, and the same workflow snippet mints a per-repo token automatically. The minted
+token is short-lived — it expires after an hour and is revoked when the job ends — so nothing long-lived is
+stored, and the App is yours; no server to run.
 
 1. Create a GitHub App (**Settings → Developer settings → GitHub Apps → New GitHub App**). Under
-   **Permissions → Repository → Pull requests** select **Read and write**; leave everything else off.
-2. **Install** the App on every repository whose threads it should resolve.
+   **Permissions → Repository**, grant **Pull requests: Read and write** and **Checks: Read and write**;
+   leave everything else off. (The action is pure-API and never checks out the repo, so it needs no
+   Contents access.)
+2. **Install** the App on every repository it should review.
 3. On the App's settings page, note its **Client ID** and **Generate a private key** (downloads a `.pem`).
 4. Expose the credentials to those repos' workflows:
    - **Organization repos:** add an organization **variable** `CODE_REVIEW_APP_CLIENT_ID` and
      organization **secret** `CODE_REVIEW_APP_PRIVATE_KEY` once, scoped to the repos that use the action.
    - **Personal repos:** add the same **variable** and **secret** to each repo (personal accounts have no
      secrets shared across repos).
-5. Mint a token in the workflow and pass it to `resolve-token`:
+5. Mint a token in the workflow and pass it as `github-token`:
 
 ```yaml
 steps:
@@ -132,13 +131,18 @@ steps:
       private-key: ${{ secrets.CODE_REVIEW_APP_PRIVATE_KEY }}
   - uses: julien777z/code-review-action@v0
     with:
+      github-token: ${{ steps.app-token.outputs.token }}
       cursor-api-key: ${{ secrets.CURSOR_API_KEY }}
-      resolve-token: ${{ steps.app-token.outputs.token }}
 ```
 
-For a single repository, a fine-grained PAT with **Pull requests: write** stored as the
-`CODE_REVIEW_TOKEN` secret also works (`resolve-token: ${{ secrets.CODE_REVIEW_TOKEN }}`), but it is
-tied to your account and expires, so the App scales better.
+To keep reviews running even when the App isn't configured, add `continue-on-error: true` to the token
+step and fall back to the default token: `github-token: ${{ steps.app-token.outputs.token || github.token }}`.
+
+**Keep `github-actions[bot]` as the author but still resolve.** If you only need stale-thread resolution
+and want comments to stay authored by `github-actions[bot]`, leave `github-token` at its default and pass
+the elevated token as `resolve-token` instead — it is used solely for `resolveReviewThread`. A fine-grained
+PAT with **Pull requests: write** stored as the `CODE_REVIEW_TOKEN` secret also works there
+(`resolve-token: ${{ secrets.CODE_REVIEW_TOKEN }}`).
 
 ## Restricting who can trigger reviews
 
@@ -170,8 +174,8 @@ with:
 
 | Input | Default | Description |
 |---|---|---|
-| `github-token` | `${{ github.token }}` | Token to read the diff and post reviews/checks |
-| `resolve-token` | — | Token to resolve the action's own threads; needs a GitHub App token (see above) |
+| `github-token` | `${{ github.token }}` | Token to read the diff and post reviews/checks; pass a GitHub App token to post under the App's identity (see above) |
+| `resolve-token` | — | Elevated token used only to resolve threads when keeping `github-actions[bot]` as the author (see above) |
 | `anthropic-api-key` | — | Anthropic key for the Claude API backend |
 | `cursor-api-key` | — | Cursor key for the Cursor backend |
 | `claude-routine-api-key` | — | Key for firing a hosted Claude routine |

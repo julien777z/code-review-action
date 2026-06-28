@@ -8,7 +8,7 @@ branding:
 
 inputs:
   github-token:
-    description: Token used to read the diff and post reviews and check runs.
+    description: Token used to read the diff and post reviews and check runs. Pass a GitHub App installation token to post under the App's identity and to resolve threads (which the default GITHUB_TOKEN cannot).
     default: ${{ github.token }}
   resolve-token:
     description: Token used to resolve the action's own review threads. The default GITHUB_TOKEN cannot resolve threads (GitHub rejects it with "Resource not accessible by integration"), so set this to a GitHub App installation token (or a fine-grained PAT) with pull-request write to enable auto-resolution. Empty falls back to github-token.
