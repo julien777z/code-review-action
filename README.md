@@ -107,25 +107,21 @@ correct.
 To enable auto-resolution, give the action a token with pull-request write via `resolve-token`. It is
 used **only** to resolve threads, so review comments stay authored by `github-actions[bot]`.
 
-**Easiest — a fine-grained PAT:**
+A **GitHub App** is the best fit across several repos: create it once, install it on each repo, and the
+same workflow snippet below mints a per-repo token automatically. The minted token is short-lived — it
+expires after an hour and is revoked when the job ends — so nothing long-lived is stored. The App is
+yours and lives in your account; no server to run.
 
-1. Create a fine-grained PAT (**Settings → Developer settings → Personal access tokens → Fine-grained
-   tokens**) scoped to this repository, with **Repository permissions → Pull requests → Read and write**.
-2. Add it as the repository **secret** `REVIEW_RESOLVE_TOKEN`.
-3. Pass it to the action:
-
-```yaml
-with:
-  cursor-api-key: ${{ secrets.CURSOR_API_KEY }}
-  resolve-token: ${{ secrets.REVIEW_RESOLVE_TOKEN }}
-```
-
-A fine-grained PAT expires (up to a year), so re-issue it when it lapses; resolutions are attributed to
-its owner.
-
-**Cleaner — a GitHub App** (bot identity, short-lived auto-revoked tokens, nothing long-lived to rotate).
-Create an App with **Pull requests: Read and write**, install it, store its Client ID as a variable and
-private key as a secret, then mint a token in the workflow:
+1. Create a GitHub App (**Settings → Developer settings → GitHub Apps → New GitHub App**). Under
+   **Permissions → Repository → Pull requests** select **Read and write**; leave everything else off.
+2. **Install** the App on every repository whose threads it should resolve.
+3. On the App's settings page, note its **Client ID** and **Generate a private key** (downloads a `.pem`).
+4. Expose the credentials to those repos' workflows:
+   - **Organization repos:** add an organization **variable** `REVIEW_RESOLVE_APP_CLIENT_ID` and
+     organization **secret** `REVIEW_RESOLVE_APP_PRIVATE_KEY` once, scoped to the repos that use the action.
+   - **Personal repos:** add the same **variable** and **secret** to each repo (personal accounts have no
+     secrets shared across repos).
+5. Mint a token in the workflow and pass it to `resolve-token`:
 
 ```yaml
 steps:
@@ -139,6 +135,10 @@ steps:
       cursor-api-key: ${{ secrets.CURSOR_API_KEY }}
       resolve-token: ${{ steps.app-token.outputs.token }}
 ```
+
+For a single repository, a fine-grained PAT with **Pull requests: write** stored as the
+`REVIEW_RESOLVE_TOKEN` secret also works (`resolve-token: ${{ secrets.REVIEW_RESOLVE_TOKEN }}`), but it is
+tied to your account and expires, so the App scales better.
 
 ## Restricting who can trigger reviews
 
