@@ -10,6 +10,7 @@ from code_review.models.shared.findings import Finding, RawFinding
 from code_review.models.shared.severity import DiffSide, Severity
 
 FENCE: Final[re.Pattern[str]] = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL)
+UNPARSEABLE_SNIPPET_CHARS: Final[int] = 500
 
 
 def normalize_raw(raw: RawFinding) -> Finding | None:
@@ -30,6 +31,17 @@ def normalize_raw(raw: RawFinding) -> Finding | None:
     )
 
 
+def parse_raw_item(item: object) -> Finding | None:
+    """Validate and normalize one raw finding mapping into a Finding, or None when it is not a finding."""
+
+    try:
+        raw = RawFinding.model_validate(item)
+    except ValidationError:
+        return None
+
+    return normalize_raw(raw)
+
+
 def parse_finding_line(line: str) -> Finding | None:
     """Parse one streamed JSONL line into a normalized Finding, or None when it is not a finding."""
 
@@ -46,7 +58,7 @@ def parse_finding_line(line: str) -> Finding | None:
 
 
 def parse_findings_blob(text: str) -> list[Finding] | None:
-    """Parse a whole non-JSONL reply (fenced, {"findings": [...]}, or a bare array); None if not JSON."""
+    """Parse a whole non-JSONL reply (fenced, {"findings": [...]}, a bare array, or a bare object); None otherwise."""
 
     cleaned = text.strip()
     fenced = FENCE.search(cleaned)
@@ -59,28 +71,17 @@ def parse_findings_blob(text: str) -> list[Finding] | None:
         return None
 
     if isinstance(data, dict):
-        # A legacy object reply must carry a findings key; a dict without it (e.g. {}) is malformed,
-        # not an empty review, so reject it as unparseable rather than a clean zero-finding result.
-        if "findings" not in data:
-            return None
+        if "findings" in data:
+            data = data["findings"]
+        else:
+            finding = parse_raw_item(data)
 
-        data = data["findings"]
+            return [finding] if finding is not None else None
 
     if not isinstance(data, list):
         return None
 
-    findings: list[Finding] = []
-    for item in data:
-        try:
-            raw = RawFinding.model_validate(item)
-        except ValidationError:
-            continue
-
-        finding = normalize_raw(raw)
-        if finding is not None:
-            findings.append(finding)
-
-    return findings
+    return [finding for item in data if (finding := parse_raw_item(item)) is not None]
 
 
 async def iter_findings(chunks: AsyncIterator[str]) -> AsyncIterator[Finding]:
@@ -125,6 +126,8 @@ async def iter_findings(chunks: AsyncIterator[str]) -> AsyncIterator[Finding]:
         return
 
     if full.strip():
+        snippet = full.strip()[:UNPARSEABLE_SNIPPET_CHARS]
         raise review.ReviewBackendError(
-            "The review model produced unparseable output (expected JSONL findings).", retryable=True
+            f"The review model produced unparseable output (expected JSONL findings). Output started with: {snippet}",
+            retryable=True,
         )
