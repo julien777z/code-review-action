@@ -74,8 +74,6 @@ def parse_findings_blob(text: str) -> list[Finding] | None:
         if "findings" in data:
             data = data["findings"]
         else:
-            # A bare finding object instead of the {"findings": [...]} wrapper: recover it as a single
-            # finding. A dict that is not a valid finding (e.g. {}) fails validation and stays unparseable.
             finding = parse_raw_item(data)
 
             return [finding] if finding is not None else None
