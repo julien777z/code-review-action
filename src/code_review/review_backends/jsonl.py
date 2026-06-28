@@ -126,8 +126,6 @@ async def iter_findings(chunks: AsyncIterator[str]) -> AsyncIterator[Finding]:
 
         return
 
-    # An explicit no-findings marker is a clean review, not a parse failure, so a narrated "no findings"
-    # reply (no JSONL lines) is not mistaken for garbage and does not fail the run.
     if CONFIG["no_findings_marker"] in full:
         return
 
