@@ -166,6 +166,15 @@ class TestIterFindings:
         with pytest.raises(ReviewBackendError):
             asyncio.run(collect(output))
 
+    def test_marker_does_not_mask_unparsed_findings(self) -> None:
+        """Test that a no-findings marker alongside a finding-shaped line that failed to parse still raises."""
+
+        malformed = '{"path":"a.py","line":1,"side":"RIGHT","severity":"bogus","title":"T","body":"B"}'
+        output = f"{malformed}\n{CONFIG['no_findings_marker']}"
+
+        with pytest.raises(ReviewBackendError):
+            asyncio.run(collect(output))
+
     def test_raises_on_unparseable_output(self) -> None:
         """Test that non-empty output with no parseable findings raises instead of approving silently."""
 
