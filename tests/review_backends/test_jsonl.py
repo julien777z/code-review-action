@@ -122,6 +122,18 @@ class TestIterFindings:
 
         assert [finding.side for finding in findings] == [DiffSide.LEFT]
 
+    def test_recovers_a_multiline_bare_finding_object(self) -> None:
+        """Test that a single finding emitted as a pretty-printed object (not a findings array) is recovered."""
+
+        blob = (
+            '{\n  "path": "a.py",\n  "line": 1,\n  "side": "RIGHT",\n'
+            '  "severity": "high",\n  "title": "A",\n  "body": "B"\n}'
+        )
+
+        findings = asyncio.run(collect(blob))
+
+        assert [finding.title for finding in findings] == ["A"]
+
     def test_empty_findings_object_is_clean(self) -> None:
         """Test that an explicit empty {"findings": []} reply yields no findings without raising."""
 
@@ -143,6 +155,12 @@ class TestIterFindings:
 
         with pytest.raises(ReviewBackendError):
             asyncio.run(collect("This PR looks great, no issues found!\n"))
+
+    def test_unparseable_error_includes_output_snippet(self) -> None:
+        """Test that the unparseable-output error carries the offending text so the failure is debuggable."""
+
+        with pytest.raises(ReviewBackendError, match="not json findings"):
+            asyncio.run(collect("prose that is not json findings at all\n"))
 
     def test_raises_on_truncated_final_finding(self) -> None:
         """Test that a stream cut off mid-finding after earlier findings raises instead of dropping it."""
