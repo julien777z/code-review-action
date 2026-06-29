@@ -42,6 +42,14 @@ class TShirtOrderBad(BaseModel):
         return value.upper()
 ```
 
+## No Free-Floating BaseModel Builders
+
+- Do not write **named** helper functions (module-level or static) whose role is to construct a `BaseModel` from another shape — for example `build_line_items(raw) -> list[LineItem]`, `convert_dto_to_order(dto) -> Order`, `to_payment_state(response) -> PaymentState`. Construction belongs on a model class.
+- Prefer a `@classmethod from_<source>(cls, source) -> Self` on the **target** model when the target's package can import the source. `from_<source>` is reserved for converting **one logical source** (single argument). Avoid compound names like `from_user_and_roles(...)` — that is a renamed builder, not a conversion.
+- Disambiguate the `<source>` slug from the target's own name. If the target represents the same domain noun (for example `OrderResponse` already concerns an order), naming the classmethod `from_order` reads as "convert an order response from another order response". Name the source by its kind instead — for example `from_orm_order(order)` when the source is an ORM row, or `from_provider_order(...)` when it is an external payload. The same applies when the source's class name overlaps with the target (for example `LineItemResponse.from_line_item` for a `LineItem` ORM row — prefer `from_orm_line_item`).
+- When the construction takes **multiple distinct inputs** (no single "source"), name the classmethod `build_*` instead — for example `build_for_user(cls, user, account_id, roles)`. Still a classmethod on the target; just signals composition rather than conversion.
+- When adding the classmethod to the target would break package layering (for example a shared/library target being asked to import a service-private provider model), put a `to_<target>(self) -> Target` instance method on the **source** `BaseModel` instead. Either form satisfies the rule — what's banned is the named free function.
+
 ## Boolean Properties
 
 - Expose zero-argument boolean accessors as `@property` instead of methods when they describe model state or capability.
@@ -97,17 +105,17 @@ class ExternalCustomer(BaseModel):
 from pydantic import Field
 
 # Good: no Field when just documenting
-class WidgetPosition(BaseModel):
+class Point(BaseModel):
     id: str
     x: int
     y: int
 
 # Good: Field with actual constraint
-class WidgetLayout(BaseModel):
+class CanvasLayout(BaseModel):
     layout_id: str = Field(..., min_length=1)
 
 # Bad: Field only for description
-class WidgetPosition(BaseModel):
-    id: str = Field(..., description="Unique widget identifier")
+class Point(BaseModel):
+    id: str = Field(..., description="Unique point identifier")
     x: int = Field(..., description="X position")
 ```

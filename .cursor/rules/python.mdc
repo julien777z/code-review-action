@@ -105,6 +105,31 @@ payload_from_model: SubscriberSyncPayload = SubscriberSyncBody(
 ).model_dump()
 ```
 
+## Group Related Parameters
+
+- When a function takes multiple parameters that always travel together and describe one concept, group them into a single typed object (a `TypedDict`, or a `BaseModel` when validation is needed) instead of passing them as separate arguments.
+- Pass and forward that one object; do not thread the individual fields through each call site.
+- This keeps the signature stable as the group grows and makes the shared concept explicit.
+
+```python
+from typing import TypedDict
+
+
+class AuditContext(TypedDict):
+    client_ip: str | None
+    user_agent: str | None
+
+
+# Bad: related values threaded as separate arguments
+def record_event(event: Event, client_ip: str | None, user_agent: str | None) -> None:
+    ...
+
+
+# Good: one typed object describing the shared concept
+def record_event(event: Event, audit_context: AuditContext) -> None:
+    ...
+```
+
 ## Date & Time
 
 - Use `datetime` objects instead of raw integers (Unix timestamps) for representing time.
@@ -199,11 +224,13 @@ CONFIG: Final[ReviewConfig] = ReviewConfig(
 - This rule does not govern Python dunders (`__init__`, `__enter__`, …) or single-underscore names owned by third-party/stdlib code.
 
 ```python
-def build_report(rows: list[Row]) -> Report:
-    def _format_row(row: Row) -> str:
-        return f"{row.id}: {row.name}"
+class Report(BaseModel):
+    @classmethod
+    def from_rows(cls, rows: list[Row]) -> Self:
+        def _format_row(row: Row) -> str:
+            return f"{row.id}: {row.name}"
 
-    return Report(lines=[_format_row(row) for row in rows])
+        return cls(lines=[_format_row(row) for row in rows])
 ```
 
 ## Configuration
@@ -326,7 +353,7 @@ variant = pick_variant(catalog)
 ## Caching Runtime Data
 
 - Never use plain dictionaries (module-level, class-level, or any other in-process container) as caches for data that must stay correct across requests, workers, or deployments. In-process dict caches silently go stale, diverge between workers, and cannot be invalidated remotely.
-- For cross-request or cross-process caching, use Redis (for example `ResponseCache` from the shared caching layer) or another distributed caching library, and always set an explicit TTL.
+- For cross-request or cross-process caching, use Redis (for example the `cache_backend()` helper backed by `fastapi-redis-sdk`'s `CacheBackend`) or another distributed caching library, and always set an explicit TTL.
 - Pair every cache write path with an explicit invalidation path for mutations that change the cached value.
 - Request-scoped memoization is the only acceptable dict-shaped cache: it must be held in a `ContextVar`, reset at the start of every request, and invalidated on writes within the request.
 ## Caching Deterministic Builders
@@ -501,6 +528,7 @@ return next(
 - Comments describe current behavior only — never reference what the code replaces, used to do, what was deleted, or PR/migration history. Phrases like "previously…", "was the…", "legacy…", "replaces the hand-built…", "now uses X instead of Y" do not belong in source. They rot the moment the comparison ages out.
 - A comment should read the same to someone who never saw the prior version of the file. If you find yourself explaining a transition, put that in the PR description, not the code.
 - Don't explain WHAT the code does — well-named identifiers already do that. Don't reference the current task, fix, or callers ("used by X", "added for the Y flow", "handles the case from issue #123") since those belong in the PR description.
+- Prefer a test over a comment that explains a guard, ordering, or invariant. If a comment exists to justify why a branch, early return, or operation order is required (for example "we check X before Y so Z can't happen"), encode that guarantee in a test that fails when the behavior regresses, and delete the comment. The test is the durable, executable specification; the comment is not.
 
 ## HTTP Status Codes
 

@@ -22,7 +22,7 @@ If your runtime cannot launch parallel sub-agents, run the per-agent steps below
 
 Identify the target PR: its number and repo slug (owner/repo) are normally supplied by the runner (repo, PR number/URL, head ref and SHA, author). If not supplied, detect the PR from the current branch (`pull_request_read`, or `gh pr view --json number,headRefOid,state,isDraft`). If no PR is detectable, stop and ask the user for a PR number or URL.
 
-Then check eligibility (delegate to a sub-agent when sub-agents are available): stop without proceeding if the PR is (a) closed, (b) clearly automated or trivially simple and obviously fine, or (c) you **already reviewed the current head commit** — a new push since your last review makes it eligible again. Draft PRs are in scope; review them like any other. For (c): list the PR's reviews (`pull_request_read` `method: "get_reviews"`, paging through all pages), keep non-dismissed reviews (ignore `PENDING`/`DISMISSED`) whose body contains the review marker `<!-- code-review -->` (see Step 6) and treat the head as already reviewed only when one has a `commit_id` equal to the current head SHA. Match on `commit_id`, never on timestamps. A review without the marker (a human's) does not count.
+Then check eligibility (delegate to a sub-agent when sub-agents are available): stop without proceeding if the PR is (a) closed, (b) clearly automated or trivially simple and obviously fine, or (c) you **already reviewed the current head commit** — a new push since your last review makes it eligible again. Draft PRs are in scope; review them like any other. For (c): list the PR's reviews (`pull_request_read` `method: "get_reviews"`, paging through all pages), keep non-dismissed reviews (ignore `PENDING`/`DISMISSED`) whose body contains **your runner's** review marker — `<!-- code-review:claude -->` if you are a Claude runner, `<!-- code-review:cursor -->` if you are a Cursor runner (see Step 6) — and treat the head as already reviewed only when one has a `commit_id` equal to the current head SHA. Match on `commit_id`, never on timestamps. A review without your marker (a human's, or the other tier's) does not count.
 
 ## Step 2 — Context (two parallel agents)
 
@@ -69,9 +69,9 @@ Repeat the eligibility check from Step 1, and re-fetch the head SHA. If it diffe
 
 - Anchor each inline comment to the finding's `path`, line, and `side`, using the **full head SHA**. **Validate each anchor against the diff first.** Drop any finding whose line is not in the diff — it is out of scope — **except** when GitHub returned no patch for that changed file (it was too large to diff), where no line can be anchored: list those in the summary body instead.
 - The summary body is one line (e.g. `Found 3 issues.`) covering every posted finding, optionally followed by a list of findings on changed files too large to show a diff (`path:line — Severity — explanation`). Never include a "what was reviewed" / coverage summary or any description of your process.
-- End the summary body with the hidden marker `<!-- code-review -->` on its own line. A later run treats the head as already reviewed (Step 1c) when a non-dismissed review carrying the marker exists for the current head SHA, so the marker is what lets re-triggers skip re-reviewing the same commit.
-- End **every inline comment body** with the same hidden marker `<!-- code-review -->` on its own line, so the review's threads are distinguishable from human comments.
-- After posting, resolve earlier inline-comment threads carrying the marker that GitHub now marks **outdated** (the code they were anchored to has since changed), if your runner can resolve review threads. Identify them by the marker, and resolve a thread only when the current review no longer raises that finding (same file and title) — a finding raised again, even on a shifted line, keeps its thread. This keeps superseded findings from piling up across pushes. Never resolve a human's threads.
+- End the summary body with **your runner's** hidden marker on its own line — `<!-- code-review:claude -->` if you are a Claude runner, `<!-- code-review:cursor -->` if you are a Cursor runner. A later run treats the head as already reviewed (Step 1c) when a non-dismissed review carrying **your** marker exists for the current head SHA, so the marker is what lets re-triggers skip re-reviewing the same commit.
+- End **every inline comment body** with your runner's same hidden marker on its own line, so your threads are distinguishable from the other tier's (both tiers post as the same bot).
+- After posting, resolve **your own** earlier inline-comment threads that GitHub now marks **outdated** (the code they were anchored to has since changed), if your runner can resolve review threads. Identify yours by **your marker**, and resolve a thread only when the current review no longer raises that finding (same file and title) — a finding you raised again, even on a shifted line, keeps its thread. This keeps superseded findings from piling up across pushes. Never resolve another reviewer's, the other tier's, or a human's threads.
 
 ## Inline comment format
 
@@ -82,7 +82,7 @@ Repeat the eligibility check from Step 1, and re-fetch the head SHA. If it diffe
 
 <1–3 sentences: what is wrong and when it bites. Cite the rule file when the finding is rule-based.>
 
-<!-- code-review -->
+<your runner's marker — `<!-- code-review:claude -->` or `<!-- code-review:cursor -->`>
 ```
 
 ## False Positives to Ignore

@@ -55,7 +55,7 @@
 ```python
 # Bad: hardcoded property in a test payload
 payload = {
-    "website": "https://example.com",
+    "website": "https://acme.example.com",
 }
 
 # Good: add website to the shared fixture setup and use fixture data
@@ -98,10 +98,10 @@ def mock_config(monkeypatch):
 
 ```python
 # Good: use fixture helper in tests instead of repeated monkeypatch lines
-async def test_extracts_tenant_from_token(mock_config):
+async def test_resolves_environment_for_token(mock_config):
     mock_config(
         ENVIRONMENT="development",
-        ALLOWED_TEST_ENVIRONMENTS=("development", "staging"),
+        ALLOWED_ENVIRONMENTS=("development", "staging"),
     )
     # ...
 ```

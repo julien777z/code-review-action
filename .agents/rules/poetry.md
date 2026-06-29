@@ -1,3 +1,8 @@
+---
+name: poetry
+description: If dependencies change in pyproject.toml, run poetry lock and validate with poetry run tests.
+---
+
 # Poetry Rules
 
 If dependencies are changed in `pyproject.toml`, run:
