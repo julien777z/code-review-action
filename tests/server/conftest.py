@@ -8,7 +8,8 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
-from code_review_server import github_app
+from code_review_server.core.config import SERVER_SETTINGS
+from code_review_server.services import github_app
 
 
 @pytest.fixture(scope="session")
@@ -35,6 +36,17 @@ def webhook_secret() -> str:
     """Return a fixed webhook secret for signature tests."""
 
     return "test-webhook-secret"
+
+
+@pytest.fixture
+def mock_server_settings(monkeypatch) -> Callable[..., None]:
+    """Override webhook backend settings on SERVER_SETTINGS for the duration of a test."""
+
+    def _apply(**overrides: object) -> None:
+        for key, value in overrides.items():
+            monkeypatch.setattr(SERVER_SETTINGS, key, value)
+
+    return _apply
 
 
 @pytest.fixture
@@ -73,7 +85,7 @@ def pull_request_webhook_factory() -> Callable[..., bytes]:
 
 @pytest.fixture
 def mock_mint_response(monkeypatch) -> Callable[..., AsyncMock]:
-    """Patch the github_app httpx client to capture the mint request and return a canned token."""
+    """Patch the shared HTTP client to capture the mint request and return a canned token."""
 
     def _build(token: str = "ghs_minted") -> AsyncMock:
         response = MagicMock()
@@ -86,7 +98,7 @@ def mock_mint_response(monkeypatch) -> Callable[..., AsyncMock]:
         context = MagicMock()
         context.__aenter__ = AsyncMock(return_value=client)
         context.__aexit__ = AsyncMock(return_value=False)
-        monkeypatch.setattr(github_app.httpx, "AsyncClient", MagicMock(return_value=context))
+        monkeypatch.setattr(github_app, "http_client", MagicMock(return_value=context))
 
         return client.post
 

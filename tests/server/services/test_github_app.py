@@ -4,18 +4,21 @@ from unittest.mock import AsyncMock
 
 import jwt
 
-from code_review_server.github_app import build_app_jwt, mint_installation_token
+from code_review_server.services.github_app import build_app_jwt, mint_installation_token
 
 
 class TestBuildAppJwt:
     """Test that the App JWT is signed with RS256 and carries the issuer and a short expiry."""
 
-    def test_signs_a_verifiable_jwt(self, rsa_key_pair: tuple[str, str]) -> None:
+    def test_signs_a_verifiable_jwt(
+        self, mock_server_settings: Callable[..., None], rsa_key_pair: tuple[str, str]
+    ) -> None:
         """Test that the JWT verifies with the App public key and carries the issuer and expiry."""
 
         private_pem, public_pem = rsa_key_pair
+        mock_server_settings(github_app_id="123456", github_app_private_key=private_pem)
 
-        token = build_app_jwt("123456", private_pem)
+        token = build_app_jwt()
         claims = jwt.decode(token, public_pem, algorithms=["RS256"])
 
         assert claims["iss"] == "123456"
@@ -26,14 +29,18 @@ class TestMintInstallationToken:
     """Test that an installation token is exchanged for the App JWT at the installation endpoint."""
 
     def test_posts_to_the_installation_and_returns_the_token(
-        self, rsa_key_pair: tuple[str, str], mock_mint_response: Callable[..., AsyncMock]
+        self,
+        mock_server_settings: Callable[..., None],
+        rsa_key_pair: tuple[str, str],
+        mock_mint_response: Callable[..., AsyncMock],
     ) -> None:
         """Test that minting calls the installation access-tokens endpoint as the App and returns the token."""
 
         private_pem, _ = rsa_key_pair
+        mock_server_settings(github_app_id="123456", github_app_private_key=private_pem)
         post = mock_mint_response("ghs_minted")
 
-        token = asyncio.run(mint_installation_token("123456", private_pem, 42))
+        token = asyncio.run(mint_installation_token(42))
 
         assert token == "ghs_minted"
 

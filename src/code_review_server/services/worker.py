@@ -1,25 +1,15 @@
 import asyncio
 import logging
 from contextlib import suppress
-
-from pydantic import BaseModel
+from typing import Final
 
 from code_review.config import SETTINGS
-from code_review.models.shared.github_event import GithubEvent
 from code_review.runtime import review_event
-from code_review_server.config import SERVER_SETTINGS
-from code_review_server.github_app import mint_installation_token
+from code_review_server.core.config import SERVER_SETTINGS
+from code_review_server.models.jobs import ReviewJob
+from code_review_server.services.github_app import mint_installation_token
 
-logger = logging.getLogger("code_review_server.worker")
-
-
-class ReviewJob(BaseModel):
-    """A queued webhook delivery to review: the event name, parsed payload, repo, and installation id."""
-
-    event_name: str
-    event: GithubEvent
-    repo: str
-    installation_id: int
+logger = logging.getLogger(__name__)
 
 
 class ReviewWorker:
@@ -80,11 +70,12 @@ class ReviewWorker:
     async def run_job(self, job: ReviewJob) -> None:
         """Mint an installation token for the job and run one review round under the App identity."""
 
-        token = await mint_installation_token(
-            SERVER_SETTINGS.github_app_id, SERVER_SETTINGS.github_app_private_key, job.installation_id
-        )
+        token = await mint_installation_token(job.installation_id)
 
         # One consumer means reviews are serialized, so mutating the shared engine token here is race-free.
         SETTINGS.github_token = token
 
         await review_event(job.event_name, job.event, job.repo)
+
+
+review_worker: Final[ReviewWorker] = ReviewWorker()
