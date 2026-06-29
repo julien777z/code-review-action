@@ -1,8 +1,3 @@
----
-name: github
-description: Do not manually specify options like python-version in workflows; use shared action defaults unless an edge case requires otherwise.
----
-
 # GitHub Rules
 
 ## Configuration Options

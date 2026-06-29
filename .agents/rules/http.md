@@ -1,8 +1,3 @@
----
-name: http
-description: Reuse shared HTTP abstractions and avoid ad-hoc client patterns in application code.
----
-
 # HTTP Rules
 
 ## HTTP Clients
