@@ -6,6 +6,7 @@ from typing import Final
 from pydantic import ValidationError
 
 from code_review import review
+from code_review.config import CONFIG
 from code_review.models.shared.findings import Finding, RawFinding
 from code_review.models.shared.severity import DiffSide, Severity
 
@@ -123,6 +124,11 @@ async def iter_findings(chunks: AsyncIterator[str]) -> AsyncIterator[Finding]:
         for finding in blob:
             yield finding
 
+        return
+
+    stripped = [line.strip() for line in full.splitlines()]
+    has_finding_shaped_line = any(line.startswith(("{", "[")) for line in stripped)
+    if CONFIG["no_findings_marker"] in stripped and not has_finding_shaped_line:
         return
 
     if full.strip():

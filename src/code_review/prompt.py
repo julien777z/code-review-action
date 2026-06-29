@@ -4,7 +4,7 @@ from functools import cache
 from pathlib import Path
 from typing import Final
 
-from code_review.config import SETTINGS
+from code_review.config import CONFIG, SETTINGS
 from code_review.models.shared.pull_request import ReviewInputs
 
 SKILL_RELATIVE: Final[str] = ".agents/skills/code-review/SKILL.md"
@@ -63,7 +63,7 @@ def output_contract() -> str:
         "findings on the diff's changed lines. Severities are lowercase. Report no finding below "
         f"`{SETTINGS.min_severity.value}` severity. Post every finding at or above that bar, but at "
         f"most the {SETTINGS.low_findings_cap} most important `low` findings. Emit findings "
-        "most-important-first, and emit no lines at all when there are none.\n"
+        f"most-important-first. When there are no findings to report, output exactly `{CONFIG['no_findings_marker']}` on its own line and nothing else.\n"
         "Report every issue that still applies to the diff at the location where it occurs — include "
         "a finding even when a similar review comment already exists, and never skip a still-valid "
         "finding. The runner reconciles your full set against the existing threads, so omitting a "
