@@ -123,4 +123,6 @@ runs:
         REVIEW_DRAFTS: ${{ inputs.review-drafts }}
         AUTHOR_ASSOCIATIONS: ${{ inputs.author-associations }}
         PR_NUMBER: ${{ inputs.pr-number }}
-      run: PYTHONPATH="$GITHUB_ACTION_PATH/src" python -m code_review
+      # Keep Python as the step's foreground process so Actions cancellation signals reach the
+      # review cleanup handler, which concludes any in-progress Approval Verdict check.
+      run: PYTHONPATH="$GITHUB_ACTION_PATH/src" exec python -m code_review
