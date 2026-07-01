@@ -21,9 +21,17 @@ dev = [
     "pyyaml>=6",
     "rich>=14",
 ]
+server = [
+    "fastapi>=0.115,<1",
+    "uvicorn[standard]>=0.32,<1",
+    "pyjwt[crypto]>=2.9,<3",
+]
 
 [tool.poetry]
-packages = [{ include = "code_review", from = "src" }]
+packages = [
+    { include = "code_review", from = "src" },
+    { include = "code_review_server", from = "src" },
+]
 
 [build-system]
 requires = ["poetry-core>=2.0"]
