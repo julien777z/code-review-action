@@ -26,6 +26,11 @@ class TestVerifySignature:
 
         assert verify_signature(b"tampered", signature, webhook_secret) is False
 
+    def test_rejects_wrong_length_signature(self, webhook_secret: str) -> None:
+        """Test that a same-prefix signature with the wrong digest length is rejected."""
+
+        assert verify_signature(b"body", "sha256=abc", webhook_secret) is False
+
     @pytest.mark.parametrize(
         "header",
         [None, "", "sha1=abc", "deadbeef"],

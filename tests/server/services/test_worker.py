@@ -2,6 +2,8 @@ import asyncio
 from collections.abc import Callable
 from unittest.mock import AsyncMock
 
+import pytest
+
 from code_review.config import SETTINGS
 from code_review.models.shared.github_event import GithubEvent
 from code_review_server.models.jobs import ReviewJob
@@ -32,6 +34,27 @@ class TestRunJob:
         assert SETTINGS.github_token == "ghs_job"
 
         review.assert_awaited_once_with("pull_request", job.event, "octo/repo", install_signal_handlers=False)
+
+    def test_raises_when_review_returns_failure(self, monkeypatch) -> None:
+        """Test that non-zero review results are logged by the consumer as failed jobs."""
+
+        monkeypatch.setattr(
+            "code_review_server.services.worker.mint_installation_token", AsyncMock(return_value="ghs_job")
+        )
+        monkeypatch.setattr("code_review_server.services.worker.review_event", AsyncMock(return_value=1))
+
+        job = ReviewJob(
+            event_name="pull_request",
+            event=GithubEvent(action="opened"),
+            repo="octo/repo",
+            installation_id=42,
+        )
+
+        async def scenario() -> None:
+            await ReviewWorker().run_job(job)
+
+        with pytest.raises(RuntimeError, match="Review job returned exit code 1"):
+            asyncio.run(scenario())
 
 
 class TestStop:

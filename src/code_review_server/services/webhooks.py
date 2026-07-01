@@ -26,6 +26,8 @@ def verify_signature(body: bytes, signature_header: str | None, secret: str) -> 
         return False
 
     expected = f"{SIGNATURE_PREFIX}{hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()}"
+    if len(signature_header) != len(expected):
+        return False
 
     return hmac.compare_digest(expected, signature_header)
 

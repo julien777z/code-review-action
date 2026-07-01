@@ -75,7 +75,9 @@ class ReviewWorker:
         # One consumer means reviews are serialized, so mutating the shared engine token here is race-free.
         SETTINGS.github_token = token
 
-        await review_event(job.event_name, job.event, job.repo, install_signal_handlers=False)
+        result = await review_event(job.event_name, job.event, job.repo, install_signal_handlers=False)
+        if result != 0:
+            raise RuntimeError(f"Review job returned exit code {result}")
 
 
 review_worker: Final[ReviewWorker] = ReviewWorker()
