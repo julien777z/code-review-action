@@ -11,17 +11,18 @@ Monitor a pull request through the delayed-review window and act on valid feedba
 
 1. Resolve the pull request from an explicit number or URL, or from the current branch and repository. If the current branch has no PR, inspect open PRs and local branch relationships; ask only if multiple candidates remain plausible.
 2. Record a baseline containing the head SHA, review submissions, conversation comments, inline review threads, resolution state, and latest finding timestamp. Prefer thread-aware GitHub reads so duplicate, outdated, and resolved findings are distinguishable.
-3. Start a 10-minute quiet timer from the most recent finding, or from the baseline check when no findings exist.
-4. Poll every 30–60 seconds. If every available code-review bot has completed with an approval or no-findings verdict, stop the quiet timer and finish early. Otherwise, do not stop because checks finish, the PR becomes green, one reviewer approves, or the branch is temporarily unchanged.
-5. On every new or updated finding:
+3. Check and investigate existing review threads, comments, and issue/PR conversation items as part of the baseline, not only new findings. Classify each unresolved or recently-updated item as legitimate, duplicate, already fixed, stale/outdated, ambiguous, or incorrect before deciding whether the watch can be quiet.
+4. Start a 10-minute quiet timer from the most recent finding, from the latest baseline item that still needs investigation, or from the baseline check when no findings exist.
+5. Poll every 30–60 seconds. If every available code-review bot has completed with an approval or no-findings verdict, stop the quiet timer and finish early. Otherwise, do not stop because checks finish, the PR becomes green, one reviewer approves, or the branch is temporarily unchanged.
+6. On every existing, new, or updated finding:
    - Reset the quiet timer.
    - Read the cited code and relevant surrounding behavior.
    - Classify it as legitimate, duplicate, already fixed, stale/outdated, ambiguous, or incorrect.
    - Fix legitimate issues with the smallest behaviorally complete change.
    - Run focused checks proportional to the change.
    - Commit and push verified fixes to the PR branch promptly. Re-read remote state before pushing if the branch changed concurrently.
-6. After every push, restart the 10-minute quiet timer from the push time and continue polling because new automated reviews may target the new commit.
-7. Stop when all available code-review bots approve, or when 10 continuous minutes have elapsed without any new or updated finding or push. For the quiet-window path, perform one final poll at the boundary before stopping.
+7. After every push, restart the 10-minute quiet timer from the push time and continue polling because new automated reviews may target the new commit.
+8. Stop when all available code-review bots approve, or when 10 continuous minutes have elapsed without any existing, new, or updated finding or push. For the quiet-window path, perform one final poll at the boundary before stopping.
 
 ## Guardrails
 
