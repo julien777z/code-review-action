@@ -1,7 +1,10 @@
 import asyncio
+import subprocess
 from collections.abc import Awaitable, Callable
 
-from code_review.github import resolve_threads
+import pytest
+
+from code_review.github import already_reviewed, head_check_concluded, resolve_threads
 
 
 def run_gh_recorder(tokens: list[str | None]) -> Callable[..., Awaitable[str]]:
@@ -13,6 +16,65 @@ def run_gh_recorder(tokens: list[str | None]) -> Callable[..., Awaitable[str]]:
         return ""
 
     return _run_gh
+
+
+def run_gh_failing(exc: subprocess.CalledProcessError) -> Callable[..., Awaitable[str]]:
+    """Build a run_gh double that raises the given process error."""
+
+    async def _run_gh(args: list[str], stdin: str | None = None, token: str | None = None) -> str:
+        raise exc
+
+    return _run_gh
+
+
+class TestAlreadyReviewed:
+    """Test duplicate-review detection behavior."""
+
+    def test_rate_limit_returns_already_reviewed(self, monkeypatch, mock_config) -> None:
+        """Test that GitHub rate limits make the duplicate guard skip posting."""
+
+        exc = subprocess.CalledProcessError(
+            1,
+            ["gh", "api"],
+            stderr="gh: API rate limit exceeded for installation. (HTTP 403)",
+        )
+        monkeypatch.setattr("code_review.github.run_gh", run_gh_failing(exc))
+
+        assert asyncio.run(already_reviewed("octo/repo", 7, "abc123", "<!-- marker -->")) is True
+
+    def test_non_rate_limit_error_raises(self, monkeypatch, mock_config) -> None:
+        """Test that unrelated GitHub API failures still fail loudly."""
+
+        exc = subprocess.CalledProcessError(1, ["gh", "api"], stderr="gh: Not Found (HTTP 404)")
+        monkeypatch.setattr("code_review.github.run_gh", run_gh_failing(exc))
+
+        with pytest.raises(subprocess.CalledProcessError):
+            asyncio.run(already_reviewed("octo/repo", 7, "abc123", "<!-- marker -->"))
+
+
+class TestHeadCheckConcluded:
+    """Test completed check-run duplicate guard behavior."""
+
+    def test_rate_limit_returns_concluded(self, monkeypatch, mock_config) -> None:
+        """Test that GitHub rate limits make the duplicate guard skip reviewing."""
+
+        exc = subprocess.CalledProcessError(
+            1,
+            ["gh", "api"],
+            output="gh: API rate limit exceeded for installation. (HTTP 403)",
+        )
+        monkeypatch.setattr("code_review.github.run_gh", run_gh_failing(exc))
+
+        assert asyncio.run(head_check_concluded("octo/repo", "abc123")) is True
+
+    def test_non_rate_limit_error_raises(self, monkeypatch, mock_config) -> None:
+        """Test that unrelated GitHub API failures still fail loudly."""
+
+        exc = subprocess.CalledProcessError(1, ["gh", "api"], stderr="gh: Bad credentials (HTTP 401)")
+        monkeypatch.setattr("code_review.github.run_gh", run_gh_failing(exc))
+
+        with pytest.raises(subprocess.CalledProcessError):
+            asyncio.run(head_check_concluded("octo/repo", "abc123"))
 
 
 class TestResolveThreads:
