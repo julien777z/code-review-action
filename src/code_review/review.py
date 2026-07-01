@@ -332,7 +332,13 @@ async def post_review_with_fallback(repo: str, pr_number: int, payload: ReviewPa
         logger.warning("Could not post the %s review; the check run still records the verdict.", event)
 
 
-async def run_review_round(pr: PullRequestContext, marker: str, get_findings: GetFindings) -> int:
+async def run_review_round(
+    pr: PullRequestContext,
+    marker: str,
+    get_findings: GetFindings,
+    *,
+    install_signal_handlers: bool = True,
+) -> int:
     """Stream a backend's findings, posting each anchorable one as it arrives, then record the verdict."""
 
     # The verdict of record is the check run (approval on) or the review marker (approval off).
@@ -366,8 +372,9 @@ async def run_review_round(pr: PullRequestContext, marker: str, get_findings: Ge
         if review_task is not None:
             review_task.cancel()
 
-    for cancel_signal in (signal.SIGTERM, signal.SIGINT):
-        loop.add_signal_handler(cancel_signal, _cancel_on_signal)
+    if install_signal_handlers:
+        for cancel_signal in (signal.SIGTERM, signal.SIGINT):
+            loop.add_signal_handler(cancel_signal, _cancel_on_signal)
 
     try:
         # With streaming the comments post mid-run, so the head is gated once here, before the first
@@ -477,8 +484,9 @@ async def run_review_round(pr: PullRequestContext, marker: str, get_findings: Ge
 
         return 1
     finally:
-        for cancel_signal in (signal.SIGTERM, signal.SIGINT):
-            loop.remove_signal_handler(cancel_signal)
+        if install_signal_handlers:
+            for cancel_signal in (signal.SIGTERM, signal.SIGINT):
+                loop.remove_signal_handler(cancel_signal)
 
         if not concluded:
             await complete_check_run(

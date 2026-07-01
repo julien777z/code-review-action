@@ -151,19 +151,21 @@ def select_backend(first_review: bool) -> Backend | None:
             return None
 
 
-async def run(pr: PullRequestContext, backend: Backend) -> int:
+async def run(pr: PullRequestContext, backend: Backend, *, install_signal_handlers: bool = True) -> int:
     """Dispatch the resolved backend for the PR."""
 
     match backend:
         case Backend.CURSOR:
-            return await run_cursor_review(pr)
+            return await run_cursor_review(pr, install_signal_handlers=install_signal_handlers)
         case Backend.CLAUDE_API:
-            return await run_claude_api_review(pr)
+            return await run_claude_api_review(pr, install_signal_handlers=install_signal_handlers)
         case Backend.CLAUDE_ROUTINE:
             return await fire_claude_routine(pr)
 
 
-async def review_event(event_name: str, event: GithubEvent, repo: str) -> int:
+async def review_event(
+    event_name: str, event: GithubEvent, repo: str, *, install_signal_handlers: bool = True
+) -> int:
     """Resolve one event for the given repo, pick a backend, and run a review round (shared by the action and backend)."""
 
     # The caller configures the GitHub token first: the action from env, the backend from a minted
@@ -197,7 +199,7 @@ async def review_event(event_name: str, event: GithubEvent, repo: str) -> int:
         return 0
 
     if backend is Backend.CLAUDE_ROUTINE:
-        return await run(pr, backend)
+        return await run(pr, backend, install_signal_handlers=install_signal_handlers)
 
     # React with eyes on the trigger (the comment for a manual trigger, otherwise the PR) while the
     # synchronous backends review, then remove it once the round finishes.
@@ -205,7 +207,7 @@ async def review_event(event_name: str, event: GithubEvent, repo: str) -> int:
     reaction_id = await add_reaction(subject)
 
     try:
-        return await run(pr, backend)
+        return await run(pr, backend, install_signal_handlers=install_signal_handlers)
     finally:
         if reaction_id is not None:
             await remove_reaction(subject, reaction_id)

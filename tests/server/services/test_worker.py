@@ -31,7 +31,7 @@ class TestRunJob:
 
         assert SETTINGS.github_token == "ghs_job"
 
-        review.assert_awaited_once_with("pull_request", job.event, "octo/repo")
+        review.assert_awaited_once_with("pull_request", job.event, "octo/repo", install_signal_handlers=False)
 
 
 class TestStop:

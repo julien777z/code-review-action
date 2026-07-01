@@ -62,7 +62,7 @@ async def run_agent(prompt: str) -> AsyncIterator[str]:
         await agent.close()
 
 
-async def run_cursor_review(pr: PullRequestContext) -> int:
+async def run_cursor_review(pr: PullRequestContext, *, install_signal_handlers: bool = True) -> int:
     """Review the PR with the Cursor backend, streaming each finding as the agent emits it."""
 
     async def _findings(inputs: ReviewInputs) -> AsyncIterator[Finding]:
@@ -72,4 +72,6 @@ async def run_cursor_review(pr: PullRequestContext) -> int:
         except CursorAgentError as exc:
             raise review.ReviewBackendError(f"Cursor agent run failed: {exc}", retryable=exc.is_retryable) from exc
 
-    return await review.run_review_round(pr, CONFIG["review_marker"], _findings)
+    return await review.run_review_round(
+        pr, CONFIG["review_marker"], _findings, install_signal_handlers=install_signal_handlers
+    )
