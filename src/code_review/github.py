@@ -16,8 +16,10 @@ logger = logging.getLogger("code_review.github")
 HUNK_HEADER: Final[re.Pattern[str]] = re.compile(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 GITHUB_RATE_LIMIT_PHRASES: Final[tuple[str, ...]] = (
     "api rate limit exceeded",
+    "http 429",
     "secondary rate limit",
     "rate limit exceeded",
+    "too many requests",
 )
 
 

@@ -33,14 +33,14 @@ class TestAlreadyReviewed:
     def test_rate_limit_returns_already_reviewed(self, monkeypatch, mock_config) -> None:
         """Test that GitHub rate limits make the duplicate guard skip posting."""
 
-        exc = subprocess.CalledProcessError(
-            1,
-            ["gh", "api"],
-            stderr="gh: API rate limit exceeded for installation. (HTTP 403)",
-        )
-        monkeypatch.setattr("code_review.github.run_gh", run_gh_failing(exc))
+        for stderr in (
+            "gh: API rate limit exceeded for installation. (HTTP 403)",
+            "gh: Too Many Requests (HTTP 429)",
+        ):
+            exc = subprocess.CalledProcessError(1, ["gh", "api"], stderr=stderr)
+            monkeypatch.setattr("code_review.github.run_gh", run_gh_failing(exc))
 
-        assert asyncio.run(already_reviewed("octo/repo", 7, "abc123", "<!-- marker -->")) is True
+            assert asyncio.run(already_reviewed("octo/repo", 7, "abc123", "<!-- marker -->")) is True
 
     def test_non_rate_limit_error_raises(self, monkeypatch, mock_config) -> None:
         """Test that unrelated GitHub API failures still fail loudly."""

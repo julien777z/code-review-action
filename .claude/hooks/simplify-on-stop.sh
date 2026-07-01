@@ -38,12 +38,12 @@ state="$head_sha:$dirty_sha"
 stamp_file="$git_dir/simplify-on-stop.stamp"
 [ -f "$stamp_file" ] && [ "$(cat "$stamp_file")" = "$state" ] && exit 0
 
-# Skip a clean tree with no diff over the remote default (origin/HEAD, else
-# origin/main or origin/master); a missing ref or git error falls through.
+# Skip a clean tree with no diff over the default branch. Prefer origin/HEAD,
+# then common remote/local default branch names; a missing ref or git error falls through.
 if [ -z "$porcelain" ]; then
   default_ref=$(git symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null || echo "")
   if [ -z "$default_ref" ]; then
-    for cand in refs/remotes/origin/main refs/remotes/origin/master; do
+    for cand in refs/remotes/origin/main refs/remotes/origin/master refs/heads/main refs/heads/master; do
       git rev-parse --verify --quiet "$cand" >/dev/null 2>&1 && { default_ref="$cand"; break; }
     done
   fi
