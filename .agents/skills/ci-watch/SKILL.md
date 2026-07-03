@@ -1,6 +1,6 @@
 ---
 name: ci-watch
-description: Find and continuously watch a GitHub pull request for new review findings, investigate each finding, fix and push legitimate issues, and stop only after 10 uninterrupted minutes with no new findings. Use when asked to watch, monitor, poll, babysit, or keep checking a PR for review comments or automated review feedback.
+description: Find and watch a GitHub pull request for review findings, investigate each finding, fix and push legitimate issues, and stop once checks are green and review threads are resolved. Use when asked to watch, monitor, poll, babysit, or keep checking a PR for review comments or automated review feedback.
 ---
 
 # CI Watch
@@ -13,7 +13,7 @@ Monitor a pull request through the delayed-review window and act on valid feedba
 2. Record a baseline containing the head SHA, review submissions, conversation comments, inline review threads, resolution state, and latest finding timestamp. Prefer thread-aware GitHub reads so duplicate, outdated, and resolved findings are distinguishable.
 3. Check and investigate existing review threads, comments, and issue/PR conversation items as part of the baseline, not only new findings. Classify each unresolved or recently-updated item as legitimate, duplicate, already fixed, stale/outdated, ambiguous, or incorrect before deciding whether the watch can be quiet.
 4. Start a 10-minute quiet timer from the most recent finding, from the latest baseline item that still needs investigation, or from the baseline check when no findings exist.
-5. Poll every 30–60 seconds. If every available code-review bot has completed with an approval or no-findings verdict, stop the quiet timer and finish early. Otherwise, do not stop because checks finish, the PR becomes green, one reviewer approves, or the branch is temporarily unchanged.
+5. Poll every 30–60 seconds while checks are pending, failing, or review threads remain unresolved. If all GitHub checks are green and all review findings are resolved or outdated, stop immediately; do not do extra quiet-window polling or a final boundary poll.
 6. On every existing, new, or updated finding:
    - Reset the quiet timer.
    - Read the cited code and relevant surrounding behavior.
@@ -22,7 +22,7 @@ Monitor a pull request through the delayed-review window and act on valid feedba
    - Run focused checks proportional to the change.
    - Commit and push verified fixes to the PR branch promptly. Re-read remote state before pushing if the branch changed concurrently.
 7. After every push, restart the 10-minute quiet timer from the push time and continue polling because new automated reviews may target the new commit.
-8. Stop when all available code-review bots approve, or when 10 continuous minutes have elapsed without any existing, new, or updated finding or push. For the quiet-window path, perform one final poll at the boundary before stopping.
+8. Stop when all available code-review bots approve or report no findings, or when all GitHub checks are green and all review findings are resolved or outdated. Use the 10-minute quiet window only while checks/reviews are still not fully settled; do not apply it after the PR is green and resolved.
 
 ## Guardrails
 
@@ -35,4 +35,4 @@ Monitor a pull request through the delayed-review window and act on valid feedba
 
 ## Completion Report
 
-Summarize findings by disposition, commits pushed, checks run, and whether completion came from unanimous bot approval or the final 10-minute no-findings window.
+Summarize findings by disposition, commits pushed, checks run, and whether completion came from green/resolved PR state, unanimous bot approval, or the final 10-minute no-findings window.
