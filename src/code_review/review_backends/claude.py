@@ -20,7 +20,7 @@ logger = logging.getLogger("code_review.claude")
 CLAUDE_MAX_TOKENS: Final[int] = 16000
 
 
-async def run_claude_api_review(pr: PullRequestContext) -> int:
+async def run_claude_api_review(pr: PullRequestContext, *, install_signal_handlers: bool = True) -> int:
     """Review the PR with the Claude Messages API, streaming each finding as the model emits it."""
 
     async def _findings(inputs: ReviewInputs) -> AsyncIterator[Finding]:
@@ -54,7 +54,9 @@ async def run_claude_api_review(pr: PullRequestContext) -> int:
 
             raise review.ReviewBackendError(f"Claude review request failed: {exc}", retryable=retryable) from exc
 
-    return await review.run_review_round(pr, CONFIG["review_marker"], _findings)
+    return await review.run_review_round(
+        pr, CONFIG["review_marker"], _findings, install_signal_handlers=install_signal_handlers
+    )
 
 
 def build_routine_text(pr: PullRequestContext) -> str:

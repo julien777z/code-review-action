@@ -47,10 +47,9 @@ def association_allowed(association: str | None) -> bool:
     return bool(association) and association.upper() in SETTINGS.author_associations
 
 
-def is_eligible(event_name: str, event: GithubEvent) -> bool:
+def is_eligible(event_name: str, event: GithubEvent, repo: str) -> bool:
     """Return whether this event should trigger a review (fork, bot, association, and phrase gates)."""
 
-    repo = os.environ.get("GITHUB_REPOSITORY", "")
     sender_type = event.sender.type if event.sender else None
     if sender_type == "Bot":
         return False
@@ -152,23 +151,26 @@ def select_backend(first_review: bool) -> Backend | None:
             return None
 
 
-async def run(pr: PullRequestContext, backend: Backend) -> int:
+async def run(pr: PullRequestContext, backend: Backend, *, install_signal_handlers: bool = True) -> int:
     """Dispatch the resolved backend for the PR."""
 
     match backend:
         case Backend.CURSOR:
-            return await run_cursor_review(pr)
+            return await run_cursor_review(pr, install_signal_handlers=install_signal_handlers)
         case Backend.CLAUDE_API:
-            return await run_claude_api_review(pr)
+            return await run_claude_api_review(pr, install_signal_handlers=install_signal_handlers)
         case Backend.CLAUDE_ROUTINE:
             return await fire_claude_routine(pr)
 
 
-async def main() -> int:
-    """Resolve the event, pick a backend, and run one review round."""
+async def review_event(
+    event_name: str, event: GithubEvent, repo: str, *, install_signal_handlers: bool = True
+) -> int:
+    """Resolve one event for the given repo, pick a backend, and run a review round (shared by the action and backend)."""
 
-    event_name, event = load_event()
-    if not is_eligible(event_name, event):
+    # The caller configures the GitHub token first: the action from env, the backend from a minted
+    # installation token. Everything below reads it through SETTINGS via the shared github helpers.
+    if not is_eligible(event_name, event, repo):
         logger.info("Event %s (%s) is not eligible for review; skipping.", event_name, event.action)
 
         return 0
@@ -185,7 +187,6 @@ async def main() -> int:
 
         return 0
 
-    repo = os.environ.get("GITHUB_REPOSITORY", "")
     pr = await fetch_pull_request(repo, pr_number)
     if pr.state != "OPEN":
         logger.info("PR #%s is %s, not open; skipping.", pr_number, pr.state)
@@ -198,7 +199,7 @@ async def main() -> int:
         return 0
 
     if backend is Backend.CLAUDE_ROUTINE:
-        return await run(pr, backend)
+        return await run(pr, backend, install_signal_handlers=install_signal_handlers)
 
     # React with eyes on the trigger (the comment for a manual trigger, otherwise the PR) while the
     # synchronous backends review, then remove it once the round finishes.
@@ -206,7 +207,16 @@ async def main() -> int:
     reaction_id = await add_reaction(subject)
 
     try:
-        return await run(pr, backend)
+        return await run(pr, backend, install_signal_handlers=install_signal_handlers)
     finally:
         if reaction_id is not None:
             await remove_reaction(subject, reaction_id)
+
+
+async def main() -> int:
+    """Resolve the triggering event from the runner environment and review it."""
+
+    event_name, event = load_event()
+    repo = os.environ.get("GITHUB_REPOSITORY", "")
+
+    return await review_event(event_name, event, repo)

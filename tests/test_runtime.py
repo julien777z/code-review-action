@@ -97,63 +97,63 @@ class TestIsEligible:
 
         mock_config()
 
-        assert is_eligible("pull_request", pull_request_event_factory()) is True
+        assert is_eligible("pull_request", pull_request_event_factory(), "octo/repo") is True
 
     def test_fork_rejected(self, mock_config, pull_request_event_factory) -> None:
         """Test that a PR from a fork is rejected."""
 
         mock_config()
 
-        assert is_eligible("pull_request", pull_request_event_factory(head_full_name="forker/repo")) is False
+        assert is_eligible("pull_request", pull_request_event_factory(head_full_name="forker/repo"), "octo/repo") is False
 
     def test_bot_rejected(self, mock_config, pull_request_event_factory) -> None:
         """Test that a bot-triggered event is rejected."""
 
         mock_config()
 
-        assert is_eligible("pull_request", pull_request_event_factory(sender_type="Bot")) is False
+        assert is_eligible("pull_request", pull_request_event_factory(sender_type="Bot"), "octo/repo") is False
 
     def test_unhandled_action_rejected(self, mock_config, pull_request_event_factory) -> None:
         """Test that a non-review pull_request action is rejected."""
 
         mock_config()
 
-        assert is_eligible("pull_request", pull_request_event_factory(action="closed")) is False
+        assert is_eligible("pull_request", pull_request_event_factory(action="closed"), "octo/repo") is False
 
     def test_association_allowlist(self, mock_config, pull_request_event_factory) -> None:
         """Test that an outsider is rejected when an allowlist is set."""
 
         mock_config(author_associations=("OWNER",))
 
-        assert is_eligible("pull_request", pull_request_event_factory(author_association="NONE")) is False
+        assert is_eligible("pull_request", pull_request_event_factory(author_association="NONE"), "octo/repo") is False
 
     def test_comment_trigger(self, mock_config, issue_comment_event_factory) -> None:
         """Test that a PR comment starting with the trigger phrase is eligible."""
 
         mock_config()
 
-        assert is_eligible("issue_comment", issue_comment_event_factory(body="agent review please")) is True
+        assert is_eligible("issue_comment", issue_comment_event_factory(body="agent review please"), "octo/repo") is True
 
     def test_comment_wrong_phrase(self, mock_config, issue_comment_event_factory) -> None:
         """Test that a comment without the trigger phrase is rejected."""
 
         mock_config()
 
-        assert is_eligible("issue_comment", issue_comment_event_factory(body="lgtm")) is False
+        assert is_eligible("issue_comment", issue_comment_event_factory(body="lgtm"), "octo/repo") is False
 
     def test_comment_non_pull_request(self, mock_config, issue_comment_event_factory) -> None:
         """Test that a comment on a plain issue is rejected."""
 
         mock_config()
 
-        assert is_eligible("issue_comment", issue_comment_event_factory(is_pull_request=False)) is False
+        assert is_eligible("issue_comment", issue_comment_event_factory(is_pull_request=False), "octo/repo") is False
 
     def test_dispatch_allowed(self, mock_config) -> None:
         """Test that a manual dispatch is always eligible."""
 
         mock_config()
 
-        assert is_eligible("workflow_dispatch", GithubEvent()) is True
+        assert is_eligible("workflow_dispatch", GithubEvent(), "octo/repo") is True
 
 
 class TestSelectBackend:

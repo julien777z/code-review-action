@@ -1,0 +1,10 @@
+.git
+.github
+.claude
+.codex
+.cursor
+.pytest_cache
+.venv
+tests
+**/__pycache__
+**/*.pyc
