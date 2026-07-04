@@ -90,7 +90,7 @@ class TestResolvePrNumber:
 
 
 class TestIsEligible:
-    """Test that fork, bot, association, and trigger gates decide eligibility."""
+    """Test that fork, bot-comment, association, and trigger gates decide eligibility."""
 
     def test_pull_request_member(self, mock_config, pull_request_event_factory) -> None:
         """Test that a member's same-repo PR is eligible."""
@@ -106,12 +106,12 @@ class TestIsEligible:
 
         assert is_eligible("pull_request", pull_request_event_factory(head_full_name="forker/repo")) is False
 
-    def test_bot_rejected(self, mock_config, pull_request_event_factory) -> None:
-        """Test that a bot-triggered event is rejected."""
+    def test_bot_sender_pull_request_allowed(self, mock_config, pull_request_event_factory) -> None:
+        """Test that bot-pushed updates to eligible PRs are allowed."""
 
         mock_config()
 
-        assert is_eligible("pull_request", pull_request_event_factory(sender_type="Bot")) is False
+        assert is_eligible("pull_request", pull_request_event_factory(action="synchronize", sender_type="Bot")) is True
 
     def test_unhandled_action_rejected(self, mock_config, pull_request_event_factory) -> None:
         """Test that a non-review pull_request action is rejected."""
@@ -140,6 +140,13 @@ class TestIsEligible:
         mock_config()
 
         assert is_eligible("issue_comment", issue_comment_event_factory(body="lgtm")) is False
+
+    def test_comment_bot_rejected(self, mock_config, issue_comment_event_factory) -> None:
+        """Test that bot-authored trigger comments are rejected."""
+
+        mock_config()
+
+        assert is_eligible("issue_comment", issue_comment_event_factory(sender_type="Bot")) is False
 
     def test_comment_non_pull_request(self, mock_config, issue_comment_event_factory) -> None:
         """Test that a comment on a plain issue is rejected."""

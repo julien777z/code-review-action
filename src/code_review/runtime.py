@@ -48,12 +48,10 @@ def association_allowed(association: str | None) -> bool:
 
 
 def is_eligible(event_name: str, event: GithubEvent) -> bool:
-    """Return whether this event should trigger a review (fork, bot, association, and phrase gates)."""
+    """Return whether this event should trigger a review (fork, bot-comment, association, and phrase gates)."""
 
     repo = os.environ.get("GITHUB_REPOSITORY", "")
     sender_type = event.sender.type if event.sender else None
-    if sender_type == "Bot":
-        return False
 
     match event_name:
         case "pull_request":
@@ -76,6 +74,7 @@ def is_eligible(event_name: str, event: GithubEvent) -> bool:
                 issue
                 and issue.pull_request is not None
                 and comment
+                and sender_type != "Bot"
                 and body.startswith(SETTINGS.trigger_phrase.lower())
                 and association_allowed(comment.author_association)
             )
