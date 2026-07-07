@@ -81,6 +81,7 @@ class Settings(BaseSettings):
     first_review_model: ReviewModel | None = None
     claude_model: str = CONFIG["default_claude_model"]
     cursor_model: str = CONFIG["default_cursor_model"]
+    claude_environment_id: str = ""
     additional_context: str = ""
     approval_include: Annotated[frozenset[Severity], NoDecode] = frozenset({Severity.CRITICAL})
     approval_disable: bool = False

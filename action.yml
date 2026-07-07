@@ -34,6 +34,10 @@ inputs:
   cursor-model:
     description: Cursor model id for the Cursor backend.
     default: composer-2.5
+  claude-environment-id:
+    description: Managed Agents cloud environment id the Claude backend reuses to mount the repository when enforcing project rules. Empty creates and deletes a fresh environment for each run.
+    required: false
+    default: ""
   additional-context:
     description: Extra context injected into the review prompt.
     default: ""
@@ -104,6 +108,7 @@ runs:
         FIRST_REVIEW_MODEL: ${{ inputs.first-review-model }}
         CLAUDE_MODEL: ${{ inputs.claude-model }}
         CURSOR_MODEL: ${{ inputs.cursor-model }}
+        CLAUDE_ENVIRONMENT_ID: ${{ inputs.claude-environment-id }}
         ADDITIONAL_CONTEXT: ${{ inputs.additional-context }}
         APPROVAL_INCLUDE: ${{ inputs.approval-include }}
         APPROVAL_DISABLE: ${{ inputs.approval-disable }}

@@ -53,7 +53,7 @@ BACKENDS: Final[dict[Backend, BackendHandlers]] = {
         generate_summary=cursor.generate_text,
     ),
     Backend.CLAUDE: BackendHandlers(
-        run_review=claude.run_claude_api_review,
+        run_review=claude.run_claude_review,
         generate_summary=claude.generate_text,
     ),
 }

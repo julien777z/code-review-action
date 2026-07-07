@@ -97,16 +97,27 @@ first-review events, never on later pushes.
 ## Enforcing project rules
 
 With `enforce-project-rules` on (the default), the review applies your repository's own coding rules
-and reports a finding on any changed line that violates them.
+and reports a finding on any changed line that violates them. Both backends load those rules by
+cloning the repository during the review, so they pick up whatever rule files the agent understands
+(for example `.cursor/rules` or `CLAUDE.md` / `.claude/rules`) automatically.
 
-The Cursor backend loads those rules by cloning the repository during the review, so it picks up your
-`.cursor/rules` automatically. This requires **Cursor's GitHub integration to have access to the
-repository** — connect Cursor to GitHub and grant it access to the repo. If Cursor cannot access the
-repository, the review fails with a message telling you to grant access (or to set
+**Cursor backend.** Cursor clones the repository through its own GitHub integration, which must have
+access to the repository — connect Cursor to GitHub and grant it access to the repo. If Cursor cannot
+access the repository, the review fails with a message telling you to grant access (or to set
 `enforce-project-rules: false`).
+
+**Claude backend.** Claude reviews through a [Managed
+Agents](https://platform.claude.com/docs/en/managed-agents) session that mounts the repository at the
+PR's head commit, so Claude Code loads `CLAUDE.md` / `.claude/rules` natively. The action creates a
+cloud environment for each run and deletes it afterward; to reuse a pre-provisioned environment
+instead, set `claude-environment-id`. The repository is cloned with the run's `github-token`, so no
+extra GitHub connection is required. (When `enforce-project-rules` is `false`, the Claude backend
+reviews from the diff alone via the Messages API and never mounts the repository.)
 
 - `enforce-project-rules` — set to `false` to review without cloning the repo, skipping rule
   enforcement (default `true`).
+- `claude-environment-id` — Managed Agents cloud environment id the Claude backend reuses instead of
+  creating a fresh one per run. Empty creates and deletes one each run (default empty).
 
 ## Suggesting simplifications
 
@@ -206,6 +217,7 @@ with:
 | `first-review-model` | — | Backend for the first review; empty uses `review-model` |
 | `claude-model` | `claude-opus-4-8` | Anthropic model id |
 | `cursor-model` | `composer-2.5` | Cursor model id |
+| `claude-environment-id` | — | Managed Agents environment the Claude backend reuses; empty creates one per run |
 | `additional-context` | — | Extra context for the review |
 | `approval-include` | `critical` | Severities that request changes when open |
 | `approval-disable` | `false` | Comments only; skip the verdict |

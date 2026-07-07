@@ -232,7 +232,7 @@ class TestBackends:
         ("backend", "run_review", "generate_summary"),
         [
             (Backend.CURSOR, cursor.run_cursor_review, cursor.generate_text),
-            (Backend.CLAUDE, claude.run_claude_api_review, claude.generate_text),
+            (Backend.CLAUDE, claude.run_claude_review, claude.generate_text),
         ],
         ids=["cursor", "claude"],
     )

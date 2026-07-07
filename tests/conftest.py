@@ -29,6 +29,7 @@ def mock_config(monkeypatch) -> Callable[..., None]:
             "first_review_model": None,
             "claude_model": "claude-opus-4-8",
             "cursor_model": "composer-2.5",
+            "claude_environment_id": "",
             "additional_context": "",
             "approval_include": frozenset({Severity.CRITICAL}),
             "approval_disable": False,
@@ -168,6 +169,81 @@ def anthropic_client_factory() -> Callable[..., MagicMock]:
         client.messages.create = AsyncMock(return_value=message)
         client.__aenter__ = AsyncMock(return_value=client)
         client.__aexit__ = AsyncMock(return_value=False)
+
+        return client
+
+    return _build
+
+
+class FakeManagedStream:
+    """An async context manager and async iterator over a fixed list of Managed Agents events."""
+
+    def __init__(self, events: list[MagicMock]) -> None:
+        self._events = list(events)
+
+    async def __aenter__(self) -> "FakeManagedStream":
+        return self
+
+    async def __aexit__(self, *args: object) -> bool:
+        return False
+
+    def __aiter__(self) -> "FakeManagedStream":
+        return self
+
+    async def __anext__(self) -> MagicMock:
+        if not self._events:
+            raise StopAsyncIteration
+
+        return self._events.pop(0)
+
+
+@pytest.fixture
+def managed_agent_event_factory() -> Callable[..., MagicMock]:
+    """Build Managed Agents stream events (agent.message, idle, terminated) as SDK-shaped doubles."""
+
+    def _build(event_type: str, *, text: str | None = None, stop_reason: str | None = None) -> MagicMock:
+        event = MagicMock()
+        event.type = event_type
+        if event_type == "agent.message":
+            block = MagicMock()
+            block.type = "text"
+            block.text = text
+            event.content = [block]
+        if event_type == "session.status_idle":
+            event.stop_reason = MagicMock()
+            event.stop_reason.type = stop_reason
+
+        return event
+
+    return _build
+
+
+@pytest.fixture
+def managed_agent_client_factory() -> Callable[..., MagicMock]:
+    """Build an AsyncAnthropic double driving a Managed Agents session over the given events."""
+
+    def _build(events: list[MagicMock]) -> MagicMock:
+        client = MagicMock()
+        client.__aenter__ = AsyncMock(return_value=client)
+        client.__aexit__ = AsyncMock(return_value=False)
+
+        environment = MagicMock()
+        environment.id = "env-created"
+        client.beta.environments.create = AsyncMock(return_value=environment)
+        client.beta.environments.delete = AsyncMock(return_value=None)
+
+        agent = MagicMock()
+        agent.id = "agent-1"
+        agent.version = "v1"
+        client.beta.agents.create = AsyncMock(return_value=agent)
+        client.beta.agents.archive = AsyncMock(return_value=None)
+
+        session = MagicMock()
+        session.id = "session-1"
+        client.beta.sessions.create = AsyncMock(return_value=session)
+        client.beta.sessions.delete = AsyncMock(return_value=None)
+        client.beta.sessions.events.send = AsyncMock(return_value=None)
+        client.beta.sessions.events.stream = AsyncMock(return_value=FakeManagedStream(events))
 
         return client
 

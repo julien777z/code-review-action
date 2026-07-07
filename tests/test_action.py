@@ -49,6 +49,18 @@ class TestBooleanFeatureInputs:
         assert review_step(action)["env"][env_name] == "${{ inputs.%s }}" % input_name
 
 
+class TestClaudeEnvironmentInput:
+    """Test that the Managed Agents environment input is declared and wired to the runner environment."""
+
+    def test_input_default_and_env_wired(self) -> None:
+        """Test that claude-environment-id defaults to empty and passes through as its env var."""
+
+        action = load_action()
+
+        assert action["inputs"]["claude-environment-id"]["default"] == ""
+        assert review_step(action)["env"]["CLAUDE_ENVIRONMENT_ID"] == "${{ inputs.claude-environment-id }}"
+
+
 class TestRoutineInputsRemoved:
     """Test that the retired Claude routine inputs are no longer declared."""
 
