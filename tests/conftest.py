@@ -11,6 +11,8 @@ from code_review.models.shared.pull_request import PullRequestContext, ReviewInp
 from code_review.models.shared.severity import DiffSide, Severity
 from code_review.models.shared.threads import ReviewThread, ThreadCommentAuthor, ThreadCommentNode, ThreadComments
 from code_review.review import GetFindings, ReviewBackendError
+from code_review.review_backends import cursor
+from code_review.runtime import Backend
 
 
 @pytest.fixture
@@ -185,6 +187,37 @@ def summary_github_mocks(monkeypatch) -> dict[str, AsyncMock]:
         monkeypatch.setattr(f"code_review.summary.{name}", mock)
 
     return mocks
+
+
+@pytest.fixture
+def main_harness(monkeypatch, mock_config, pull_request_factory, pull_request_event_factory) -> Callable[..., dict[str, AsyncMock | PullRequestContext]]:
+    """Patch the seams main() drives and return the mocks; set the event action and review result per call."""
+
+    def _setup(
+        *, action: str = "opened", run_review_result: int = 0, **config_overrides
+    ) -> dict[str, AsyncMock | PullRequestContext]:
+        mock_config(review_model=ReviewModel.CURSOR, cursor_api_key="key", **config_overrides)
+
+        run_review = AsyncMock(return_value=run_review_result)
+        post_pr_summary = AsyncMock(return_value=None)
+        pr = pull_request_factory()
+
+        monkeypatch.setattr(
+            "code_review.runtime.BACKENDS",
+            {Backend.CURSOR: {"run_review": run_review, "generate_summary": cursor.generate_text}},
+        )
+        monkeypatch.setattr("code_review.runtime.post_pr_summary", post_pr_summary)
+        monkeypatch.setattr("code_review.runtime.add_reaction", AsyncMock(return_value=None))
+        monkeypatch.setattr("code_review.runtime.remove_reaction", AsyncMock(return_value=None))
+        monkeypatch.setattr("code_review.runtime.fetch_pull_request", AsyncMock(return_value=pr))
+        monkeypatch.setattr(
+            "code_review.runtime.load_event",
+            lambda: ("pull_request", pull_request_event_factory(action=action)),
+        )
+
+        return {"run_review": run_review, "post_pr_summary": post_pr_summary, "pr": pr}
+
+    return _setup
 
 
 @pytest.fixture

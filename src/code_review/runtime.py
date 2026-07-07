@@ -146,12 +146,6 @@ def reaction_subject(event_name: str, event: GithubEvent, repo: str, pr_number: 
     return f"repos/{repo}/issues/{pr_number}"
 
 
-def claude_available() -> bool:
-    """Return whether the Claude backend has an Anthropic API key."""
-
-    return bool(SETTINGS.anthropic_api_key)
-
-
 def select_backend(first_review: bool) -> Backend | None:
     """Pick the backend for this event, resolving `auto` and skipping when creds are missing."""
 
@@ -163,12 +157,12 @@ def select_backend(first_review: bool) -> Backend | None:
 
     match requested:
         case ReviewModel.AUTO:
-            if claude_available():
+            if SETTINGS.anthropic_api_key:
                 return Backend.CLAUDE
 
             return Backend.CURSOR if SETTINGS.cursor_api_key else None
         case ReviewModel.CLAUDE:
-            return Backend.CLAUDE if claude_available() else None
+            return Backend.CLAUDE if SETTINGS.anthropic_api_key else None
         case ReviewModel.CURSOR:
             return Backend.CURSOR if SETTINGS.cursor_api_key else None
         case _:

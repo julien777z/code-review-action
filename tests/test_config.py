@@ -46,80 +46,42 @@ class TestReviewModelParse:
         assert ReviewModel.parse(raw) == expected
 
 
-class TestPrReviewSummarySetting:
-    """Test that the pr-review-summary input parses from the environment and defaults on."""
-
-    def test_defaults_true(self, monkeypatch) -> None:
-        """Test that an unset input leaves the summary enabled."""
-
-        monkeypatch.delenv("PR_REVIEW_SUMMARY", raising=False)
-
-        assert Settings().pr_review_summary is True
+class TestBooleanSettings:
+    """Test that the boolean feature inputs parse from the environment and carry their default."""
 
     @pytest.mark.parametrize(
-        ("raw", "expected"),
-        [("false", False), ("true", True)],
-        ids=["disabled", "enabled"],
+        ("env_name", "default"),
+        [
+            ("PR_REVIEW_SUMMARY", True),
+            ("ENFORCE_PROJECT_RULES", True),
+            ("SIMPLIFY_SUGGEST", False),
+            ("SIMPLIFY_NEARBY_CODE", False),
+        ],
+        ids=["pr-review-summary", "enforce-project-rules", "simplify-suggest", "simplify-nearby-code"],
     )
-    def test_parses_env(self, monkeypatch, raw: str, expected: bool) -> None:
-        """Test that the string input parses to a boolean."""
-
-        monkeypatch.setenv("PR_REVIEW_SUMMARY", raw)
-
-        assert Settings().pr_review_summary is expected
-
-
-class TestEnforceProjectRulesSetting:
-    """Test that the enforce-project-rules input parses from the environment and defaults on."""
-
-    def test_defaults_true(self, monkeypatch) -> None:
-        """Test that an unset input leaves rule enforcement enabled."""
-
-        monkeypatch.delenv("ENFORCE_PROJECT_RULES", raising=False)
-
-        assert Settings().enforce_project_rules is True
-
-    @pytest.mark.parametrize(
-        ("raw", "expected"),
-        [("false", False), ("true", True)],
-        ids=["disabled", "enabled"],
-    )
-    def test_parses_env(self, monkeypatch, raw: str, expected: bool) -> None:
-        """Test that the string input parses to a boolean."""
-
-        monkeypatch.setenv("ENFORCE_PROJECT_RULES", raw)
-
-        assert Settings().enforce_project_rules is expected
-
-
-class TestSimplifySettings:
-    """Test that the simplify-* inputs parse from the environment and default off."""
-
-    @pytest.mark.parametrize(
-        "env_name",
-        ["SIMPLIFY_SUGGEST", "SIMPLIFY_NEARBY_CODE"],
-        ids=["suggest", "nearby-code"],
-    )
-    def test_defaults_false(self, monkeypatch, env_name: str) -> None:
-        """Test that an unset input leaves the option disabled."""
+    def test_defaults(self, monkeypatch, env_name: str, default: bool) -> None:
+        """Test that an unset input falls back to its default."""
 
         monkeypatch.delenv(env_name, raising=False)
-        settings = Settings()
 
-        assert getattr(settings, env_name.lower()) is False
+        assert getattr(Settings(), env_name.lower()) is default
 
     @pytest.mark.parametrize(
-        "env_name",
-        ["SIMPLIFY_SUGGEST", "SIMPLIFY_NEARBY_CODE"],
-        ids=["suggest", "nearby-code"],
+        ("env_name", "raw", "expected"),
+        [
+            ("PR_REVIEW_SUMMARY", "false", False),
+            ("ENFORCE_PROJECT_RULES", "false", False),
+            ("SIMPLIFY_SUGGEST", "true", True),
+            ("SIMPLIFY_NEARBY_CODE", "true", True),
+        ],
+        ids=["pr-review-summary", "enforce-project-rules", "simplify-suggest", "simplify-nearby-code"],
     )
-    def test_parses_true(self, monkeypatch, env_name: str) -> None:
-        """Test that the string input parses to a boolean."""
+    def test_parses_env(self, monkeypatch, env_name: str, raw: str, expected: bool) -> None:
+        """Test that the string input parses to the expected boolean."""
 
-        monkeypatch.setenv(env_name, "true")
-        settings = Settings()
+        monkeypatch.setenv(env_name, raw)
 
-        assert getattr(settings, env_name.lower()) is True
+        assert getattr(Settings(), env_name.lower()) is expected
 
 
 class TestSeverity:

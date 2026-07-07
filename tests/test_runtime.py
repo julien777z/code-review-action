@@ -1,5 +1,4 @@
 import asyncio
-from unittest.mock import AsyncMock
 
 import pytest
 
@@ -254,110 +253,48 @@ class TestMain:
         [("opened", True), ("synchronize", False)],
         ids=["first-review", "later-push"],
     )
-    def test_summary_gated_on_first_review(
-        self, monkeypatch, mock_config, pull_request_event_factory, pull_request_factory, action: str, summary_posted: bool
-    ) -> None:
+    def test_summary_gated_on_first_review(self, main_harness, action: str, summary_posted: bool) -> None:
         """Test that the summary posts on the opened event and is skipped on a later push."""
 
-        mock_config(review_model=ReviewModel.CURSOR, cursor_api_key="key", pr_review_summary=True)
-        run_review = AsyncMock(return_value=0)
-        post_pr_summary = AsyncMock(return_value=None)
-        generator = cursor.generate_text
-        monkeypatch.setattr(
-            "code_review.runtime.BACKENDS",
-            {Backend.CURSOR: {"run_review": run_review, "generate_summary": generator}},
-        )
-        monkeypatch.setattr("code_review.runtime.post_pr_summary", post_pr_summary)
-        monkeypatch.setattr("code_review.runtime.add_reaction", AsyncMock(return_value=None))
-        monkeypatch.setattr("code_review.runtime.remove_reaction", AsyncMock(return_value=None))
-        pr = pull_request_factory()
-        monkeypatch.setattr("code_review.runtime.fetch_pull_request", AsyncMock(return_value=pr))
-        monkeypatch.setattr(
-            "code_review.runtime.load_event",
-            lambda: ("pull_request", pull_request_event_factory(action=action)),
-        )
+        mocks = main_harness(action=action)
 
         exit_code = asyncio.run(main())
 
         assert exit_code == 0
-        run_review.assert_awaited_once_with(pr)
+        mocks["run_review"].assert_awaited_once_with(mocks["pr"])
 
-        assert post_pr_summary.await_count == (1 if summary_posted else 0)
+        assert mocks["post_pr_summary"].await_count == (1 if summary_posted else 0)
         if summary_posted:
-            post_pr_summary.assert_awaited_once_with(pr, generator)
+            mocks["post_pr_summary"].assert_awaited_once_with(mocks["pr"], cursor.generate_text)
 
-    def test_summary_skipped_when_disabled(
-        self, monkeypatch, mock_config, pull_request_event_factory, pull_request_factory
-    ) -> None:
+    def test_summary_skipped_when_disabled(self, main_harness) -> None:
         """Test that a first review does not post a summary when the setting is off."""
 
-        mock_config(review_model=ReviewModel.CURSOR, cursor_api_key="key", pr_review_summary=False)
-        post_pr_summary = AsyncMock(return_value=None)
-        monkeypatch.setattr(
-            "code_review.runtime.BACKENDS",
-            {Backend.CURSOR: {"run_review": AsyncMock(return_value=0), "generate_summary": cursor.generate_text}},
-        )
-        monkeypatch.setattr("code_review.runtime.post_pr_summary", post_pr_summary)
-        monkeypatch.setattr("code_review.runtime.add_reaction", AsyncMock(return_value=None))
-        monkeypatch.setattr("code_review.runtime.remove_reaction", AsyncMock(return_value=None))
-        monkeypatch.setattr("code_review.runtime.fetch_pull_request", AsyncMock(return_value=pull_request_factory()))
-        monkeypatch.setattr(
-            "code_review.runtime.load_event",
-            lambda: ("pull_request", pull_request_event_factory(action="opened")),
-        )
+        mocks = main_harness(pr_review_summary=False)
 
         asyncio.run(main())
 
-        post_pr_summary.assert_not_awaited()
+        mocks["post_pr_summary"].assert_not_awaited()
 
-    def test_summary_skipped_when_review_fails(
-        self, monkeypatch, mock_config, pull_request_event_factory, pull_request_factory
-    ) -> None:
+    def test_summary_skipped_when_review_fails(self, main_harness) -> None:
         """Test that a failing review round skips the summary."""
 
-        mock_config(review_model=ReviewModel.CURSOR, cursor_api_key="key", pr_review_summary=True)
-        post_pr_summary = AsyncMock(return_value=None)
-        monkeypatch.setattr(
-            "code_review.runtime.BACKENDS",
-            {Backend.CURSOR: {"run_review": AsyncMock(return_value=1), "generate_summary": cursor.generate_text}},
-        )
-        monkeypatch.setattr("code_review.runtime.post_pr_summary", post_pr_summary)
-        monkeypatch.setattr("code_review.runtime.add_reaction", AsyncMock(return_value=None))
-        monkeypatch.setattr("code_review.runtime.remove_reaction", AsyncMock(return_value=None))
-        monkeypatch.setattr("code_review.runtime.fetch_pull_request", AsyncMock(return_value=pull_request_factory()))
-        monkeypatch.setattr(
-            "code_review.runtime.load_event",
-            lambda: ("pull_request", pull_request_event_factory(action="opened")),
-        )
+        mocks = main_harness(run_review_result=1)
 
         exit_code = asyncio.run(main())
 
         assert exit_code == 1
 
-        post_pr_summary.assert_not_awaited()
+        mocks["post_pr_summary"].assert_not_awaited()
 
-    def test_summary_failure_does_not_fail_the_review(
-        self, monkeypatch, mock_config, pull_request_event_factory, pull_request_factory
-    ) -> None:
+    def test_summary_failure_does_not_fail_the_review(self, main_harness) -> None:
         """Test that a summary error is isolated and the successful review still returns zero."""
 
-        mock_config(review_model=ReviewModel.CURSOR, cursor_api_key="key", pr_review_summary=True)
-        post_pr_summary = AsyncMock(side_effect=SummaryGenerationError("boom"))
-        monkeypatch.setattr(
-            "code_review.runtime.BACKENDS",
-            {Backend.CURSOR: {"run_review": AsyncMock(return_value=0), "generate_summary": cursor.generate_text}},
-        )
-        monkeypatch.setattr("code_review.runtime.post_pr_summary", post_pr_summary)
-        monkeypatch.setattr("code_review.runtime.add_reaction", AsyncMock(return_value=None))
-        monkeypatch.setattr("code_review.runtime.remove_reaction", AsyncMock(return_value=None))
-        monkeypatch.setattr("code_review.runtime.fetch_pull_request", AsyncMock(return_value=pull_request_factory()))
-        monkeypatch.setattr(
-            "code_review.runtime.load_event",
-            lambda: ("pull_request", pull_request_event_factory(action="opened")),
-        )
+        mocks = main_harness()
+        mocks["post_pr_summary"].side_effect = SummaryGenerationError("boom")
 
         exit_code = asyncio.run(main())
 
         assert exit_code == 0
 
-        post_pr_summary.assert_awaited_once()
+        mocks["post_pr_summary"].assert_awaited_once()
