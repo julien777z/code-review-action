@@ -124,7 +124,7 @@ async def managed_agent_text(pr: PullRequestContext, user_message: str, *, mount
             if not produced_text:
                 raise review.ReviewBackendError("The Claude agent session produced no output.", retryable=True)
         finally:
-            await teardown_managed_agent(client, session.id, agent.id, environment_id, created_environment)
+            await teardown_managed_agent(client, session.id, agent.id, environment_id)
 
 
 async def run_claude_review(pr: PullRequestContext) -> int:
