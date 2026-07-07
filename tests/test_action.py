@@ -49,16 +49,24 @@ class TestBooleanFeatureInputs:
         assert review_step(action)["env"][env_name] == "${{ inputs.%s }}" % input_name
 
 
-class TestClaudeEnvironmentInput:
-    """Test that the Managed Agents environment input is declared and wired to the runner environment."""
+class TestStringInputs:
+    """Test that the free-form string inputs are declared and wired to the runner environment."""
 
-    def test_input_default_and_env_wired(self) -> None:
-        """Test that claude-environment-id defaults to empty and passes through as its env var."""
+    @pytest.mark.parametrize(
+        ("input_name", "env_name"),
+        [
+            ("claude-environment-id", "CLAUDE_ENVIRONMENT_ID"),
+            ("project-rules-severity", "PROJECT_RULES_SEVERITY"),
+        ],
+        ids=["claude-environment-id", "project-rules-severity"],
+    )
+    def test_input_default_and_env_wired(self, input_name: str, env_name: str) -> None:
+        """Test that the input defaults to empty and passes through as its env var."""
 
         action = load_action()
 
-        assert action["inputs"]["claude-environment-id"]["default"] == ""
-        assert review_step(action)["env"]["CLAUDE_ENVIRONMENT_ID"] == "${{ inputs.claude-environment-id }}"
+        assert action["inputs"][input_name]["default"] == ""
+        assert review_step(action)["env"][env_name] == "${{ inputs.%s }}" % input_name
 
 
 class TestRoutineInputsRemoved:

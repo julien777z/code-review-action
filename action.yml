@@ -51,8 +51,11 @@ inputs:
     description: Append an AI-generated summary (bullets, risk note, overview) to the PR description on open/ready events.
     default: "true"
   enforce-project-rules:
-    description: Enforce the repository's own coding rules as part of the review. Each backend clones the repo and loads the rule files it understands. No-op when the repository defines none.
+    description: Enforce the repository's own coding rules as part of the review. Each backend loads the rule files it understands from the checked-out repo. No-op when the repository defines none.
     default: "true"
+  project-rules-severity:
+    description: Fixed severity to report project-rule violations at (critical, high, medium, or low). Empty lets the review rate each violation itself.
+    default: ""
   simplify-suggest:
     description: Also suggest code simplifications (using the code-simplify skill) as low-severity nits.
     default: "false"
@@ -114,6 +117,7 @@ runs:
         APPROVAL_DISABLE: ${{ inputs.approval-disable }}
         PR_REVIEW_SUMMARY: ${{ inputs.pr-review-summary }}
         ENFORCE_PROJECT_RULES: ${{ inputs.enforce-project-rules }}
+        PROJECT_RULES_SEVERITY: ${{ inputs.project-rules-severity }}
         SIMPLIFY_SUGGEST: ${{ inputs.simplify-suggest }}
         SIMPLIFY_NEARBY_CODE: ${{ inputs.simplify-nearby-code }}
         MIN_SEVERITY: ${{ inputs.min-severity }}

@@ -97,15 +97,19 @@ first-review events, never on later pushes.
 ## Enforcing project rules
 
 With `enforce-project-rules` on (the default), the review applies your repository's own coding rules
-and reports a finding on any changed line that violates them. Both backends load those rules by
-cloning the repository during the review, so they pick up whatever rule files the agent understands
-(for example `.cursor/rules` or `CLAUDE.md` / `.claude/rules`) automatically.
+and reports a finding on any changed line that violates them. Each backend loads whatever rule files it
+understands (for example `.cursor/rules` or `CLAUDE.md` / `.claude/rules`).
 
-**Cursor backend.** Cursor clones the repository through its own GitHub App, which must have access to
-the repository. In GitHub, go to **Settings → Applications → Cursor** and make sure its **Repository
-access** includes this repo (**All repositories**, or **Only select repositories** with it selected).
-If Cursor cannot reach the repo, the review fails with a message telling you to check the Cursor GitHub
-App (or to set `enforce-project-rules: false`).
+**Cursor backend.** Cursor runs a **local** agent that loads your `.cursor/rules` from the checked-out
+repository's working directory. Check out the repo before this action so those files are present:
+
+```yaml
+steps:
+  - uses: actions/checkout@v4
+  - uses: julien777z/code-review-action@v0
+    with:
+      cursor-api-key: ${{ secrets.CURSOR_API_KEY }}
+```
 
 **Claude backend.** Claude reviews through a [Managed
 Agents](https://platform.claude.com/docs/en/managed-agents) session that mounts the repository at the
@@ -115,8 +119,11 @@ The action creates a cloud environment for each run and deletes it afterward; to
 environment instead, set `claude-environment-id`. When `enforce-project-rules` is `false`, the session
 runs without the repository mounted and reviews from the diff alone.
 
-- `enforce-project-rules` — set to `false` to review without cloning the repo, skipping rule
-  enforcement (default `true`).
+- `enforce-project-rules` — set to `false` to skip loading and enforcing the repo's rules (default
+  `true`).
+- `project-rules-severity` — pin every rule violation to a fixed severity (`critical`, `high`,
+  `medium`, or `low`). Empty lets the review rate each violation itself (default empty). Set this above
+  `low` when rule violations are being crowded out by `low-findings-cap`.
 - `claude-environment-id` — Managed Agents cloud environment id the Claude backend reuses instead of
   creating a fresh one per run. Empty creates and deletes one each run (default empty).
 
@@ -224,6 +231,7 @@ with:
 | `approval-disable` | `false` | Comments only; skip the verdict |
 | `pr-review-summary` | `true` | Append an AI summary to the PR description on the first review |
 | `enforce-project-rules` | `true` | Enforce the repository's own coding rules; no-op when it defines none |
+| `project-rules-severity` | — | Fixed severity for rule violations; empty lets the review rate each |
 | `simplify-suggest` | `false` | Suggest code simplifications as low-severity nits |
 | `simplify-nearby-code` | `false` | Extend simplification suggestions to weigh nearby/related code |
 | `min-severity` | `low` | Lowest severity worth posting |

@@ -1,6 +1,7 @@
 import re
 
 from code_review.models.shared.pull_request import PostedFinding, ReviewInputs
+from code_review.models.shared.severity import Severity
 from code_review.prompt import (
     cursor_prompt,
     existing_findings_block,
@@ -53,6 +54,22 @@ class TestReviewInstructions:
         mock_config(enforce_project_rules=False)
 
         assert "rules and conventions" not in review_instructions()
+
+    def test_pins_project_rule_severity_when_configured(self, mock_config) -> None:
+        """Test that a configured severity is applied to every project-rule violation."""
+
+        mock_config(enforce_project_rules=True, project_rules_severity=Severity.HIGH)
+        text = review_instructions()
+
+        assert "`high`-severity finding" in text
+        assert "the severity the violation warrants" not in text
+
+    def test_lets_model_rate_project_rules_when_severity_unset(self, mock_config) -> None:
+        """Test that violations keep model-rated severities when none is configured."""
+
+        mock_config(enforce_project_rules=True, project_rules_severity=None)
+
+        assert "the severity the violation warrants" in review_instructions()
 
     def test_suggests_simplifications_when_enabled(self, mock_config) -> None:
         """Test that enabling simplify-suggest asks the review to use the code-simplify skill."""

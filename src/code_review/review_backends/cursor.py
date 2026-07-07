@@ -2,14 +2,7 @@ import logging
 from collections.abc import AsyncIterator
 from typing import Final
 
-from cursor_sdk import (
-    AsyncAgent,
-    AsyncClient,
-    CloudAgentOptions,
-    CloudRepository,
-    CursorAgentError,
-    ModelSelection,
-)
+from cursor_sdk import AsyncAgent, AsyncClient, CursorAgentError, LocalAgentOptions, ModelSelection
 
 from code_review import review
 from code_review.config import CONFIG, SETTINGS
@@ -39,22 +32,8 @@ async def launch_bridge_with_retry() -> AsyncClient:
     return await AsyncClient.launch_bridge()
 
 
-def cursor_error_message(exc: CursorAgentError) -> str:
-    """Return a clear failure message, explaining missing repo access when that is the cause."""
-
-    if "does not have access" in str(exc).lower():
-        return (
-            "Cursor's GitHub App cannot access this repository, so the review agent could not clone it "
-            "to load the project rules. In GitHub, open Settings > Applications > Cursor and make sure "
-            "its repository access includes this repo. Otherwise set enforce-project-rules to false. "
-            f"Original error: {exc}"
-        )
-
-    return f"Cursor agent run failed: {exc}"
-
-
-async def run_agent(prompt: str, repo: CloudRepository | None = None) -> AsyncIterator[str]:
-    """Launch the Cursor agent on the standard variant and stream its reply text in chunks."""
+async def run_agent(prompt: str, *, load_project_rules: bool = False) -> AsyncIterator[str]:
+    """Launch a local Cursor agent on the standard variant and stream its reply text in chunks."""
 
     client = await launch_bridge_with_retry()
 
@@ -71,9 +50,11 @@ async def run_agent(prompt: str, repo: CloudRepository | None = None) -> AsyncIt
         else SETTINGS.cursor_model
     )
 
-    cloud = CloudAgentOptions(repos=[repo]) if repo is not None else CloudAgentOptions()
+    # A local agent loads the checked-out repo's project settings (.cursor/rules) from the working
+    # directory only when asked, so an unrelated turn (the summary) does not pull them in.
+    local = LocalAgentOptions(setting_sources=["project"] if load_project_rules else [])
     agent = await AsyncAgent.create(
-        client=client, model=model_selection, api_key=SETTINGS.cursor_api_key, cloud=cloud
+        client=client, model=model_selection, api_key=SETTINGS.cursor_api_key, local=local
     )
 
     try:
@@ -87,18 +68,14 @@ async def run_agent(prompt: str, repo: CloudRepository | None = None) -> AsyncIt
 async def run_cursor_review(pr: PullRequestContext) -> int:
     """Review the PR with the Cursor backend, streaming each finding as the agent emits it."""
 
-    repo = (
-        CloudRepository(url=f"https://github.com/{pr.repo}", starting_ref=pr.head_sha)
-        if SETTINGS.enforce_project_rules
-        else None
-    )
-
     async def _findings(inputs: ReviewInputs) -> AsyncIterator[Finding]:
         try:
-            async for finding in iter_findings(run_agent(cursor_prompt(inputs), repo=repo)):
+            async for finding in iter_findings(
+                run_agent(cursor_prompt(inputs), load_project_rules=SETTINGS.enforce_project_rules)
+            ):
                 yield finding
         except CursorAgentError as exc:
-            raise review.ReviewBackendError(cursor_error_message(exc), retryable=exc.is_retryable) from exc
+            raise review.ReviewBackendError(f"Cursor agent run failed: {exc}", retryable=exc.is_retryable) from exc
 
     return await review.run_review_round(pr, CONFIG["review_marker"], _findings)
 

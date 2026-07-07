@@ -1,8 +1,9 @@
 import asyncio
 from collections.abc import AsyncIterator
 
-from cursor_sdk import CursorAgentError
+import pytest
 
+from code_review.config import CONFIG
 from code_review.review_backends import cursor
 
 
@@ -11,26 +12,6 @@ async def chunk_stream(*parts: str) -> AsyncIterator[str]:
 
     for part in parts:
         yield part
-
-
-class TestCursorErrorMessage:
-    """Test that a missing-repo-access failure produces an actionable message."""
-
-    def test_missing_access_explains_how_to_fix(self) -> None:
-        """Test that an SCM access failure explains how to grant access or disable enforcement."""
-
-        exc = CursorAgentError("invalid_argument: The SCM integration does not have access to repository x")
-        message = cursor.cursor_error_message(exc)
-
-        assert "repository access" in message
-        assert "enforce-project-rules" in message
-
-    def test_other_failure_uses_generic_message(self) -> None:
-        """Test that an unrelated failure keeps the generic message."""
-
-        exc = CursorAgentError("something else broke")
-
-        assert cursor.cursor_error_message(exc) == "Cursor agent run failed: something else broke"
 
 
 class TestGenerateText:
@@ -46,3 +27,45 @@ class TestGenerateText:
         )
 
         assert asyncio.run(cursor.generate_text("prompt")) == "Generated summary"
+
+    def test_summary_turn_does_not_load_project_rules(self, monkeypatch, mock_config) -> None:
+        """Test that the summary turn runs a local agent without loading the project settings."""
+
+        mock_config(cursor_api_key="key")
+        recorded: dict[str, bool] = {}
+
+        def _run_agent(prompt: str, *, load_project_rules: bool = False) -> AsyncIterator[str]:
+            recorded["load_project_rules"] = load_project_rules
+
+            return chunk_stream("ok")
+
+        monkeypatch.setattr("code_review.review_backends.cursor.run_agent", _run_agent)
+
+        asyncio.run(cursor.generate_text("prompt"))
+
+        assert recorded["load_project_rules"] is False
+
+
+class TestRunCursorReview:
+    """Test that the review turn loads the project rules only when enforcement is on."""
+
+    @pytest.mark.parametrize("enforce", [True, False], ids=["enforcing", "not-enforcing"])
+    def test_review_loads_rules_per_enforcement(
+        self, monkeypatch, mock_config, pull_request_factory, review_github_mocks, enforce: bool
+    ) -> None:
+        """Test that run_agent is asked to load project rules to match the enforcement setting."""
+
+        mock_config(cursor_api_key="key", enforce_project_rules=enforce)
+        recorded: dict[str, bool] = {}
+
+        def _run_agent(prompt: str, *, load_project_rules: bool = False) -> AsyncIterator[str]:
+            recorded["load_project_rules"] = load_project_rules
+
+            return chunk_stream(CONFIG["no_findings_marker"])
+
+        monkeypatch.setattr("code_review.review_backends.cursor.run_agent", _run_agent)
+
+        exit_code = asyncio.run(cursor.run_cursor_review(pull_request_factory()))
+
+        assert exit_code == 0
+        assert recorded["load_project_rules"] is enforce

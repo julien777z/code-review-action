@@ -84,6 +84,29 @@ class TestBooleanSettings:
         assert getattr(Settings(), env_name.lower()) is expected
 
 
+class TestProjectRulesSeverity:
+    """Test that the project-rules severity input parses, defaulting empty to None."""
+
+    def test_defaults_to_none(self, monkeypatch) -> None:
+        """Test that an unset input leaves the severity unpinned."""
+
+        monkeypatch.delenv("PROJECT_RULES_SEVERITY", raising=False)
+
+        assert Settings().project_rules_severity is None
+
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [("high", Severity.HIGH), ("CRITICAL", Severity.CRITICAL), ("low", Severity.LOW)],
+        ids=["high", "critical-upper", "low"],
+    )
+    def test_parses_env(self, monkeypatch, raw: str, expected: Severity) -> None:
+        """Test that the string input parses case-insensitively to the severity enum."""
+
+        monkeypatch.setenv("PROJECT_RULES_SEVERITY", raw)
+
+        assert Settings().project_rules_severity is expected
+
+
 class TestSeverity:
     """Test that severity parses case-insensitively and orders correctly."""
 

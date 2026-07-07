@@ -87,6 +87,7 @@ class Settings(BaseSettings):
     approval_disable: bool = False
     pr_review_summary: bool = True
     enforce_project_rules: bool = True
+    project_rules_severity: Severity | None = None
     simplify_suggest: bool = False
     simplify_nearby_code: bool = False
     min_severity: Severity = Severity.LOW
@@ -106,7 +107,7 @@ class Settings(BaseSettings):
 
         return {key: stripped for key, value in data.items() if (stripped := value.strip())}
 
-    @field_validator("review_model", "first_review_model", "min_severity", mode="before")
+    @field_validator("review_model", "first_review_model", "min_severity", "project_rules_severity", mode="before")
     @classmethod
     def normalize_enum(cls, value: str | None) -> str | None:
         """Trim and lower-case an enum input so it matches the enum's values."""
