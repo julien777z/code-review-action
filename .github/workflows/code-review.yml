@@ -22,3 +22,7 @@ jobs:
         with:
           cursor-api-key: ${{ secrets.CURSOR_API_KEY }}
           resolve-token: ${{ secrets.CODE_REVIEW_TOKEN }}
+          pr-review-summary: "true"
+          enforce-project-rules: "true"
+          simplify-suggest: "true"
+          simplify-nearby-code: "true"
