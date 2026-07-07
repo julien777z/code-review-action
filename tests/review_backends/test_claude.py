@@ -1,10 +1,10 @@
 import asyncio
 from collections.abc import AsyncIterator
-from unittest.mock import AsyncMock
 
 import pytest
 
 from code_review import review
+from code_review.config import CONFIG
 from code_review.review_backends import claude
 
 
@@ -15,39 +15,42 @@ async def collect(chunks: AsyncIterator[str]) -> list[str]:
 
 
 class TestRunClaudeReview:
-    """Test that the review path is chosen by whether project rules are enforced."""
+    """Test that the review runs through a Managed Agents session and mounts the repo per enforcement."""
 
-    def test_enforcing_uses_managed_agent(self, monkeypatch, mock_config, pull_request_factory) -> None:
-        """Test that enforcing project rules reviews through a Managed Agents session."""
+    @pytest.mark.parametrize(
+        ("enforce", "repo_mounted"),
+        [(True, True), (False, False)],
+        ids=["enforcing", "not-enforcing"],
+    )
+    def test_repo_mount_follows_enforcement(
+        self,
+        monkeypatch,
+        mock_config,
+        pull_request_factory,
+        review_github_mocks,
+        managed_agent_client_factory,
+        managed_agent_event_factory,
+        enforce: bool,
+        repo_mounted: bool,
+    ) -> None:
+        """Test that the session mounts the repo only when project rules are enforced."""
 
-        mock_config(anthropic_api_key="key", enforce_project_rules=True)
-        managed = AsyncMock(return_value=0)
-        stream = AsyncMock(return_value=0)
-        monkeypatch.setattr("code_review.review_backends.claude.run_managed_agent_review", managed)
-        monkeypatch.setattr("code_review.review_backends.claude.run_messages_stream_review", stream)
+        mock_config(anthropic_api_key="key", enforce_project_rules=enforce)
+        events = [
+            managed_agent_event_factory("agent.message", text=CONFIG["no_findings_marker"]),
+            managed_agent_event_factory("session.status_idle", stop_reason="end_turn"),
+        ]
+        client = managed_agent_client_factory(events)
+        monkeypatch.setattr("code_review.review_backends.claude.anthropic.AsyncAnthropic", lambda **kwargs: client)
 
-        asyncio.run(claude.run_claude_review(pull_request_factory()))
+        exit_code = asyncio.run(claude.run_claude_review(pull_request_factory()))
 
-        managed.assert_awaited_once()
-        stream.assert_not_awaited()
-
-    def test_not_enforcing_uses_messages_stream(self, monkeypatch, mock_config, pull_request_factory) -> None:
-        """Test that skipping rule enforcement reviews through the Messages API stream."""
-
-        mock_config(anthropic_api_key="key", enforce_project_rules=False)
-        managed = AsyncMock(return_value=0)
-        stream = AsyncMock(return_value=0)
-        monkeypatch.setattr("code_review.review_backends.claude.run_managed_agent_review", managed)
-        monkeypatch.setattr("code_review.review_backends.claude.run_messages_stream_review", stream)
-
-        asyncio.run(claude.run_claude_review(pull_request_factory()))
-
-        stream.assert_awaited_once()
-        managed.assert_not_awaited()
+        assert exit_code == 0
+        assert bool(client.beta.sessions.create.await_args.kwargs["resources"]) is repo_mounted
 
 
 class TestManagedAgentText:
-    """Test that the Managed Agents session mounts the repo and streams the agent's text output."""
+    """Test that the Managed Agents session streams the agent's text and mounts the repo on request."""
 
     def test_streams_message_text_until_idle(
         self, monkeypatch, mock_config, pull_request_factory, managed_agent_client_factory, managed_agent_event_factory
@@ -64,7 +67,7 @@ class TestManagedAgentText:
         client = managed_agent_client_factory(events)
         monkeypatch.setattr("code_review.review_backends.claude.anthropic.AsyncAnthropic", lambda **kwargs: client)
 
-        chunks = asyncio.run(collect(claude.managed_agent_text(pull_request_factory(), "review this")))
+        chunks = asyncio.run(collect(claude.managed_agent_text(pull_request_factory(), "review this", mount_repo=True)))
 
         assert chunks == ["finding one\n", "finding two"]
 
@@ -79,7 +82,7 @@ class TestManagedAgentText:
         monkeypatch.setattr("code_review.review_backends.claude.anthropic.AsyncAnthropic", lambda **kwargs: client)
 
         pr = pull_request_factory(repo="octo/repo", head_sha="deadbeef")
-        asyncio.run(collect(claude.managed_agent_text(pr, "review this")))
+        asyncio.run(collect(claude.managed_agent_text(pr, "review this", mount_repo=True)))
 
         resource = client.beta.sessions.create.await_args.kwargs["resources"][0]
 
@@ -88,6 +91,20 @@ class TestManagedAgentText:
         sent = client.beta.sessions.events.send.await_args.kwargs["events"][0]
 
         assert sent["content"][0]["text"] == "review this"
+
+    def test_no_repo_mount_leaves_resources_empty(
+        self, monkeypatch, mock_config, pull_request_factory, managed_agent_client_factory, managed_agent_event_factory
+    ) -> None:
+        """Test that skipping the repo mount creates a session with no resources."""
+
+        mock_config(anthropic_api_key="key")
+        events = [managed_agent_event_factory("agent.message", text="x"), managed_agent_event_factory("session.status_terminated")]
+        client = managed_agent_client_factory(events)
+        monkeypatch.setattr("code_review.review_backends.claude.anthropic.AsyncAnthropic", lambda **kwargs: client)
+
+        asyncio.run(collect(claude.managed_agent_text(pull_request_factory(), "review this", mount_repo=False)))
+
+        assert client.beta.sessions.create.await_args.kwargs["resources"] == []
 
     def test_no_output_raises(
         self, monkeypatch, mock_config, pull_request_factory, managed_agent_client_factory, managed_agent_event_factory
@@ -100,7 +117,7 @@ class TestManagedAgentText:
         monkeypatch.setattr("code_review.review_backends.claude.anthropic.AsyncAnthropic", lambda **kwargs: client)
 
         with pytest.raises(review.ReviewBackendError):
-            asyncio.run(collect(claude.managed_agent_text(pull_request_factory(), "review this")))
+            asyncio.run(collect(claude.managed_agent_text(pull_request_factory(), "review this", mount_repo=True)))
 
     def test_tears_down_session_and_created_environment(
         self, monkeypatch, mock_config, pull_request_factory, managed_agent_client_factory, managed_agent_event_factory
@@ -112,7 +129,7 @@ class TestManagedAgentText:
         client = managed_agent_client_factory(events)
         monkeypatch.setattr("code_review.review_backends.claude.anthropic.AsyncAnthropic", lambda **kwargs: client)
 
-        asyncio.run(collect(claude.managed_agent_text(pull_request_factory(), "review this")))
+        asyncio.run(collect(claude.managed_agent_text(pull_request_factory(), "review this", mount_repo=True)))
 
         client.beta.sessions.delete.assert_awaited_once()
         client.beta.agents.archive.assert_awaited_once()
@@ -129,7 +146,7 @@ class TestManagedAgentText:
         client = managed_agent_client_factory(events)
         monkeypatch.setattr("code_review.review_backends.claude.anthropic.AsyncAnthropic", lambda **kwargs: client)
 
-        asyncio.run(collect(claude.managed_agent_text(pull_request_factory(), "review this")))
+        asyncio.run(collect(claude.managed_agent_text(pull_request_factory(), "review this", mount_repo=True)))
 
         assert client.beta.sessions.create.await_args.kwargs["environment_id"] == "env-configured"
         client.beta.environments.create.assert_not_awaited()

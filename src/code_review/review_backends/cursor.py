@@ -44,9 +44,10 @@ def cursor_error_message(exc: CursorAgentError) -> str:
 
     if "does not have access" in str(exc).lower():
         return (
-            "Cursor's GitHub integration cannot access this repository, so the review agent could not "
-            "clone it to load the project rules. Grant Cursor access to this repository, or set "
-            f"enforce-project-rules to false. Original error: {exc}"
+            "Cursor's GitHub App cannot access this repository, so the review agent could not clone it "
+            "to load the project rules. In GitHub, open Settings > Applications > Cursor and make sure "
+            "its repository access includes this repo. Otherwise set enforce-project-rules to false. "
+            f"Original error: {exc}"
         )
 
     return f"Cursor agent run failed: {exc}"

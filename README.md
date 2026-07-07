@@ -101,18 +101,19 @@ and reports a finding on any changed line that violates them. Both backends load
 cloning the repository during the review, so they pick up whatever rule files the agent understands
 (for example `.cursor/rules` or `CLAUDE.md` / `.claude/rules`) automatically.
 
-**Cursor backend.** Cursor clones the repository through its own GitHub integration, which must have
-access to the repository — connect Cursor to GitHub and grant it access to the repo. If Cursor cannot
-access the repository, the review fails with a message telling you to grant access (or to set
-`enforce-project-rules: false`).
+**Cursor backend.** Cursor clones the repository through its own GitHub App, which must have access to
+the repository. In GitHub, go to **Settings → Applications → Cursor** and make sure its **Repository
+access** includes this repo (**All repositories**, or **Only select repositories** with it selected).
+If Cursor cannot reach the repo, the review fails with a message telling you to check the Cursor GitHub
+App (or to set `enforce-project-rules: false`).
 
 **Claude backend.** Claude reviews through a [Managed
 Agents](https://platform.claude.com/docs/en/managed-agents) session that mounts the repository at the
-PR's head commit, so Claude Code loads `CLAUDE.md` / `.claude/rules` natively. The action creates a
-cloud environment for each run and deletes it afterward; to reuse a pre-provisioned environment
-instead, set `claude-environment-id`. The repository is cloned with the run's `github-token`, so no
-extra GitHub connection is required. (When `enforce-project-rules` is `false`, the Claude backend
-reviews from the diff alone via the Messages API and never mounts the repository.)
+PR's head commit, so Claude Code loads `CLAUDE.md` / `.claude/rules` natively. The repository is cloned
+with the run's `github-token` (which needs `contents: read`), so no extra GitHub connection is required.
+The action creates a cloud environment for each run and deletes it afterward; to reuse a pre-provisioned
+environment instead, set `claude-environment-id`. When `enforce-project-rules` is `false`, the session
+runs without the repository mounted and reviews from the diff alone.
 
 - `enforce-project-rules` — set to `false` to review without cloning the repo, skipping rule
   enforcement (default `true`).

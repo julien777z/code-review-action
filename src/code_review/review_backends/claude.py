@@ -19,7 +19,6 @@ from code_review.review_backends.jsonl import iter_findings
 
 logger = logging.getLogger("code_review.claude")
 
-CLAUDE_MAX_TOKENS: Final[int] = 16000
 SUMMARY_MAX_TOKENS: Final[int] = 1500
 
 MANAGED_AGENTS_BETA: Final[str] = "managed-agents-2026-04-01"
@@ -84,8 +83,8 @@ async def teardown_managed_agent(
         logger.warning("Could not tear down the Claude agent session: %s", exc)
 
 
-async def managed_agent_text(pr: PullRequestContext, user_message: str) -> AsyncIterator[str]:
-    """Run one Managed Agents turn with the PR repo mounted, streaming the agent's response text."""
+async def managed_agent_text(pr: PullRequestContext, user_message: str, *, mount_repo: bool) -> AsyncIterator[str]:
+    """Run one Managed Agents turn, streaming the agent's response text and mounting the repo when asked."""
 
     async with anthropic.AsyncAnthropic(api_key=SETTINGS.anthropic_api_key) as client:
         environment_id, created_environment = await resolve_environment(client)
@@ -99,7 +98,7 @@ async def managed_agent_text(pr: PullRequestContext, user_message: str) -> Async
         session = await client.beta.sessions.create(
             agent={"type": "agent", "id": agent.id, "version": agent.version},
             environment_id=environment_id,
-            resources=[github_repository_resource(pr)],
+            resources=[github_repository_resource(pr)] if mount_repo else [],
             betas=[MANAGED_AGENTS_BETA],
         )
 
@@ -136,12 +135,15 @@ async def managed_agent_text(pr: PullRequestContext, user_message: str) -> Async
             await teardown_managed_agent(client, session.id, agent.id, environment_id, created_environment)
 
 
-async def run_managed_agent_review(pr: PullRequestContext) -> int:
-    """Review the PR with a Managed Agents session that mounts the repo so Claude loads the project rules."""
+async def run_claude_review(pr: PullRequestContext) -> int:
+    """Review the PR with a Managed Agents session, mounting the repo so Claude loads the project rules."""
 
     async def _findings(inputs: ReviewInputs) -> AsyncIterator[Finding]:
+        stream = managed_agent_text(
+            pr, pull_request_message(inputs), mount_repo=SETTINGS.enforce_project_rules
+        )
         try:
-            async for finding in iter_findings(managed_agent_text(pr, pull_request_message(inputs))):
+            async for finding in iter_findings(stream):
                 yield finding
         except anthropic.APIError as exc:
             raise review.ReviewBackendError(
@@ -149,44 +151,6 @@ async def run_managed_agent_review(pr: PullRequestContext) -> int:
             ) from exc
 
     return await review.run_review_round(pr, CONFIG["review_marker"], _findings)
-
-
-async def run_messages_stream_review(pr: PullRequestContext) -> int:
-    """Review the PR with the Claude Messages API, streaming each finding as the model emits it."""
-
-    async def _findings(inputs: ReviewInputs) -> AsyncIterator[Finding]:
-        try:
-            async with anthropic.AsyncAnthropic(api_key=SETTINGS.anthropic_api_key) as client:
-                async with client.messages.stream(
-                    model=SETTINGS.claude_model,
-                    max_tokens=CLAUDE_MAX_TOKENS,
-                    thinking={"type": "adaptive"},
-                    system=[
-                        {
-                            "type": "text",
-                            "text": review_instructions(),
-                            "cache_control": {"type": "ephemeral"},
-                        }
-                    ],
-                    messages=[{"role": "user", "content": pull_request_message(inputs)}],
-                ) as stream:
-                    async for finding in iter_findings(stream.text_stream):
-                        yield finding
-        except anthropic.APIError as exc:
-            raise review.ReviewBackendError(
-                f"Claude review request failed: {exc}", retryable=is_retryable_api_error(exc)
-            ) from exc
-
-    return await review.run_review_round(pr, CONFIG["review_marker"], _findings)
-
-
-async def run_claude_review(pr: PullRequestContext) -> int:
-    """Review the PR with Claude, mounting the repo via Managed Agents when enforcing project rules."""
-
-    if SETTINGS.enforce_project_rules:
-        return await run_managed_agent_review(pr)
-
-    return await run_messages_stream_review(pr)
 
 
 async def generate_text(prompt: str) -> str:

@@ -22,7 +22,7 @@ class TestCursorErrorMessage:
         exc = CursorAgentError("invalid_argument: The SCM integration does not have access to repository x")
         message = cursor.cursor_error_message(exc)
 
-        assert "Grant Cursor access" in message
+        assert "repository access" in message
         assert "enforce-project-rules" in message
 
     def test_other_failure_uses_generic_message(self) -> None:
