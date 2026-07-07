@@ -111,3 +111,14 @@ class TestPostPrSummary:
             asyncio.run(post_pr_summary(pull_request_factory(), generate))
 
         summary_github_mocks["update_pull_request_body"].assert_not_awaited()
+
+    def test_skips_when_head_moved(self, summary_github_mocks, pull_request_factory) -> None:
+        """Test that the summary is skipped when the head advanced since the review."""
+
+        summary_github_mocks["current_head_sha"].return_value = "moved-sha"
+        generate = AsyncMock(return_value="Generated summary")
+
+        asyncio.run(post_pr_summary(pull_request_factory(), generate))
+
+        generate.assert_not_awaited()
+        summary_github_mocks["update_pull_request_body"].assert_not_awaited()

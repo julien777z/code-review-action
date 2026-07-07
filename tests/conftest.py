@@ -179,6 +179,7 @@ def summary_github_mocks(monkeypatch) -> dict[str, AsyncMock]:
     """Patch the GitHub seams post_pr_summary calls and return the mocks for assertion."""
 
     mocks = {
+        "current_head_sha": AsyncMock(return_value="abc123"),
         "pull_request_diff": AsyncMock(return_value="DIFF_BODY"),
         "pull_request_body": AsyncMock(return_value=""),
         "update_pull_request_body": AsyncMock(return_value=None),

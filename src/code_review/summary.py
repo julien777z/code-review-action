@@ -2,7 +2,12 @@ import logging
 from collections.abc import Awaitable, Callable
 
 from code_review.config import CONFIG, DISCLAIMER
-from code_review.github import pull_request_body, pull_request_diff, update_pull_request_body
+from code_review.github import (
+    current_head_sha,
+    pull_request_body,
+    pull_request_diff,
+    update_pull_request_body,
+)
 from code_review.models.shared.pull_request import PullRequestContext, ReviewInputs
 from code_review.prompt import summary_prompt
 
@@ -52,6 +57,11 @@ def merge_summary(body: str, section: str) -> str:
 
 async def post_pr_summary(pr: PullRequestContext, generate: GenerateSummary) -> None:
     """Generate a description summary for the PR and merge it into the PR body."""
+
+    if await current_head_sha(pr.repo, pr.number) != pr.head_sha:
+        logger.info("Head moved since review; skipping the summary for superseded commit %s.", pr.head_sha)
+
+        return
 
     diff = await pull_request_diff(pr.repo, pr.number)
     text = (await generate(summary_prompt(ReviewInputs(pr=pr, diff=diff)))).strip()
