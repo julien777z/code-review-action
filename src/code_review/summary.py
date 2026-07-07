@@ -65,10 +65,16 @@ def merge_summary(body: str, section: str) -> str:
     return f"{body}\n\n{section}"
 
 
+async def head_moved(pr: PullRequestContext) -> bool:
+    """Return whether the PR head advanced past the commit this summary was generated for."""
+
+    return await current_head_sha(pr.repo, pr.number) != pr.head_sha
+
+
 async def post_pr_summary(pr: PullRequestContext, generate: GenerateSummary) -> None:
     """Generate a description summary for the PR and merge it into the PR body."""
 
-    if await current_head_sha(pr.repo, pr.number) != pr.head_sha:
+    if await head_moved(pr):
         logger.info("Head moved since review; skipping the summary for superseded commit %s.", pr.head_sha)
 
         return
@@ -86,6 +92,13 @@ async def post_pr_summary(pr: PullRequestContext, generate: GenerateSummary) -> 
     text = (await generate(summary_prompt(pr, diff))).strip()
     if not text:
         raise SummaryGenerationError("The summary model returned no output.")
+
+    # Summary generation can be slow (a full agent session); re-check the head so a push that landed
+    # during it doesn't get this superseded commit's summary written onto the newer PR.
+    if await head_moved(pr):
+        logger.info("Head moved during summary generation; skipping the summary for superseded commit %s.", pr.head_sha)
+
+        return
 
     body = await pull_request_body(pr.repo, pr.number)
 

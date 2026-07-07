@@ -133,6 +133,18 @@ class TestPostPrSummary:
         generate.assert_not_awaited()
         summary_github_mocks["update_pull_request_body"].assert_not_awaited()
 
+    def test_skips_when_head_moved_during_generation(self, summary_github_mocks, pull_request_factory) -> None:
+        """Test that a push landing while the summary generates skips the write for the superseded commit."""
+
+        pr = pull_request_factory(head_sha="abc123")
+        summary_github_mocks["current_head_sha"].side_effect = ["abc123", "moved-sha"]
+        generate = AsyncMock(return_value="Generated summary")
+
+        asyncio.run(post_pr_summary(pr, generate))
+
+        generate.assert_awaited_once()
+        summary_github_mocks["update_pull_request_body"].assert_not_awaited()
+
     def test_skips_when_diff_too_large(self, summary_github_mocks, pull_request_factory) -> None:
         """Test that an oversized diff skips the summary cleanly without generating or updating."""
 
