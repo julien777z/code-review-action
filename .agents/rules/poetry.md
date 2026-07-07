@@ -1,3 +1,7 @@
+---
+alwaysApply: true
+---
+
 # Poetry Rules
 
 If dependencies are changed in `pyproject.toml`, run:
