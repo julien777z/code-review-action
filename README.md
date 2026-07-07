@@ -29,10 +29,15 @@ jobs:
       group: code-review-${{ github.event.pull_request.number || github.event.issue.number }}-${{ github.event_name == 'issue_comment' && 'comment' || 'review' }}
       cancel-in-progress: true
     steps:
+      - uses: actions/checkout@v4
       - uses: julien777z/code-review-action@v0
         with:
           cursor-api-key: ${{ secrets.CURSOR_API_KEY }}
 ```
+
+The `actions/checkout` step lets the Cursor backend load your `.cursor/rules` for
+[project-rule enforcement](#enforcing-project-rules); omit it only if you review with Claude and set
+`enforce-project-rules: false`.
 
 Provide at least one backend credential (`anthropic-api-key` or `cursor-api-key`). Comment
 `agent review` on a PR to trigger a manual review.
