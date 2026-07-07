@@ -57,3 +57,4 @@ async def post_pr_summary(pr: PullRequestContext, generate: GenerateSummary) -> 
     body = await pull_request_body(pr.repo, pr.number)
 
     await update_pull_request_body(pr.repo, pr.number, merge_summary(body, summary_section(text)))
+    logger.info("Updated PR #%s description with the generated summary.", pr.number)

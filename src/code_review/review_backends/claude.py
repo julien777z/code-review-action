@@ -1,4 +1,3 @@
-import logging
 from collections.abc import AsyncIterator
 from typing import Final
 
@@ -10,8 +9,6 @@ from code_review.models.shared.findings import Finding
 from code_review.models.shared.pull_request import PullRequestContext, ReviewInputs
 from code_review.prompt import pull_request_message, review_instructions
 from code_review.review_backends.jsonl import iter_findings
-
-logger = logging.getLogger("code_review.claude")
 
 CLAUDE_MAX_TOKENS: Final[int] = 16000
 SUMMARY_MAX_TOKENS: Final[int] = 1500
