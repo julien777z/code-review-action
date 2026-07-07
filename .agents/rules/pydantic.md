@@ -1,3 +1,7 @@
+---
+alwaysApply: true
+---
+
 # Pydantic Rules
 
 ## Prefer Pydantic Over Dataclasses

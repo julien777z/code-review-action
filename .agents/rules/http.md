@@ -1,3 +1,7 @@
+---
+alwaysApply: true
+---
+
 # HTTP Rules
 
 ## HTTP Clients
