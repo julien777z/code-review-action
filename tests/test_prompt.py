@@ -196,8 +196,7 @@ class TestSummaryPrompt:
     def test_combines_contract_and_diff(self, pull_request_factory) -> None:
         """Test that the single-string prompt carries the contract and the diff body."""
 
-        inputs = ReviewInputs(pr=pull_request_factory(), diff="DIFF_BODY")
-        prompt = summary_prompt(inputs)
+        prompt = summary_prompt(pull_request_factory(), "DIFF_BODY")
 
         assert "### Summary" in prompt
         assert "DIFF_BODY" in prompt
@@ -205,6 +204,13 @@ class TestSummaryPrompt:
     def test_wraps_diff_as_untrusted(self, pull_request_factory) -> None:
         """Test that the diff is fenced with a random marker."""
 
-        inputs = ReviewInputs(pr=pull_request_factory(), diff="DIFF_BODY")
+        prompt = summary_prompt(pull_request_factory(), "DIFF_BODY")
 
-        assert re.search(r"<untrusted_diff [0-9a-f]+>", summary_prompt(inputs)) is not None
+        assert re.search(r"<untrusted_diff [0-9a-f]+>", prompt) is not None
+
+    def test_omits_findings_block(self, pull_request_factory) -> None:
+        """Test that the summary prompt carries no existing-findings block, unlike the review message."""
+
+        prompt = summary_prompt(pull_request_factory(), "DIFF_BODY")
+
+        assert "already have review comments" not in prompt

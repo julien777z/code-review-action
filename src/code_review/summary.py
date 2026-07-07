@@ -10,7 +10,7 @@ from code_review.github import (
     pull_request_diff,
     update_pull_request_body,
 )
-from code_review.models.shared.pull_request import PullRequestContext, ReviewInputs
+from code_review.models.shared.pull_request import PullRequestContext
 from code_review.prompt import summary_prompt
 
 logger = logging.getLogger("code_review.summary")
@@ -75,7 +75,7 @@ async def post_pr_summary(pr: PullRequestContext, generate: GenerateSummary) -> 
 
         return
 
-    text = (await generate(summary_prompt(ReviewInputs(pr=pr, diff=diff)))).strip()
+    text = (await generate(summary_prompt(pr, diff))).strip()
     if not text:
         raise SummaryGenerationError("The summary model returned no output.")
 
