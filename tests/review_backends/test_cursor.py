@@ -1,6 +1,8 @@
 import asyncio
 from collections.abc import AsyncIterator
 
+from cursor_sdk import CursorAgentError
+
 from code_review.review_backends import cursor
 
 
@@ -9,6 +11,26 @@ async def chunk_stream(*parts: str) -> AsyncIterator[str]:
 
     for part in parts:
         yield part
+
+
+class TestCursorErrorMessage:
+    """Test that a missing-repo-access failure produces an actionable message."""
+
+    def test_missing_access_explains_how_to_fix(self) -> None:
+        """Test that an SCM access failure explains how to grant access or disable enforcement."""
+
+        exc = CursorAgentError("invalid_argument: The SCM integration does not have access to repository x")
+        message = cursor.cursor_error_message(exc)
+
+        assert "Grant Cursor access" in message
+        assert "enforce-project-rules" in message
+
+    def test_other_failure_uses_generic_message(self) -> None:
+        """Test that an unrelated failure keeps the generic message."""
+
+        exc = CursorAgentError("something else broke")
+
+        assert cursor.cursor_error_message(exc) == "Cursor agent run failed: something else broke"
 
 
 class TestGenerateText:

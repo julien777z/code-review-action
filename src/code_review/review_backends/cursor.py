@@ -39,6 +39,19 @@ async def launch_bridge_with_retry() -> AsyncClient:
     return await AsyncClient.launch_bridge()
 
 
+def cursor_error_message(exc: CursorAgentError) -> str:
+    """Return a clear failure message, explaining missing repo access when that is the cause."""
+
+    if "does not have access" in str(exc).lower():
+        return (
+            "Cursor's GitHub integration cannot access this repository, so the review agent could not "
+            "clone it to load the project rules. Grant Cursor access to this repository, or set "
+            f"enforce-project-rules to false. Original error: {exc}"
+        )
+
+    return f"Cursor agent run failed: {exc}"
+
+
 async def run_agent(prompt: str, repo: CloudRepository | None = None) -> AsyncIterator[str]:
     """Launch the Cursor agent on the standard variant and stream its reply text in chunks."""
 
@@ -73,14 +86,18 @@ async def run_agent(prompt: str, repo: CloudRepository | None = None) -> AsyncIt
 async def run_cursor_review(pr: PullRequestContext) -> int:
     """Review the PR with the Cursor backend, streaming each finding as the agent emits it."""
 
-    repo = CloudRepository(url=f"https://github.com/{pr.repo}", starting_ref=pr.head_sha)
+    repo = (
+        CloudRepository(url=f"https://github.com/{pr.repo}", starting_ref=pr.head_sha)
+        if SETTINGS.enforce_project_rules
+        else None
+    )
 
     async def _findings(inputs: ReviewInputs) -> AsyncIterator[Finding]:
         try:
             async for finding in iter_findings(run_agent(cursor_prompt(inputs), repo=repo)):
                 yield finding
         except CursorAgentError as exc:
-            raise review.ReviewBackendError(f"Cursor agent run failed: {exc}", retryable=exc.is_retryable) from exc
+            raise review.ReviewBackendError(cursor_error_message(exc), retryable=exc.is_retryable) from exc
 
     return await review.run_review_round(pr, CONFIG["review_marker"], _findings)
 

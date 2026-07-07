@@ -96,12 +96,17 @@ first-review events, never on later pushes.
 
 ## Enforcing project rules
 
-The review agent already loads whatever coding rules, conventions, or skills your repository defines
-for it (for example agent rule files or skills). With `enforce-project-rules` on, the review is told
-to apply those rules and report a finding on any changed line that violates them. It is agent-agnostic
-and a no-op when the repository defines no such rules.
+With `enforce-project-rules` on (the default), the review applies your repository's own coding rules
+and reports a finding on any changed line that violates them.
 
-- `enforce-project-rules` — set to `false` to skip project-rule enforcement (default `true`).
+The Cursor backend loads those rules by cloning the repository during the review, so it picks up your
+`.cursor/rules` automatically. This requires **Cursor's GitHub integration to have access to the
+repository** — connect Cursor to GitHub and grant it access to the repo. If Cursor cannot access the
+repository, the review fails with a message telling you to grant access (or to set
+`enforce-project-rules: false`).
+
+- `enforce-project-rules` — set to `false` to review without cloning the repo, skipping rule
+  enforcement (default `true`).
 
 ## Suggesting simplifications
 
