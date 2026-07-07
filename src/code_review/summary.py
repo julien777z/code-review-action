@@ -25,9 +25,17 @@ class SummaryGenerationError(Exception):
 def summary_section(summary_text: str) -> str:
     """Render the marker-delimited summary block appended to the PR description."""
 
-    # Strip the section markers so untrusted model output cannot inject a second marker pair that
-    # would misalign the next replacement.
-    fenced = summary_text.replace(CONFIG["summary_marker_open"], "").replace(CONFIG["summary_marker_close"], "")
+    # Strip every marker this module wraps model output in so untrusted output cannot forge a second
+    # marker pair (misaligning the next merge_summary replacement) or a closing untrusted-input fence
+    # (making forged content after it read as trusted).
+    fenced = summary_text
+    for token in (
+        CONFIG["summary_marker_open"],
+        CONFIG["summary_marker_close"],
+        CONFIG["untrusted_input_open"],
+        CONFIG["untrusted_input_close"],
+    ):
+        fenced = fenced.replace(token, "")
 
     return (
         f"{CONFIG['summary_marker_open']}\n"
