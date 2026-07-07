@@ -55,10 +55,10 @@ class TestStringInputs:
     @pytest.mark.parametrize(
         ("input_name", "env_name"),
         [
-            ("claude-environment-id", "CLAUDE_ENVIRONMENT_ID"),
             ("project-rules-severity", "PROJECT_RULES_SEVERITY"),
+            ("simplify-suggest-severity", "SIMPLIFY_SUGGEST_SEVERITY"),
         ],
-        ids=["claude-environment-id", "project-rules-severity"],
+        ids=["project-rules-severity", "simplify-suggest-severity"],
     )
     def test_input_default_and_env_wired(self, input_name: str, env_name: str) -> None:
         """Test that the input defaults to empty and passes through as its env var."""

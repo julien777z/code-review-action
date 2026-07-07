@@ -98,6 +98,22 @@ class TestReviewInstructions:
         assert "code-simplify" not in text
         assert "nearby and related code" not in text
 
+    def test_simplifications_default_to_low_severity(self, mock_config) -> None:
+        """Test that simplification suggestions default to low severity when none is configured."""
+
+        mock_config(simplify_suggest=True, simplify_suggest_severity=None)
+
+        assert "`low`-severity optional suggestion" in review_instructions()
+
+    def test_simplifications_use_configured_severity(self, mock_config) -> None:
+        """Test that a configured severity is applied to simplification suggestions."""
+
+        mock_config(simplify_suggest=True, simplify_suggest_severity=Severity.MEDIUM)
+        text = review_instructions()
+
+        assert "`medium`-severity optional suggestion" in text
+        assert "`low`-severity optional suggestion" not in text
+
 
 class TestExistingFindingsBlock:
     """Test that already-posted findings are listed for exact-title matching."""

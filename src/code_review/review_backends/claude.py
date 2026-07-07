@@ -50,11 +50,8 @@ def github_repository_resource(pr: PullRequestContext) -> BetaManagedAgentsGitHu
     )
 
 
-async def resolve_environment(client: anthropic.AsyncAnthropic) -> tuple[str, bool]:
-    """Return the environment to run the session in and whether this run created it."""
-
-    if SETTINGS.claude_environment_id:
-        return SETTINGS.claude_environment_id, False
+async def create_environment(client: anthropic.AsyncAnthropic) -> str:
+    """Create a fresh cloud environment for this run's session and return its id."""
 
     environment = await client.beta.environments.create(
         name=REVIEW_AGENT_NAME,
@@ -62,23 +59,18 @@ async def resolve_environment(client: anthropic.AsyncAnthropic) -> tuple[str, bo
         betas=[MANAGED_AGENTS_BETA],
     )
 
-    return environment.id, True
+    return environment.id
 
 
 async def teardown_managed_agent(
-    client: anthropic.AsyncAnthropic,
-    session_id: str,
-    agent_id: str,
-    environment_id: str,
-    created_environment: bool,
+    client: anthropic.AsyncAnthropic, session_id: str, agent_id: str, environment_id: str
 ) -> None:
-    """Delete the session and agent, and the environment when this run created it, tolerating teardown failures."""
+    """Delete the run's session, agent, and environment, tolerating teardown failures."""
 
     try:
         await client.beta.sessions.delete(session_id, betas=[MANAGED_AGENTS_BETA])
         await client.beta.agents.archive(agent_id, betas=[MANAGED_AGENTS_BETA])
-        if created_environment:
-            await client.beta.environments.delete(environment_id, betas=[MANAGED_AGENTS_BETA])
+        await client.beta.environments.delete(environment_id, betas=[MANAGED_AGENTS_BETA])
     except anthropic.APIError as exc:
         logger.warning("Could not tear down the Claude agent session: %s", exc)
 
@@ -87,7 +79,7 @@ async def managed_agent_text(pr: PullRequestContext, user_message: str, *, mount
     """Run one Managed Agents turn, streaming the agent's response text and mounting the repo when asked."""
 
     async with anthropic.AsyncAnthropic(api_key=SETTINGS.anthropic_api_key) as client:
-        environment_id, created_environment = await resolve_environment(client)
+        environment_id = await create_environment(client)
         agent = await client.beta.agents.create(
             name=REVIEW_AGENT_NAME,
             model=SETTINGS.claude_model,

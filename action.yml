@@ -34,10 +34,6 @@ inputs:
   cursor-model:
     description: Cursor model id for the Cursor backend.
     default: composer-2.5
-  claude-environment-id:
-    description: Managed Agents cloud environment id the Claude backend reuses to mount the repository when enforcing project rules. Empty creates and deletes a fresh environment for each run.
-    required: false
-    default: ""
   additional-context:
     description: Extra context injected into the review prompt.
     default: ""
@@ -57,10 +53,13 @@ inputs:
     description: Fixed severity to report project-rule violations at (critical, high, medium, or low). Empty lets the review rate each violation itself.
     default: ""
   simplify-suggest:
-    description: Also suggest code simplifications (using the code-simplify skill) as low-severity nits.
+    description: Also suggest code simplifications using the code-simplify skill, as optional suggestions.
     default: "false"
+  simplify-suggest-severity:
+    description: Severity to report simplification suggestions at (critical, high, medium, or low). Empty defaults to low.
+    default: ""
   simplify-nearby-code:
-    description: Extend simplification suggestions to weigh nearby and related code as review criteria, still as low-severity nits.
+    description: Extend simplification suggestions to weigh nearby and related code as review criteria.
     default: "false"
   min-severity:
     description: Lowest severity worth posting and counting — critical, high, medium, or low.
@@ -111,7 +110,6 @@ runs:
         FIRST_REVIEW_MODEL: ${{ inputs.first-review-model }}
         CLAUDE_MODEL: ${{ inputs.claude-model }}
         CURSOR_MODEL: ${{ inputs.cursor-model }}
-        CLAUDE_ENVIRONMENT_ID: ${{ inputs.claude-environment-id }}
         ADDITIONAL_CONTEXT: ${{ inputs.additional-context }}
         APPROVAL_INCLUDE: ${{ inputs.approval-include }}
         APPROVAL_DISABLE: ${{ inputs.approval-disable }}
@@ -119,6 +117,7 @@ runs:
         ENFORCE_PROJECT_RULES: ${{ inputs.enforce-project-rules }}
         PROJECT_RULES_SEVERITY: ${{ inputs.project-rules-severity }}
         SIMPLIFY_SUGGEST: ${{ inputs.simplify-suggest }}
+        SIMPLIFY_SUGGEST_SEVERITY: ${{ inputs.simplify-suggest-severity }}
         SIMPLIFY_NEARBY_CODE: ${{ inputs.simplify-nearby-code }}
         MIN_SEVERITY: ${{ inputs.min-severity }}
         LOW_FINDINGS_CAP: ${{ inputs.low-findings-cap }}

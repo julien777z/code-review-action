@@ -119,38 +119,22 @@ class TestManagedAgentText:
         with pytest.raises(review.ReviewBackendError):
             asyncio.run(collect(claude.managed_agent_text(pull_request_factory(), "review this", mount_repo=True)))
 
-    def test_tears_down_session_and_created_environment(
+    def test_creates_and_tears_down_the_run_resources(
         self, monkeypatch, mock_config, pull_request_factory, managed_agent_client_factory, managed_agent_event_factory
     ) -> None:
-        """Test that the session and agent are removed and a run-created environment is deleted."""
+        """Test that a fresh environment is created for the run and every resource is torn down."""
 
-        mock_config(anthropic_api_key="key", claude_environment_id="")
+        mock_config(anthropic_api_key="key")
         events = [managed_agent_event_factory("agent.message", text="x"), managed_agent_event_factory("session.status_idle", stop_reason="end_turn")]
         client = managed_agent_client_factory(events)
         monkeypatch.setattr("code_review.review_backends.claude.anthropic.AsyncAnthropic", lambda **kwargs: client)
 
         asyncio.run(collect(claude.managed_agent_text(pull_request_factory(), "review this", mount_repo=True)))
 
+        client.beta.environments.create.assert_awaited_once()
         client.beta.sessions.delete.assert_awaited_once()
         client.beta.agents.archive.assert_awaited_once()
-        client.beta.environments.create.assert_awaited_once()
         client.beta.environments.delete.assert_awaited_once()
-
-    def test_reuses_configured_environment(
-        self, monkeypatch, mock_config, pull_request_factory, managed_agent_client_factory, managed_agent_event_factory
-    ) -> None:
-        """Test that a configured environment is reused and never created or deleted."""
-
-        mock_config(anthropic_api_key="key", claude_environment_id="env-configured")
-        events = [managed_agent_event_factory("agent.message", text="x"), managed_agent_event_factory("session.status_idle", stop_reason="end_turn")]
-        client = managed_agent_client_factory(events)
-        monkeypatch.setattr("code_review.review_backends.claude.anthropic.AsyncAnthropic", lambda **kwargs: client)
-
-        asyncio.run(collect(claude.managed_agent_text(pull_request_factory(), "review this", mount_repo=True)))
-
-        assert client.beta.sessions.create.await_args.kwargs["environment_id"] == "env-configured"
-        client.beta.environments.create.assert_not_awaited()
-        client.beta.environments.delete.assert_not_awaited()
 
 
 class TestGenerateText:

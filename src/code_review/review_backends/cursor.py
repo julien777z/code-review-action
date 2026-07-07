@@ -50,8 +50,6 @@ async def run_agent(prompt: str, *, load_project_rules: bool = False) -> AsyncIt
         else SETTINGS.cursor_model
     )
 
-    # A local agent loads the checked-out repo's project settings (.cursor/rules) from the working
-    # directory only when asked, so an unrelated turn (the summary) does not pull them in.
     local = LocalAgentOptions(setting_sources=["project"] if load_project_rules else [])
     agent = await AsyncAgent.create(
         client=client, model=model_selection, api_key=SETTINGS.cursor_api_key, local=local

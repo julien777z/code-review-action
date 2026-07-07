@@ -81,7 +81,6 @@ class Settings(BaseSettings):
     first_review_model: ReviewModel | None = None
     claude_model: str = CONFIG["default_claude_model"]
     cursor_model: str = CONFIG["default_cursor_model"]
-    claude_environment_id: str = ""
     additional_context: str = ""
     approval_include: Annotated[frozenset[Severity], NoDecode] = frozenset({Severity.CRITICAL})
     approval_disable: bool = False
@@ -89,6 +88,7 @@ class Settings(BaseSettings):
     enforce_project_rules: bool = True
     project_rules_severity: Severity | None = None
     simplify_suggest: bool = False
+    simplify_suggest_severity: Severity | None = None
     simplify_nearby_code: bool = False
     min_severity: Severity = Severity.LOW
     low_findings_cap: int = 3
@@ -107,7 +107,14 @@ class Settings(BaseSettings):
 
         return {key: stripped for key, value in data.items() if (stripped := value.strip())}
 
-    @field_validator("review_model", "first_review_model", "min_severity", "project_rules_severity", mode="before")
+    @field_validator(
+        "review_model",
+        "first_review_model",
+        "min_severity",
+        "project_rules_severity",
+        "simplify_suggest_severity",
+        mode="before",
+    )
     @classmethod
     def normalize_enum(cls, value: str | None) -> str | None:
         """Trim and lower-case an enum input so it matches the enum's values."""
