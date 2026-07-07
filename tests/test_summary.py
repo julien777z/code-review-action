@@ -1,4 +1,5 @@
 import asyncio
+import subprocess
 from unittest.mock import AsyncMock
 
 import pytest
@@ -122,3 +123,27 @@ class TestPostPrSummary:
 
         generate.assert_not_awaited()
         summary_github_mocks["update_pull_request_body"].assert_not_awaited()
+
+    def test_skips_when_diff_too_large(self, summary_github_mocks, pull_request_factory) -> None:
+        """Test that an oversized diff skips the summary cleanly without generating or updating."""
+
+        summary_github_mocks["pull_request_diff"].side_effect = subprocess.CalledProcessError(
+            1, "gh", stderr="the diff is too large to display"
+        )
+        generate = AsyncMock(return_value="Generated summary")
+
+        asyncio.run(post_pr_summary(pull_request_factory(), generate))
+
+        generate.assert_not_awaited()
+        summary_github_mocks["update_pull_request_body"].assert_not_awaited()
+
+    def test_propagates_unrelated_diff_error(self, summary_github_mocks, pull_request_factory) -> None:
+        """Test that a diff failure unrelated to size propagates instead of being silently skipped."""
+
+        summary_github_mocks["pull_request_diff"].side_effect = subprocess.CalledProcessError(
+            1, "gh", stderr="network unreachable"
+        )
+        generate = AsyncMock(return_value="Generated summary")
+
+        with pytest.raises(subprocess.CalledProcessError):
+            asyncio.run(post_pr_summary(pull_request_factory(), generate))

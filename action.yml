@@ -51,7 +51,7 @@ inputs:
     description: Append an AI-generated summary (bullets, risk note, overview) to the PR description on open/ready events.
     default: "true"
   enforce-project-rules:
-    description: Enforce the repository's own coding rules (.claude/rules/*.md) as part of the review. No-op when the repository has none.
+    description: Enforce the repository's own coding rules as part of the review. Each backend clones the repo and loads the rule files it understands. No-op when the repository defines none.
     default: "true"
   simplify-suggest:
     description: Also suggest code simplifications (using the code-simplify skill) as low-severity nits.

@@ -1,9 +1,11 @@
 import logging
+import subprocess
 from collections.abc import Awaitable, Callable
 
 from code_review.config import CONFIG, DISCLAIMER
 from code_review.github import (
     current_head_sha,
+    is_diff_too_large,
     pull_request_body,
     pull_request_diff,
     update_pull_request_body,
@@ -63,7 +65,16 @@ async def post_pr_summary(pr: PullRequestContext, generate: GenerateSummary) -> 
 
         return
 
-    diff = await pull_request_diff(pr.repo, pr.number)
+    try:
+        diff = await pull_request_diff(pr.repo, pr.number)
+    except subprocess.CalledProcessError as exc:
+        if not is_diff_too_large(exc):
+            raise
+
+        logger.info("PR #%s diff is too large to summarize; skipping the summary.", pr.number)
+
+        return
+
     text = (await generate(summary_prompt(ReviewInputs(pr=pr, diff=diff)))).strip()
     if not text:
         raise SummaryGenerationError("The summary model returned no output.")
