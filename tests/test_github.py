@@ -7,6 +7,7 @@ import pytest
 from code_review.github import (
     already_reviewed,
     head_check_concluded,
+    is_diff_too_large,
     pull_request_body,
     resolve_threads,
     update_pull_request_body,
@@ -101,6 +102,33 @@ class TestHeadCheckConcluded:
 
         with pytest.raises(subprocess.CalledProcessError):
             asyncio.run(head_check_concluded("octo/repo", "abc123"))
+
+
+class TestIsDiffTooLarge:
+    """Test detection of oversized-diff failures from gh pr diff."""
+
+    @pytest.mark.parametrize(
+        "stderr",
+        [
+            "gh: Not Acceptable (HTTP 406)",
+            "the diff exceeded the maximum number of files",
+            "this diff is too large to display",
+        ],
+        ids=["not-acceptable", "exceeded", "too-large"],
+    )
+    def test_detects_oversized(self, stderr: str) -> None:
+        """Test that oversized-diff failures are recognized."""
+
+        exc = subprocess.CalledProcessError(1, ["gh", "pr", "diff"], stderr=stderr)
+
+        assert is_diff_too_large(exc) is True
+
+    def test_ignores_unrelated_error(self) -> None:
+        """Test that an unrelated failure is not treated as an oversized diff."""
+
+        exc = subprocess.CalledProcessError(1, ["gh", "pr", "diff"], stderr="gh: Not Found (HTTP 404)")
+
+        assert is_diff_too_large(exc) is False
 
 
 class TestPullRequestBody:

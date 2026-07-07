@@ -21,6 +21,14 @@ GITHUB_RATE_LIMIT_PHRASES: Final[tuple[str, ...]] = (
     "rate limit exceeded",
     "too many requests",
 )
+GITHUB_DIFF_TOO_LARGE_PHRASES: Final[tuple[str, ...]] = (
+    "diff exceeded",
+    "diff is too large",
+    "too large to",
+    "maximum number of files",
+    "http 406",
+    "not acceptable",
+)
 
 
 def _github_error_text(exc: subprocess.CalledProcessError) -> str:
@@ -42,6 +50,14 @@ def is_github_rate_limit(exc: subprocess.CalledProcessError) -> bool:
     text = _github_error_text(exc)
 
     return any(phrase in text for phrase in GITHUB_RATE_LIMIT_PHRASES)
+
+
+def is_diff_too_large(exc: subprocess.CalledProcessError) -> bool:
+    """Return True when a `gh pr diff` failure indicates the diff exceeds GitHub's size cap."""
+
+    text = _github_error_text(exc)
+
+    return any(phrase in text for phrase in GITHUB_DIFF_TOO_LARGE_PHRASES)
 
 
 async def run_gh(args: list[str], stdin: str | None = None, token: str | None = None) -> str:

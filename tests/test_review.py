@@ -1,4 +1,5 @@
 import asyncio
+import subprocess
 from collections.abc import AsyncIterator
 from unittest.mock import AsyncMock
 
@@ -379,6 +380,36 @@ class TestRunReviewRound:
 
         assert result == 0
         assert review_github_mocks["post_comment"].await_count == 2
+
+    def test_diff_too_large_posts_note_and_skips(
+        self, mock_config, review_github_mocks, stream_findings_factory, pull_request_factory
+    ) -> None:
+        """Test that an oversized diff posts a note, records a neutral verdict, and returns success."""
+
+        review_github_mocks["pull_request_diff"].side_effect = subprocess.CalledProcessError(
+            1, ["gh", "pr", "diff"], stderr="gh: Not Acceptable (HTTP 406)"
+        )
+
+        result = asyncio.run(run_review_round(pull_request_factory(), MARKER, stream_findings_factory([])))
+
+        assert result == 0
+        review_github_mocks["post_review"].assert_awaited_once()
+        body = review_github_mocks["post_review"].await_args.args[2].body
+
+        assert "too large to auto-review" in body
+        assert review_github_mocks["complete_check_run"].await_args.args[2] == "neutral"
+
+    def test_non_size_diff_error_propagates(
+        self, mock_config, review_github_mocks, stream_findings_factory, pull_request_factory
+    ) -> None:
+        """Test that a diff fetch failure unrelated to size still fails loudly."""
+
+        review_github_mocks["pull_request_diff"].side_effect = subprocess.CalledProcessError(
+            1, ["gh", "pr", "diff"], stderr="gh: Not Found (HTTP 404)"
+        )
+
+        with pytest.raises(subprocess.CalledProcessError):
+            asyncio.run(run_review_round(pull_request_factory(), MARKER, stream_findings_factory([])))
 
     def test_out_of_bounds_goes_to_verdict_body(
         self, mock_config, review_github_mocks, stream_findings_factory, pull_request_factory, finding_factory

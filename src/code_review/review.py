@@ -17,6 +17,7 @@ from code_review.github import (
     current_head_sha,
     diff_anchors,
     head_check_concluded,
+    is_diff_too_large,
     list_review_threads,
     post_comment,
     post_review,
@@ -332,6 +333,18 @@ async def post_review_with_fallback(repo: str, pr_number: int, payload: ReviewPa
         logger.warning("Could not post the %s review; the check run still records the verdict.", event)
 
 
+async def note_diff_too_large(pr: PullRequestContext, marker: str) -> int:
+    """Post a note that the diff is too large to auto-review, record the verdict, and return success."""
+
+    body = f"The diff is too large to auto-review, so this review was skipped.\n\n{DISCLAIMER}\n\n{marker}"
+    check_id = None if SETTINGS.approval_disable else await start_check_run(pr.repo, pr.head_sha)
+
+    await post_review(pr.repo, pr.number, ReviewPayload(commit_id=pr.head_sha, event="COMMENT", body=body, comments=[]))
+    await complete_check_run(pr.repo, check_id, "neutral", "Diff too large", "The diff is too large to auto-review.")
+
+    return 0
+
+
 async def run_review_round(pr: PullRequestContext, marker: str, get_findings: GetFindings) -> int:
     """Stream a backend's findings, posting each anchorable one as it arrives, then record the verdict."""
 
@@ -346,8 +359,17 @@ async def run_review_round(pr: PullRequestContext, marker: str, get_findings: Ge
 
         return 0
 
-    diff, (anchors, unpatched), posted_findings = await asyncio.gather(
-        pull_request_diff(pr.repo, pr.number),
+    try:
+        diff = await pull_request_diff(pr.repo, pr.number)
+    except subprocess.CalledProcessError as exc:
+        if not is_diff_too_large(exc):
+            raise
+
+        logger.warning("PR diff is too large to auto-review; posting a note and skipping.")
+
+        return await note_diff_too_large(pr, marker)
+
+    (anchors, unpatched), posted_findings = await asyncio.gather(
         diff_anchors(pr.repo, pr.number),
         existing_finding_titles(pr.repo, pr.number, marker),
     )
