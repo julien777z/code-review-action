@@ -18,9 +18,9 @@ class TestRunClaudeReview:
     """Test that the review runs through a Managed Agents session and mounts the repo per enforcement."""
 
     @pytest.mark.parametrize(
-        ("enforce", "repo_mounted"),
-        [(True, True), (False, False)],
-        ids=["enforcing", "not-enforcing"],
+        ("enforce", "nearby", "repo_mounted"),
+        [(True, False, True), (False, True, True), (False, False, False)],
+        ids=["enforcing", "nearby-code", "neither"],
     )
     def test_repo_mount_follows_enforcement(
         self,
@@ -31,11 +31,12 @@ class TestRunClaudeReview:
         managed_agent_client_factory,
         managed_agent_event_factory,
         enforce: bool,
+        nearby: bool,
         repo_mounted: bool,
     ) -> None:
-        """Test that the session mounts the repo only when project rules are enforced."""
+        """Test that the session mounts the repo when rules are enforced or nearby code is weighed."""
 
-        mock_config(anthropic_api_key="key", enforce_project_rules=enforce)
+        mock_config(anthropic_api_key="key", enforce_project_rules=enforce, simplify_nearby_code=nearby)
         events = [
             managed_agent_event_factory("agent.message", text=CONFIG["no_findings_marker"]),
             managed_agent_event_factory("session.status_idle", stop_reason="end_turn"),
@@ -135,6 +136,23 @@ class TestManagedAgentText:
         client.beta.sessions.delete.assert_awaited_once()
         client.beta.agents.archive.assert_awaited_once()
         client.beta.environments.delete.assert_awaited_once()
+
+    def test_tears_down_environment_when_agent_creation_fails(
+        self, monkeypatch, mock_config, pull_request_factory, managed_agent_client_factory
+    ) -> None:
+        """Test that a failure creating the agent still deletes the environment and skips the missing resources."""
+
+        mock_config(anthropic_api_key="key")
+        client = managed_agent_client_factory([])
+        client.beta.agents.create.side_effect = RuntimeError("boom")
+        monkeypatch.setattr("code_review.review_backends.claude.anthropic.AsyncAnthropic", lambda **kwargs: client)
+
+        with pytest.raises(RuntimeError):
+            asyncio.run(collect(claude.managed_agent_text(pull_request_factory(), "review this", mount_repo=True)))
+
+        client.beta.environments.delete.assert_awaited_once()
+        client.beta.sessions.delete.assert_not_awaited()
+        client.beta.agents.archive.assert_not_awaited()
 
 
 class TestGenerateText:

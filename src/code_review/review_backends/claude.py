@@ -1,5 +1,5 @@
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable
 from typing import Final
 
 import anthropic
@@ -63,16 +63,25 @@ async def create_environment(client: anthropic.AsyncAnthropic) -> str:
 
 
 async def teardown_managed_agent(
-    client: anthropic.AsyncAnthropic, session_id: str, agent_id: str, environment_id: str
+    client: anthropic.AsyncAnthropic, environment_id: str, agent_id: str | None, session_id: str | None
 ) -> None:
-    """Delete the run's session, agent, and environment, tolerating teardown failures."""
+    """Delete whichever of the run's session, agent, and environment were created, tolerating failures."""
 
-    try:
-        await client.beta.sessions.delete(session_id, betas=[MANAGED_AGENTS_BETA])
-        await client.beta.agents.archive(agent_id, betas=[MANAGED_AGENTS_BETA])
-        await client.beta.environments.delete(environment_id, betas=[MANAGED_AGENTS_BETA])
-    except anthropic.APIError as exc:
-        logger.warning("Could not tear down the Claude agent session: %s", exc)
+    async def _delete(action: Awaitable[object]) -> None:
+        """Await one teardown call and swallow an API failure so the others still run."""
+
+        try:
+            await action
+        except anthropic.APIError as exc:
+            logger.warning("Could not tear down a Claude agent resource: %s", exc)
+
+    if session_id is not None:
+        await _delete(client.beta.sessions.delete(session_id, betas=[MANAGED_AGENTS_BETA]))
+
+    if agent_id is not None:
+        await _delete(client.beta.agents.archive(agent_id, betas=[MANAGED_AGENTS_BETA]))
+
+    await _delete(client.beta.environments.delete(environment_id, betas=[MANAGED_AGENTS_BETA]))
 
 
 async def managed_agent_text(pr: PullRequestContext, user_message: str, *, mount_repo: bool) -> AsyncIterator[str]:
@@ -80,21 +89,26 @@ async def managed_agent_text(pr: PullRequestContext, user_message: str, *, mount
 
     async with anthropic.AsyncAnthropic(api_key=SETTINGS.anthropic_api_key) as client:
         environment_id = await create_environment(client)
-        agent = await client.beta.agents.create(
-            name=REVIEW_AGENT_NAME,
-            model=SETTINGS.claude_model,
-            system=review_instructions(),
-            tools=[{"type": "agent_toolset_20260401", "default_config": {"enabled": True}}],
-            betas=[MANAGED_AGENTS_BETA],
-        )
-        session = await client.beta.sessions.create(
-            agent={"type": "agent", "id": agent.id, "version": agent.version},
-            environment_id=environment_id,
-            resources=[github_repository_resource(pr)] if mount_repo else [],
-            betas=[MANAGED_AGENTS_BETA],
-        )
+        agent_id: str | None = None
+        session_id: str | None = None
 
         try:
+            agent = await client.beta.agents.create(
+                name=REVIEW_AGENT_NAME,
+                model=SETTINGS.claude_model,
+                system=review_instructions(),
+                tools=[{"type": "agent_toolset_20260401", "default_config": {"enabled": True}}],
+                betas=[MANAGED_AGENTS_BETA],
+            )
+            agent_id = agent.id
+            session = await client.beta.sessions.create(
+                agent={"type": "agent", "id": agent.id, "version": agent.version},
+                environment_id=environment_id,
+                resources=[github_repository_resource(pr)] if mount_repo else [],
+                betas=[MANAGED_AGENTS_BETA],
+            )
+            session_id = session.id
+
             produced_text = False
             async with await client.beta.sessions.events.stream(
                 session_id=session.id, betas=[MANAGED_AGENTS_BETA]
@@ -122,16 +136,15 @@ async def managed_agent_text(pr: PullRequestContext, user_message: str, *, mount
             if not produced_text:
                 raise review.ReviewBackendError("The Claude agent session produced no output.", retryable=True)
         finally:
-            await teardown_managed_agent(client, session.id, agent.id, environment_id)
+            await teardown_managed_agent(client, environment_id, agent_id, session_id)
 
 
 async def run_claude_review(pr: PullRequestContext) -> int:
-    """Review the PR with a Managed Agents session, mounting the repo so Claude loads the project rules."""
+    """Review the PR with a Managed Agents session."""
 
     async def _findings(inputs: ReviewInputs) -> AsyncIterator[Finding]:
-        stream = managed_agent_text(
-            pr, pull_request_message(inputs), mount_repo=SETTINGS.enforce_project_rules
-        )
+        mount_repo = SETTINGS.enforce_project_rules or SETTINGS.simplify_nearby_code
+        stream = managed_agent_text(pr, pull_request_message(inputs), mount_repo=mount_repo)
         try:
             async for finding in iter_findings(stream):
                 yield finding
