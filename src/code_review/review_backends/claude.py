@@ -119,8 +119,6 @@ async def managed_agent_text(pr: PullRequestContext, user_message: str, *, mount
                     elif event.type == "session.status_terminated":
                         break
 
-            # No text at all means the session errored or terminated without answering; fail loudly rather
-            # than let an empty result read as a clean, no-findings review that would approve the PR.
             if not produced_text:
                 raise review.ReviewBackendError("The Claude agent session produced no output.", retryable=True)
         finally:
