@@ -49,6 +49,12 @@ inputs:
   enforce-project-rules:
     description: Enforce the repository's own coding rules (.claude/rules/*.md) as part of the review. No-op when the repository has none.
     default: "true"
+  simplify-suggest:
+    description: Also suggest code simplifications (using the code-simplify skill) as low-severity nits.
+    default: "false"
+  simplify-nearby-code:
+    description: Extend simplification suggestions to weigh nearby and related code as review criteria, still as low-severity nits.
+    default: "false"
   min-severity:
     description: Lowest severity worth posting and counting — critical, high, medium, or low.
     default: low
@@ -103,6 +109,8 @@ runs:
         APPROVAL_DISABLE: ${{ inputs.approval-disable }}
         PR_REVIEW_SUMMARY: ${{ inputs.pr-review-summary }}
         ENFORCE_PROJECT_RULES: ${{ inputs.enforce-project-rules }}
+        SIMPLIFY_SUGGEST: ${{ inputs.simplify-suggest }}
+        SIMPLIFY_NEARBY_CODE: ${{ inputs.simplify-nearby-code }}
         MIN_SEVERITY: ${{ inputs.min-severity }}
         LOW_FINDINGS_CAP: ${{ inputs.low-findings-cap }}
         MAX_FINDINGS: ${{ inputs.max-findings }}

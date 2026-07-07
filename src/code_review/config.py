@@ -86,6 +86,8 @@ class Settings(BaseSettings):
     approval_disable: bool = False
     pr_review_summary: bool = True
     enforce_project_rules: bool = True
+    simplify_suggest: bool = False
+    simplify_nearby_code: bool = False
     min_severity: Severity = Severity.LOW
     low_findings_cap: int = 3
     max_findings: int | None = None
@@ -110,7 +112,15 @@ class Settings(BaseSettings):
 
         return value.strip().lower() if value is not None else value
 
-    @field_validator("approval_disable", "review_drafts", "pr_review_summary", "enforce_project_rules", mode="before")
+    @field_validator(
+        "approval_disable",
+        "review_drafts",
+        "pr_review_summary",
+        "enforce_project_rules",
+        "simplify_suggest",
+        "simplify_nearby_code",
+        mode="before",
+    )
     @classmethod
     def normalize_bool(cls, value: str | bool) -> bool:
         """Parse a boolean input from its string form."""

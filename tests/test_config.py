@@ -92,6 +92,36 @@ class TestEnforceProjectRulesSetting:
         assert Settings().enforce_project_rules is expected
 
 
+class TestSimplifySettings:
+    """Test that the simplify-* inputs parse from the environment and default off."""
+
+    @pytest.mark.parametrize(
+        "env_name",
+        ["SIMPLIFY_SUGGEST", "SIMPLIFY_NEARBY_CODE"],
+        ids=["suggest", "nearby-code"],
+    )
+    def test_defaults_false(self, monkeypatch, env_name: str) -> None:
+        """Test that an unset input leaves the option disabled."""
+
+        monkeypatch.delenv(env_name, raising=False)
+        settings = Settings()
+
+        assert getattr(settings, env_name.lower()) is False
+
+    @pytest.mark.parametrize(
+        "env_name",
+        ["SIMPLIFY_SUGGEST", "SIMPLIFY_NEARBY_CODE"],
+        ids=["suggest", "nearby-code"],
+    )
+    def test_parses_true(self, monkeypatch, env_name: str) -> None:
+        """Test that the string input parses to a boolean."""
+
+        monkeypatch.setenv(env_name, "true")
+        settings = Settings()
+
+        assert getattr(settings, env_name.lower()) is True
+
+
 class TestSeverity:
     """Test that severity parses case-insensitively and orders correctly."""
 

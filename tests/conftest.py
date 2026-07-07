@@ -32,6 +32,8 @@ def mock_config(monkeypatch) -> Callable[..., None]:
             "approval_disable": False,
             "pr_review_summary": True,
             "enforce_project_rules": True,
+            "simplify_suggest": False,
+            "simplify_nearby_code": False,
             "min_severity": Severity.LOW,
             "low_findings_cap": 3,
             "max_findings": None,

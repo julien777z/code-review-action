@@ -103,6 +103,17 @@ and a no-op when the repository defines no such rules.
 
 - `enforce-project-rules` — set to `false` to skip project-rule enforcement (default `true`).
 
+## Suggesting simplifications
+
+Off by default, the review can also suggest code simplifications as low-severity nits (optional
+suggestions that never block).
+
+- `simplify-suggest` — apply the agent's `code-simplify` skill to the changed code and suggest
+  simplifications (default `false`).
+- `simplify-nearby-code` — extend those suggestions to weigh the nearby and related code the change
+  touches, not just the changed lines in isolation (default `false`). Findings still anchor on changed
+  lines.
+
 ## Approval behaviour
 
 - `approval-include` — severities that request changes when left open (default `critical`). Other
@@ -195,6 +206,8 @@ with:
 | `approval-disable` | `false` | Comments only; skip the verdict |
 | `pr-review-summary` | `true` | Append an AI summary to the PR description on the first review |
 | `enforce-project-rules` | `true` | Enforce the repository's own coding rules; no-op when it defines none |
+| `simplify-suggest` | `false` | Suggest code simplifications as low-severity nits |
+| `simplify-nearby-code` | `false` | Extend simplification suggestions to weigh nearby/related code |
 | `min-severity` | `low` | Lowest severity worth posting |
 | `low-findings-cap` | `3` | Max low-severity findings per review |
 | `max-findings` | — | Overall inline-comment cap (empty = uncapped) |

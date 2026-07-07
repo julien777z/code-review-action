@@ -54,6 +54,33 @@ class TestReviewInstructions:
 
         assert "rules and conventions" not in review_instructions()
 
+    def test_suggests_simplifications_when_enabled(self, mock_config) -> None:
+        """Test that enabling simplify-suggest asks the review to use the code-simplify skill."""
+
+        mock_config(simplify_suggest=True)
+        text = review_instructions()
+
+        assert "code-simplify" in text
+        assert "nearby and related code" not in text
+
+    def test_nearby_code_implies_simplifications(self, mock_config) -> None:
+        """Test that simplify-nearby-code enables both the simplification and nearby-code instructions."""
+
+        mock_config(simplify_suggest=False, simplify_nearby_code=True)
+        text = review_instructions()
+
+        assert "code-simplify" in text
+        assert "nearby and related code" in text
+
+    def test_omits_simplifications_when_both_disabled(self, mock_config) -> None:
+        """Test that neither simplification instruction appears when both options are off."""
+
+        mock_config(simplify_suggest=False, simplify_nearby_code=False)
+        text = review_instructions()
+
+        assert "code-simplify" not in text
+        assert "nearby and related code" not in text
+
 
 class TestExistingFindingsBlock:
     """Test that already-posted findings are listed for exact-title matching."""
@@ -146,6 +173,14 @@ class TestSummaryInstructions:
         """Test that the instructions mark pull request content as untrusted data."""
 
         assert "untrusted" in summary_instructions()
+
+    def test_omits_review_findings_language(self) -> None:
+        """Test that the summary is not told to follow the review skill or emit findings."""
+
+        text = summary_instructions()
+
+        assert "code-review skill" not in text
+        assert "as a finding" not in text
 
     def test_includes_additional_context(self, mock_config) -> None:
         """Test that configured additional context is appended."""

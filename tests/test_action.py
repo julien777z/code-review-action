@@ -28,22 +28,24 @@ class TestCompositeAction:
 
 
 class TestBooleanFeatureInputs:
-    """Test that the feature inputs default on and are wired to the runner environment."""
+    """Test that the feature inputs carry their default and are wired to the runner environment."""
 
     @pytest.mark.parametrize(
-        ("input_name", "env_name"),
+        ("input_name", "env_name", "default"),
         [
-            ("pr-review-summary", "PR_REVIEW_SUMMARY"),
-            ("enforce-project-rules", "ENFORCE_PROJECT_RULES"),
+            ("pr-review-summary", "PR_REVIEW_SUMMARY", "true"),
+            ("enforce-project-rules", "ENFORCE_PROJECT_RULES", "true"),
+            ("simplify-suggest", "SIMPLIFY_SUGGEST", "false"),
+            ("simplify-nearby-code", "SIMPLIFY_NEARBY_CODE", "false"),
         ],
-        ids=["pr-review-summary", "enforce-project-rules"],
+        ids=["pr-review-summary", "enforce-project-rules", "simplify-suggest", "simplify-nearby-code"],
     )
-    def test_input_defaults_true_and_env_wired(self, input_name: str, env_name: str) -> None:
-        """Test that the input defaults to enabled and passes through as its env var."""
+    def test_input_default_and_env_wired(self, input_name: str, env_name: str, default: str) -> None:
+        """Test that the input carries its default and passes through as its env var."""
 
         action = load_action()
 
-        assert action["inputs"][input_name]["default"] == "true"
+        assert action["inputs"][input_name]["default"] == default
         assert review_step(action)["env"][env_name] == "${{ inputs.%s }}" % input_name
 
 

@@ -1,23 +1,34 @@
 import json
 import logging
 import os
+import subprocess
 from collections.abc import Awaitable, Callable
 from enum import StrEnum
 from pathlib import Path
 from typing import Final, TypedDict
+
+import anthropic
+from cursor_sdk import CursorAgentError
 
 from code_review.config import SETTINGS, ReviewModel
 from code_review.github import add_reaction, fetch_pull_request, remove_reaction
 from code_review.models.shared.github_event import GithubEvent
 from code_review.models.shared.pull_request import PullRequestContext
 from code_review.review_backends import claude, cursor
-from code_review.summary import GenerateSummary, post_pr_summary
+from code_review.summary import GenerateSummary, SummaryGenerationError, post_pr_summary
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 logger = logging.getLogger("code_review")
 
 PULL_REQUEST_ACTIONS = ("opened", "synchronize", "ready_for_review")
 FIRST_REVIEW_ACTIONS = ("opened", "ready_for_review")
+
+SUMMARY_ERRORS: Final[tuple[type[Exception], ...]] = (
+    SummaryGenerationError,
+    subprocess.CalledProcessError,
+    anthropic.APIError,
+    CursorAgentError,
+)
 
 RunReview = Callable[[PullRequestContext], Awaitable[int]]
 
@@ -207,7 +218,10 @@ async def main() -> int:
         handlers = BACKENDS[backend]
         exit_code = await handlers["run_review"](pr)
         if exit_code == 0 and first_review and SETTINGS.pr_review_summary:
-            await post_pr_summary(pr, handlers["generate_summary"])
+            try:
+                await post_pr_summary(pr, handlers["generate_summary"])
+            except SUMMARY_ERRORS as exc:
+                logger.error("Could not post the PR summary; the review still succeeded: %s", exc)
 
         return exit_code
     finally:

@@ -6,6 +6,7 @@ import pytest
 from code_review.config import ReviewModel
 from code_review.models.shared.github_event import GithubEvent
 from code_review.review_backends import claude, cursor
+from code_review.summary import SummaryGenerationError
 from code_review.runtime import (
     BACKENDS,
     Backend,
@@ -334,3 +335,29 @@ class TestMain:
         assert exit_code == 1
 
         post_pr_summary.assert_not_awaited()
+
+    def test_summary_failure_does_not_fail_the_review(
+        self, monkeypatch, mock_config, pull_request_event_factory, pull_request_factory
+    ) -> None:
+        """Test that a summary error is isolated and the successful review still returns zero."""
+
+        mock_config(review_model=ReviewModel.CURSOR, cursor_api_key="key", pr_review_summary=True)
+        post_pr_summary = AsyncMock(side_effect=SummaryGenerationError("boom"))
+        monkeypatch.setattr(
+            "code_review.runtime.BACKENDS",
+            {Backend.CURSOR: {"run_review": AsyncMock(return_value=0), "generate_summary": cursor.generate_text}},
+        )
+        monkeypatch.setattr("code_review.runtime.post_pr_summary", post_pr_summary)
+        monkeypatch.setattr("code_review.runtime.add_reaction", AsyncMock(return_value=None))
+        monkeypatch.setattr("code_review.runtime.remove_reaction", AsyncMock(return_value=None))
+        monkeypatch.setattr("code_review.runtime.fetch_pull_request", AsyncMock(return_value=pull_request_factory()))
+        monkeypatch.setattr(
+            "code_review.runtime.load_event",
+            lambda: ("pull_request", pull_request_event_factory(action="opened")),
+        )
+
+        exit_code = asyncio.run(main())
+
+        assert exit_code == 0
+
+        post_pr_summary.assert_awaited_once()
