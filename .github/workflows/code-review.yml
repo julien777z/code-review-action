@@ -19,7 +19,7 @@ jobs:
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4
-      - uses: ./
+      - uses: julien777z/code-review-action@v0
         with:
           cursor-api-key: ${{ secrets.CURSOR_API_KEY }}
           resolve-token: ${{ secrets.CODE_REVIEW_TOKEN }}
