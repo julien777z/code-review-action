@@ -2,7 +2,14 @@ import logging
 from collections.abc import AsyncIterator
 from typing import Final
 
-from cursor_sdk import AsyncAgent, AsyncClient, CloudAgentOptions, CursorAgentError, ModelSelection
+from cursor_sdk import (
+    AsyncAgent,
+    AsyncClient,
+    CloudAgentOptions,
+    CloudRepository,
+    CursorAgentError,
+    ModelSelection,
+)
 
 from code_review import review
 from code_review.config import CONFIG, SETTINGS
@@ -32,7 +39,7 @@ async def launch_bridge_with_retry() -> AsyncClient:
     return await AsyncClient.launch_bridge()
 
 
-async def run_agent(prompt: str) -> AsyncIterator[str]:
+async def run_agent(prompt: str, repo: CloudRepository | None = None) -> AsyncIterator[str]:
     """Launch the Cursor agent on the standard variant and stream its reply text in chunks."""
 
     client = await launch_bridge_with_retry()
@@ -50,8 +57,9 @@ async def run_agent(prompt: str) -> AsyncIterator[str]:
         else SETTINGS.cursor_model
     )
 
+    cloud = CloudAgentOptions(repos=[repo]) if repo is not None else CloudAgentOptions()
     agent = await AsyncAgent.create(
-        client=client, model=model_selection, api_key=SETTINGS.cursor_api_key, cloud=CloudAgentOptions()
+        client=client, model=model_selection, api_key=SETTINGS.cursor_api_key, cloud=cloud
     )
 
     try:
@@ -65,9 +73,11 @@ async def run_agent(prompt: str) -> AsyncIterator[str]:
 async def run_cursor_review(pr: PullRequestContext) -> int:
     """Review the PR with the Cursor backend, streaming each finding as the agent emits it."""
 
+    repo = CloudRepository(url=f"https://github.com/{pr.repo}", starting_ref=pr.head_sha)
+
     async def _findings(inputs: ReviewInputs) -> AsyncIterator[Finding]:
         try:
-            async for finding in iter_findings(run_agent(cursor_prompt(inputs))):
+            async for finding in iter_findings(run_agent(cursor_prompt(inputs), repo=repo)):
                 yield finding
         except CursorAgentError as exc:
             raise review.ReviewBackendError(f"Cursor agent run failed: {exc}", retryable=exc.is_retryable) from exc
