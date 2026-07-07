@@ -69,6 +69,29 @@ class TestPrReviewSummarySetting:
         assert Settings().pr_review_summary is expected
 
 
+class TestEnforceProjectRulesSetting:
+    """Test that the enforce-project-rules input parses from the environment and defaults on."""
+
+    def test_defaults_true(self, monkeypatch) -> None:
+        """Test that an unset input leaves rule enforcement enabled."""
+
+        monkeypatch.delenv("ENFORCE_PROJECT_RULES", raising=False)
+
+        assert Settings().enforce_project_rules is True
+
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [("false", False), ("true", True)],
+        ids=["disabled", "enabled"],
+    )
+    def test_parses_env(self, monkeypatch, raw: str, expected: bool) -> None:
+        """Test that the string input parses to a boolean."""
+
+        monkeypatch.setenv("ENFORCE_PROJECT_RULES", raw)
+
+        assert Settings().enforce_project_rules is expected
+
+
 class TestSeverity:
     """Test that severity parses case-insensitively and orders correctly."""
 

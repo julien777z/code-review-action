@@ -31,6 +31,7 @@ def mock_config(monkeypatch) -> Callable[..., None]:
             "approval_include": frozenset({Severity.CRITICAL}),
             "approval_disable": False,
             "pr_review_summary": True,
+            "enforce_project_rules": True,
             "min_severity": Severity.LOW,
             "low_findings_cap": 3,
             "max_findings": None,

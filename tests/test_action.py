@@ -27,18 +27,24 @@ class TestCompositeAction:
         assert "exec python -m code_review" in review_step(load_action())["run"]
 
 
-class TestPrReviewSummaryInput:
-    """Test that the pr-review-summary input is wired through to the runner environment."""
+class TestBooleanFeatureInputs:
+    """Test that the feature inputs default on and are wired to the runner environment."""
 
-    def test_input_defaults_true(self) -> None:
-        """Test that the input exists and defaults to enabled."""
+    @pytest.mark.parametrize(
+        ("input_name", "env_name"),
+        [
+            ("pr-review-summary", "PR_REVIEW_SUMMARY"),
+            ("enforce-project-rules", "ENFORCE_PROJECT_RULES"),
+        ],
+        ids=["pr-review-summary", "enforce-project-rules"],
+    )
+    def test_input_defaults_true_and_env_wired(self, input_name: str, env_name: str) -> None:
+        """Test that the input defaults to enabled and passes through as its env var."""
 
-        assert load_action()["inputs"]["pr-review-summary"]["default"] == "true"
+        action = load_action()
 
-    def test_env_carries_the_input(self) -> None:
-        """Test that the review step passes the input as the PR_REVIEW_SUMMARY env var."""
-
-        assert review_step(load_action())["env"]["PR_REVIEW_SUMMARY"] == "${{ inputs.pr-review-summary }}"
+        assert action["inputs"][input_name]["default"] == "true"
+        assert review_step(action)["env"][env_name] == "${{ inputs.%s }}" % input_name
 
 
 class TestRoutineInputsRemoved:

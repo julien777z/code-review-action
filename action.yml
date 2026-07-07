@@ -46,6 +46,9 @@ inputs:
   pr-review-summary:
     description: Append an AI-generated summary (bullets, risk note, overview) to the PR description on open/ready events.
     default: "true"
+  enforce-project-rules:
+    description: Enforce the repository's own coding rules (.claude/rules/*.md) as part of the review. No-op when the repository has none.
+    default: "true"
   min-severity:
     description: Lowest severity worth posting and counting — critical, high, medium, or low.
     default: low
@@ -99,6 +102,7 @@ runs:
         APPROVAL_INCLUDE: ${{ inputs.approval-include }}
         APPROVAL_DISABLE: ${{ inputs.approval-disable }}
         PR_REVIEW_SUMMARY: ${{ inputs.pr-review-summary }}
+        ENFORCE_PROJECT_RULES: ${{ inputs.enforce-project-rules }}
         MIN_SEVERITY: ${{ inputs.min-severity }}
         LOW_FINDINGS_CAP: ${{ inputs.low-findings-cap }}
         MAX_FINDINGS: ${{ inputs.max-findings }}

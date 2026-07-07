@@ -94,6 +94,15 @@ first-review events, never on later pushes.
 
 - `pr-review-summary` — set to `false` to turn the summary off (default `true`).
 
+## Enforcing project rules
+
+The review agent already loads whatever coding rules, conventions, or skills your repository defines
+for it (for example agent rule files or skills). With `enforce-project-rules` on, the review is told
+to apply those rules and report a finding on any changed line that violates them. It is agent-agnostic
+and a no-op when the repository defines no such rules.
+
+- `enforce-project-rules` — set to `false` to skip project-rule enforcement (default `true`).
+
 ## Approval behaviour
 
 - `approval-include` — severities that request changes when left open (default `critical`). Other
@@ -185,6 +194,7 @@ with:
 | `approval-include` | `critical` | Severities that request changes when open |
 | `approval-disable` | `false` | Comments only; skip the verdict |
 | `pr-review-summary` | `true` | Append an AI summary to the PR description on the first review |
+| `enforce-project-rules` | `true` | Enforce the repository's own coding rules; no-op when it defines none |
 | `min-severity` | `low` | Lowest severity worth posting |
 | `low-findings-cap` | `3` | Max low-severity findings per review |
 | `max-findings` | — | Overall inline-comment cap (empty = uncapped) |

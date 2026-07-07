@@ -38,6 +38,22 @@ class TestReviewInstructions:
 
         assert "Prefer typed models." in review_instructions()
 
+    def test_includes_project_rules_instruction_when_enabled(self, mock_config) -> None:
+        """Test that the review is told to enforce the project's own rules when enabled."""
+
+        mock_config(enforce_project_rules=True)
+        text = review_instructions()
+
+        assert "coding rules" in text
+        assert "you have loaded" in text
+
+    def test_omits_project_rules_instruction_when_disabled(self, mock_config) -> None:
+        """Test that the enforcement instruction is absent when disabled."""
+
+        mock_config(enforce_project_rules=False)
+
+        assert "rules and conventions" not in review_instructions()
+
 
 class TestExistingFindingsBlock:
     """Test that already-posted findings are listed for exact-title matching."""
