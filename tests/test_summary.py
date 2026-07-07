@@ -27,6 +27,15 @@ class TestSummarySection:
         assert "Body of the summary." in section
         assert DISCLAIMER in section
 
+    def test_strips_markers_echoed_in_summary_text(self) -> None:
+        """Test that summary text echoing the section markers cannot inject a second marker pair."""
+
+        echoed = f"a {CONFIG['summary_marker_open']} b {CONFIG['summary_marker_close']} c"
+        section = summary_section(echoed)
+
+        assert section.count(CONFIG["summary_marker_open"]) == 1
+        assert section.count(CONFIG["summary_marker_close"]) == 1
+
 
 class TestMergeSummary:
     """Test that the summary merges into the PR body, replacing an existing one and preserving other text."""
@@ -65,6 +74,16 @@ class TestMergeSummary:
         once = merge_summary("User text", section)
 
         assert merge_summary(once, section) == once
+
+    def test_replaces_cleanly_when_prior_summary_echoed_marker(self) -> None:
+        """Test that a re-merge replaces the section even if the prior summary echoed the close marker."""
+
+        body = merge_summary("Above.", summary_section(f"echo {CONFIG['summary_marker_close']} end"))
+        remerged = merge_summary(body, summary_section("New summary"))
+
+        assert "Above." in remerged
+        assert "New summary" in remerged
+        assert remerged.count(CONFIG["summary_marker_close"]) == 1
 
 
 class TestPostPrSummary:

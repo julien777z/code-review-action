@@ -18,11 +18,15 @@ class SummaryGenerationError(Exception):
 def summary_section(summary_text: str) -> str:
     """Render the marker-delimited summary block appended to the PR description."""
 
+    # Strip the section markers so untrusted model output cannot inject a second marker pair that
+    # would misalign the next replacement.
+    fenced = summary_text.replace(CONFIG["summary_marker_open"], "").replace(CONFIG["summary_marker_close"], "")
+
     return (
         f"{CONFIG['summary_marker_open']}\n"
         "---\n"
         f"{CONFIG['untrusted_input_open']}\n"
-        f"{summary_text}\n"
+        f"{fenced}\n"
         f"{CONFIG['untrusted_input_close']}\n\n"
         f"{DISCLAIMER}\n"
         f"{CONFIG['summary_marker_close']}"
@@ -35,9 +39,9 @@ def merge_summary(body: str, section: str) -> str:
     open_marker = CONFIG["summary_marker_open"]
     close_marker = CONFIG["summary_marker_close"]
     start = body.find(open_marker)
-    end = body.find(close_marker)
+    end = body.find(close_marker, start + len(open_marker)) if start != -1 else -1
 
-    if 0 <= start < end:
+    if start != -1 and end != -1:
         return body[:start] + section + body[end + len(close_marker) :]
 
     if not body.strip():
