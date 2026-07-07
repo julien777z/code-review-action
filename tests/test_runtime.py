@@ -1,12 +1,18 @@
+import asyncio
+from unittest.mock import AsyncMock
+
 import pytest
 
-from code_review.config import ClaudeMode, ReviewModel
+from code_review.config import ReviewModel
 from code_review.models.shared.github_event import GithubEvent
+from code_review.review_backends import claude, cursor
 from code_review.runtime import (
+    BACKENDS,
     Backend,
     association_allowed,
     is_eligible,
     is_first_review_event,
+    main,
     reaction_subject,
     resolve_pr_number,
     select_backend,
@@ -167,11 +173,11 @@ class TestSelectBackend:
     """Test that the backend resolves from the model inputs and available credentials."""
 
     def test_auto_prefers_claude(self, mock_config) -> None:
-        """Test that auto picks the Claude API when an Anthropic key is set."""
+        """Test that auto picks Claude when an Anthropic key is set."""
 
         mock_config(review_model=ReviewModel.AUTO, anthropic_api_key="key")
 
-        assert select_backend(False) is Backend.CLAUDE_API
+        assert select_backend(False) is Backend.CLAUDE
 
     def test_auto_falls_back_to_cursor(self, mock_config) -> None:
         """Test that auto falls back to Cursor when only a Cursor key is set."""
@@ -194,18 +200,6 @@ class TestSelectBackend:
 
         assert select_backend(False) is None
 
-    def test_claude_routine_mode(self, mock_config) -> None:
-        """Test that routine mode resolves to the routine backend with its credentials."""
-
-        mock_config(
-            review_model=ReviewModel.CLAUDE,
-            claude_mode=ClaudeMode.ROUTINE,
-            claude_routine_api_key="key",
-            claude_routine_id="rtn",
-        )
-
-        assert select_backend(False) is Backend.CLAUDE_ROUTINE
-
     def test_cursor(self, mock_config) -> None:
         """Test that an explicit Cursor request resolves with a Cursor key."""
 
@@ -215,7 +209,7 @@ class TestSelectBackend:
 
     @pytest.mark.parametrize(
         ("first_review", "expected"),
-        [(True, Backend.CLAUDE_API), (False, Backend.CURSOR)],
+        [(True, Backend.CLAUDE), (False, Backend.CURSOR)],
         ids=["first", "subsequent"],
     )
     def test_first_review_override(self, mock_config, first_review: bool, expected: Backend) -> None:
@@ -229,3 +223,114 @@ class TestSelectBackend:
         )
 
         assert select_backend(first_review) is expected
+
+
+class TestBackends:
+    """Test that each backend maps to its review runner and summary generator."""
+
+    @pytest.mark.parametrize(
+        ("backend", "run_review", "generate_summary"),
+        [
+            (Backend.CURSOR, cursor.run_cursor_review, cursor.generate_text),
+            (Backend.CLAUDE, claude.run_claude_api_review, claude.generate_text),
+        ],
+        ids=["cursor", "claude"],
+    )
+    def test_handlers(self, backend, run_review, generate_summary) -> None:
+        """Test that the handler map wires the runner and generator for a backend."""
+
+        handlers = BACKENDS[backend]
+
+        assert handlers["run_review"] is run_review
+        assert handlers["generate_summary"] is generate_summary
+
+
+class TestMain:
+    """Test that main runs the round and posts a summary only on an eligible first review."""
+
+    @pytest.mark.parametrize(
+        ("action", "summary_posted"),
+        [("opened", True), ("synchronize", False)],
+        ids=["first-review", "later-push"],
+    )
+    def test_summary_gated_on_first_review(
+        self, monkeypatch, mock_config, pull_request_event_factory, pull_request_factory, action: str, summary_posted: bool
+    ) -> None:
+        """Test that the summary posts on the opened event and is skipped on a later push."""
+
+        mock_config(review_model=ReviewModel.CURSOR, cursor_api_key="key", pr_review_summary=True)
+        run_review = AsyncMock(return_value=0)
+        post_pr_summary = AsyncMock(return_value=None)
+        generator = cursor.generate_text
+        monkeypatch.setattr(
+            "code_review.runtime.BACKENDS",
+            {Backend.CURSOR: {"run_review": run_review, "generate_summary": generator}},
+        )
+        monkeypatch.setattr("code_review.runtime.post_pr_summary", post_pr_summary)
+        monkeypatch.setattr("code_review.runtime.add_reaction", AsyncMock(return_value=None))
+        monkeypatch.setattr("code_review.runtime.remove_reaction", AsyncMock(return_value=None))
+        pr = pull_request_factory()
+        monkeypatch.setattr("code_review.runtime.fetch_pull_request", AsyncMock(return_value=pr))
+        monkeypatch.setattr(
+            "code_review.runtime.load_event",
+            lambda: ("pull_request", pull_request_event_factory(action=action)),
+        )
+
+        exit_code = asyncio.run(main())
+
+        assert exit_code == 0
+        run_review.assert_awaited_once_with(pr)
+
+        assert post_pr_summary.await_count == (1 if summary_posted else 0)
+        if summary_posted:
+            post_pr_summary.assert_awaited_once_with(pr, generator)
+
+    def test_summary_skipped_when_disabled(
+        self, monkeypatch, mock_config, pull_request_event_factory, pull_request_factory
+    ) -> None:
+        """Test that a first review does not post a summary when the setting is off."""
+
+        mock_config(review_model=ReviewModel.CURSOR, cursor_api_key="key", pr_review_summary=False)
+        post_pr_summary = AsyncMock(return_value=None)
+        monkeypatch.setattr(
+            "code_review.runtime.BACKENDS",
+            {Backend.CURSOR: {"run_review": AsyncMock(return_value=0), "generate_summary": cursor.generate_text}},
+        )
+        monkeypatch.setattr("code_review.runtime.post_pr_summary", post_pr_summary)
+        monkeypatch.setattr("code_review.runtime.add_reaction", AsyncMock(return_value=None))
+        monkeypatch.setattr("code_review.runtime.remove_reaction", AsyncMock(return_value=None))
+        monkeypatch.setattr("code_review.runtime.fetch_pull_request", AsyncMock(return_value=pull_request_factory()))
+        monkeypatch.setattr(
+            "code_review.runtime.load_event",
+            lambda: ("pull_request", pull_request_event_factory(action="opened")),
+        )
+
+        asyncio.run(main())
+
+        post_pr_summary.assert_not_awaited()
+
+    def test_summary_skipped_when_review_fails(
+        self, monkeypatch, mock_config, pull_request_event_factory, pull_request_factory
+    ) -> None:
+        """Test that a failing review round skips the summary."""
+
+        mock_config(review_model=ReviewModel.CURSOR, cursor_api_key="key", pr_review_summary=True)
+        post_pr_summary = AsyncMock(return_value=None)
+        monkeypatch.setattr(
+            "code_review.runtime.BACKENDS",
+            {Backend.CURSOR: {"run_review": AsyncMock(return_value=1), "generate_summary": cursor.generate_text}},
+        )
+        monkeypatch.setattr("code_review.runtime.post_pr_summary", post_pr_summary)
+        monkeypatch.setattr("code_review.runtime.add_reaction", AsyncMock(return_value=None))
+        monkeypatch.setattr("code_review.runtime.remove_reaction", AsyncMock(return_value=None))
+        monkeypatch.setattr("code_review.runtime.fetch_pull_request", AsyncMock(return_value=pull_request_factory()))
+        monkeypatch.setattr(
+            "code_review.runtime.load_event",
+            lambda: ("pull_request", pull_request_event_factory(action="opened")),
+        )
+
+        exit_code = asyncio.run(main())
+
+        assert exit_code == 1
+
+        post_pr_summary.assert_not_awaited()

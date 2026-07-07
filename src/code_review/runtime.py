@@ -1,15 +1,17 @@
 import json
 import logging
 import os
+from collections.abc import Awaitable, Callable
 from enum import StrEnum
 from pathlib import Path
+from typing import Final, TypedDict
 
-from code_review.config import SETTINGS, ClaudeMode, ReviewModel
+from code_review.config import SETTINGS, ReviewModel
 from code_review.github import add_reaction, fetch_pull_request, remove_reaction
 from code_review.models.shared.github_event import GithubEvent
 from code_review.models.shared.pull_request import PullRequestContext
-from code_review.review_backends.claude import fire_claude_routine, run_claude_api_review
-from code_review.review_backends.cursor import run_cursor_review
+from code_review.review_backends import claude, cursor
+from code_review.summary import GenerateSummary, post_pr_summary
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 logger = logging.getLogger("code_review")
@@ -17,13 +19,33 @@ logger = logging.getLogger("code_review")
 PULL_REQUEST_ACTIONS = ("opened", "synchronize", "ready_for_review")
 FIRST_REVIEW_ACTIONS = ("opened", "ready_for_review")
 
+RunReview = Callable[[PullRequestContext], Awaitable[int]]
+
 
 class Backend(StrEnum):
     """The concrete backend resolved for this run."""
 
     CURSOR = "cursor"
-    CLAUDE_API = "claude_api"
-    CLAUDE_ROUTINE = "claude_routine"
+    CLAUDE = "claude"
+
+
+class BackendHandlers(TypedDict):
+    """The review runner and summary generator a backend dispatches to."""
+
+    run_review: RunReview
+    generate_summary: GenerateSummary
+
+
+BACKENDS: Final[dict[Backend, BackendHandlers]] = {
+    Backend.CURSOR: BackendHandlers(
+        run_review=cursor.run_cursor_review,
+        generate_summary=cursor.generate_text,
+    ),
+    Backend.CLAUDE: BackendHandlers(
+        run_review=claude.run_claude_api_review,
+        generate_summary=claude.generate_text,
+    ),
+}
 
 
 def load_event() -> tuple[str, GithubEvent]:
@@ -114,18 +136,9 @@ def reaction_subject(event_name: str, event: GithubEvent, repo: str, pr_number: 
 
 
 def claude_available() -> bool:
-    """Return whether Claude can run in the configured mode (api key, or routine creds)."""
-
-    if SETTINGS.claude_mode is ClaudeMode.ROUTINE:
-        return bool(SETTINGS.claude_routine_api_key and SETTINGS.claude_routine_id)
+    """Return whether the Claude backend has an Anthropic API key."""
 
     return bool(SETTINGS.anthropic_api_key)
-
-
-def claude_backend() -> Backend:
-    """Map the Claude mode to its concrete backend."""
-
-    return Backend.CLAUDE_ROUTINE if SETTINGS.claude_mode is ClaudeMode.ROUTINE else Backend.CLAUDE_API
 
 
 def select_backend(first_review: bool) -> Backend | None:
@@ -140,27 +153,15 @@ def select_backend(first_review: bool) -> Backend | None:
     match requested:
         case ReviewModel.AUTO:
             if claude_available():
-                return claude_backend()
+                return Backend.CLAUDE
 
             return Backend.CURSOR if SETTINGS.cursor_api_key else None
         case ReviewModel.CLAUDE:
-            return claude_backend() if claude_available() else None
+            return Backend.CLAUDE if claude_available() else None
         case ReviewModel.CURSOR:
             return Backend.CURSOR if SETTINGS.cursor_api_key else None
         case _:
             return None
-
-
-async def run(pr: PullRequestContext, backend: Backend) -> int:
-    """Dispatch the resolved backend for the PR."""
-
-    match backend:
-        case Backend.CURSOR:
-            return await run_cursor_review(pr)
-        case Backend.CLAUDE_API:
-            return await run_claude_api_review(pr)
-        case Backend.CLAUDE_ROUTINE:
-            return await fire_claude_routine(pr)
 
 
 async def main() -> int:
@@ -178,7 +179,8 @@ async def main() -> int:
 
         return 1
 
-    backend = select_backend(is_first_review_event(event_name, event))
+    first_review = is_first_review_event(event_name, event)
+    backend = select_backend(first_review)
     if backend is None:
         logger.info("No review backend is configured for this event; skipping.")
 
@@ -196,16 +198,18 @@ async def main() -> int:
 
         return 0
 
-    if backend is Backend.CLAUDE_ROUTINE:
-        return await run(pr, backend)
-
     # React with eyes on the trigger (the comment for a manual trigger, otherwise the PR) while the
-    # synchronous backends review, then remove it once the round finishes.
+    # backend reviews, then remove it once the round finishes.
     subject = reaction_subject(event_name, event, repo, pr_number)
     reaction_id = await add_reaction(subject)
 
     try:
-        return await run(pr, backend)
+        handlers = BACKENDS[backend]
+        exit_code = await handlers["run_review"](pr)
+        if exit_code == 0 and first_review and SETTINGS.pr_review_summary:
+            await post_pr_summary(pr, handlers["generate_summary"])
+
+        return exit_code
     finally:
         if reaction_id is not None:
             await remove_reaction(subject, reaction_id)

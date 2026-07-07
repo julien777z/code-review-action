@@ -8,7 +8,7 @@ from typing import Final
 
 from code_review.config import CONFIG, SETTINGS
 from code_review.models.shared.findings import ReviewCommentRequest, ReviewPayload
-from code_review.models.shared.pull_request import PullRequestContext
+from code_review.models.shared.pull_request import PullRequestBodyUpdate, PullRequestContext
 from code_review.models.shared.threads import ReviewThread
 
 logger = logging.getLogger("code_review.github")
@@ -107,6 +107,23 @@ async def pull_request_diff(repo: str, pr_number: int) -> str:
     """Return the PR's unified diff."""
 
     return await run_gh(["pr", "diff", str(pr_number), "--repo", repo])
+
+
+async def pull_request_body(repo: str, pr_number: int) -> str:
+    """Return the PR's current description text."""
+
+    raw = await run_gh(["pr", "view", str(pr_number), "--repo", repo, "--json", "body"])
+
+    return json.loads(raw).get("body") or ""
+
+
+async def update_pull_request_body(repo: str, pr_number: int, body: str) -> None:
+    """Replace the PR's description."""
+
+    await run_gh(
+        ["api", "--method", "PATCH", f"repos/{repo}/pulls/{pr_number}", "--input", "-"],
+        stdin=PullRequestBodyUpdate(body=body).model_dump_json(),
+    )
 
 
 async def already_reviewed(repo: str, pr_number: int, head_sha: str, marker: str) -> bool:

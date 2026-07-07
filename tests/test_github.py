@@ -4,7 +4,13 @@ from collections.abc import Awaitable, Callable
 
 import pytest
 
-from code_review.github import already_reviewed, head_check_concluded, resolve_threads
+from code_review.github import (
+    already_reviewed,
+    head_check_concluded,
+    pull_request_body,
+    resolve_threads,
+    update_pull_request_body,
+)
 
 
 def run_gh_recorder(tokens: list[str | None]) -> Callable[..., Awaitable[str]]:
@@ -14,6 +20,26 @@ def run_gh_recorder(tokens: list[str | None]) -> Callable[..., Awaitable[str]]:
         tokens.append(token)
 
         return ""
+
+    return _run_gh
+
+
+def run_gh_call_recorder(calls: list[tuple[list[str], str | None]]) -> Callable[..., Awaitable[str]]:
+    """Build a run_gh double that records the args and stdin each call is given."""
+
+    async def _run_gh(args: list[str], stdin: str | None = None, token: str | None = None) -> str:
+        calls.append((args, stdin))
+
+        return ""
+
+    return _run_gh
+
+
+def run_gh_returning(value: str) -> Callable[..., Awaitable[str]]:
+    """Build a run_gh double that returns a fixed stdout string."""
+
+    async def _run_gh(args: list[str], stdin: str | None = None, token: str | None = None) -> str:
+        return value
 
     return _run_gh
 
@@ -75,6 +101,38 @@ class TestHeadCheckConcluded:
 
         with pytest.raises(subprocess.CalledProcessError):
             asyncio.run(head_check_concluded("octo/repo", "abc123"))
+
+
+class TestPullRequestBody:
+    """Test that the PR body is read, coercing a null body to an empty string."""
+
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [('{"body": "Hello"}', "Hello"), ('{"body": null}', ""), ('{"body": ""}', "")],
+        ids=["text", "null", "empty"],
+    )
+    def test_reads_body(self, monkeypatch, mock_config, raw: str, expected: str) -> None:
+        """Test that a null or empty body resolves to an empty string."""
+
+        monkeypatch.setattr("code_review.github.run_gh", run_gh_returning(raw))
+
+        assert asyncio.run(pull_request_body("octo/repo", 7)) == expected
+
+
+class TestUpdatePullRequestBody:
+    """Test that updating the PR body issues a PATCH with the new body as JSON stdin."""
+
+    def test_patches_with_body_payload(self, monkeypatch, mock_config) -> None:
+        """Test that the PATCH targets the pulls endpoint and sends the body as JSON."""
+
+        calls: list[tuple[list[str], str | None]] = []
+        monkeypatch.setattr("code_review.github.run_gh", run_gh_call_recorder(calls))
+
+        asyncio.run(update_pull_request_body("octo/repo", 7, "New body"))
+        args, stdin = calls[0]
+
+        assert args == ["api", "--method", "PATCH", "repos/octo/repo/pulls/7", "--input", "-"]
+        assert stdin == '{"body":"New body"}'
 
 
 class TestResolveThreads:

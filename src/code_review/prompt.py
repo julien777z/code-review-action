@@ -127,3 +127,40 @@ def cursor_prompt(inputs: ReviewInputs) -> str:
     """Compose the single-string prompt sent to the Cursor agent."""
 
     return f"{review_instructions()}\n\n{pull_request_message(inputs)}"
+
+
+def summary_contract() -> str:
+    """Describe the PR-description summary the model must produce from the diff."""
+
+    return (
+        "Write a summary of the pull request diff below to append to its description, as "
+        "GitHub-flavored markdown with exactly these three parts in order and nothing else — no "
+        "preamble, no closing remarks, and no surrounding code fences:\n"
+        "1. A `### Summary` heading followed by 3 to 6 short bullet points describing what the "
+        "change does.\n"
+        "2. A single line of the exact form `**<Low|Medium|High> Risk** — <one sentence>` that "
+        "rates the change's risk and explains it in one sentence.\n"
+        "3. An `### Overview` heading followed by one short paragraph explaining how the change "
+        "works and which areas it touches."
+    )
+
+
+def summary_instructions() -> str:
+    """Compose the stable summary instructions (safety + contract + extra context) for the model."""
+
+    sections = [
+        "Summarize the pull request below for its description.",
+        PROMPT_SAFETY,
+        summary_contract(),
+    ]
+
+    if SETTINGS.additional_context:
+        sections.append(f"Additional context for this repository:\n{SETTINGS.additional_context}")
+
+    return "\n\n".join(sections)
+
+
+def summary_prompt(inputs: ReviewInputs) -> str:
+    """Compose the single-string prompt that asks a backend for the PR-description summary."""
+
+    return f"{summary_instructions()}\n\n{pull_request_message(inputs)}"

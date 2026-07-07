@@ -73,3 +73,9 @@ async def run_cursor_review(pr: PullRequestContext) -> int:
             raise review.ReviewBackendError(f"Cursor agent run failed: {exc}", retryable=exc.is_retryable) from exc
 
     return await review.run_review_round(pr, CONFIG["review_marker"], _findings)
+
+
+async def generate_text(prompt: str) -> str:
+    """Run a single-shot Cursor agent turn and return the joined reply text."""
+
+    return "".join([chunk async for chunk in run_agent(prompt)])

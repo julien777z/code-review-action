@@ -21,6 +21,12 @@ class PullRequestContext(BaseModel):
     state: str
 
 
+class PullRequestBodyUpdate(BaseModel):
+    """Request body for replacing a PR's description."""
+
+    body: str
+
+
 class ReviewInputs(BaseModel):
     """Inputs a backend needs to produce findings for one round."""
 

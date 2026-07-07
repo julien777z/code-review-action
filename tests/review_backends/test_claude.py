@@ -1,44 +1,28 @@
-import re
+import asyncio
 
-from code_review.config import DISCLAIMER
-from code_review.models.shared.severity import Severity
-from code_review.review_backends.claude import build_routine_text
+from code_review.review_backends import claude
 
 
-class TestBuildRoutineText:
-    """Test that the routine fire text carries PR context, policy, and extra context."""
+class TestGenerateText:
+    """Test that the single-shot Claude completion returns the joined text output."""
 
-    def test_includes_context_and_policy(self, mock_config, pull_request_factory) -> None:
-        """Test that the text names the PR, the blocking severities, and the extra context."""
+    def test_joins_text_blocks(self, monkeypatch, mock_config, anthropic_client_factory) -> None:
+        """Test that the text content of the response is returned."""
 
-        mock_config(approval_include=frozenset({Severity.CRITICAL}), additional_context="Focus on auth.")
-        text = build_routine_text(pull_request_factory(number=7))
+        mock_config(anthropic_api_key="key")
+        client = anthropic_client_factory(text="Generated summary")
+        monkeypatch.setattr("code_review.review_backends.claude.anthropic.AsyncAnthropic", lambda **kwargs: client)
 
-        assert "#7" in text
-        assert "critical" in text
-        assert "Focus on auth." in text
+        assert asyncio.run(claude.generate_text("prompt")) == "Generated summary"
 
-    def test_approval_disabled(self, mock_config, pull_request_factory) -> None:
-        """Test that disabling approval asks the routine for comments only."""
+    def test_sends_prompt_to_the_model(self, monkeypatch, mock_config, anthropic_client_factory) -> None:
+        """Test that the prompt is forwarded as the user message."""
 
-        mock_config(approval_disable=True)
-        text = build_routine_text(pull_request_factory())
+        mock_config(anthropic_api_key="key")
+        client = anthropic_client_factory()
+        monkeypatch.setattr("code_review.review_backends.claude.anthropic.AsyncAnthropic", lambda **kwargs: client)
 
-        assert "comments only" in text.lower()
+        asyncio.run(claude.generate_text("Summarize this"))
+        kwargs = client.messages.create.await_args.kwargs
 
-    def test_includes_safety_and_disclaimer(self, mock_config, pull_request_factory) -> None:
-        """Test that the text marks PR content as untrusted and asks for the AI disclaimer line."""
-
-        mock_config()
-        text = build_routine_text(pull_request_factory())
-
-        assert "untrusted" in text
-        assert DISCLAIMER in text
-
-    def test_fences_pr_metadata(self, mock_config, pull_request_factory) -> None:
-        """Test that the PR metadata is fenced as untrusted content."""
-
-        mock_config()
-        text = build_routine_text(pull_request_factory())
-
-        assert re.search(r"<untrusted_pr_metadata [0-9a-f]+>", text) is not None
+        assert kwargs["messages"] == [{"role": "user", "content": "Summarize this"}]

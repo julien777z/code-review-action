@@ -1,40 +1,7 @@
 import pytest
 
-from code_review.config import ReviewModel, parse_bool, resolve_routine_id, split_list
+from code_review.config import ReviewModel, Settings, parse_bool, split_list
 from code_review.models.shared.severity import Severity
-
-ROUTINE_URL = "https://api.anthropic.com/v1/claude_code/routines/rtn_abc/fire"
-
-
-class TestResolveRoutineId:
-    """Test that the routine id resolves from an id or url and rejects both."""
-
-    def test_returns_id_when_only_id_given(self) -> None:
-        """Test that an explicit id is returned unchanged."""
-
-        assert resolve_routine_id("rtn_123", "") == "rtn_123"
-
-    def test_parses_id_from_url(self) -> None:
-        """Test that the id is parsed out of a fire url."""
-
-        assert resolve_routine_id("", ROUTINE_URL) == "rtn_abc"
-
-    def test_returns_none_when_neither_given(self) -> None:
-        """Test that an absent id and url resolve to None."""
-
-        assert resolve_routine_id("", "") is None
-
-    def test_rejects_both(self) -> None:
-        """Test that providing both an id and a url raises."""
-
-        with pytest.raises(ValueError):
-            resolve_routine_id("rtn_123", ROUTINE_URL)
-
-    def test_rejects_malformed_url(self) -> None:
-        """Test that a url without a routine id raises."""
-
-        with pytest.raises(ValueError):
-            resolve_routine_id("", "https://example.com/nope")
 
 
 class TestSplitList:
@@ -77,6 +44,29 @@ class TestReviewModelParse:
         """Test that values parse case-insensitively and empty yields None."""
 
         assert ReviewModel.parse(raw) == expected
+
+
+class TestPrReviewSummarySetting:
+    """Test that the pr-review-summary input parses from the environment and defaults on."""
+
+    def test_defaults_true(self, monkeypatch) -> None:
+        """Test that an unset input leaves the summary enabled."""
+
+        monkeypatch.delenv("PR_REVIEW_SUMMARY", raising=False)
+
+        assert Settings().pr_review_summary is True
+
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [("false", False), ("true", True)],
+        ids=["disabled", "enabled"],
+    )
+    def test_parses_env(self, monkeypatch, raw: str, expected: bool) -> None:
+        """Test that the string input parses to a boolean."""
+
+        monkeypatch.setenv("PR_REVIEW_SUMMARY", raw)
+
+        assert Settings().pr_review_summary is expected
 
 
 class TestSeverity:

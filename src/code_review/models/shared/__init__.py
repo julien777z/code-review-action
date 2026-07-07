@@ -17,6 +17,7 @@ from code_review.models.shared.github_event import (
 )
 from code_review.models.shared.pull_request import (
     PostedFinding,
+    PullRequestBodyUpdate,
     PullRequestContext,
     ReviewInputs,
 )
@@ -41,6 +42,7 @@ __all__ = [
     "GithubEvent",
     "IssuePullRequestRef",
     "PostedFinding",
+    "PullRequestBodyUpdate",
     "PullRequestContext",
     "RawFinding",
     "ReviewComment",

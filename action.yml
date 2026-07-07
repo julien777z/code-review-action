@@ -15,23 +15,11 @@ inputs:
     required: false
     default: ""
   anthropic-api-key:
-    description: Anthropic API key for the Claude Messages API backend (claude-mode=api).
+    description: Anthropic API key for the Claude Messages API backend.
     required: false
     default: ""
   cursor-api-key:
     description: Cursor API key for the Cursor backend.
-    required: false
-    default: ""
-  claude-routine-api-key:
-    description: API key for firing a hosted Claude review routine (claude-mode=routine).
-    required: false
-    default: ""
-  claude-routine-id:
-    description: Hosted Claude routine id to fire. Mutually exclusive with claude-routine-url.
-    required: false
-    default: ""
-  claude-routine-url:
-    description: Hosted Claude routine fire URL; the id is parsed from it. Mutually exclusive with claude-routine-id.
     required: false
     default: ""
   review-model:
@@ -40,9 +28,6 @@ inputs:
   first-review-model:
     description: Backend for the PR's first review (opened/ready). Empty falls back to review-model.
     default: ""
-  claude-mode:
-    description: How the Claude backend runs — api or routine.
-    default: api
   claude-model:
     description: Anthropic model id for the Claude API backend.
     default: claude-opus-4-8
@@ -50,7 +35,7 @@ inputs:
     description: Cursor model id for the Cursor backend.
     default: composer-2.5
   additional-context:
-    description: Extra context injected into the review prompt and routine fire.
+    description: Extra context injected into the review prompt.
     default: ""
   approval-include:
     description: Comma-separated severities that, if open, request changes (otherwise comment only).
@@ -58,6 +43,9 @@ inputs:
   approval-disable:
     description: Post review comments only and skip the approval verdict and check run.
     default: "false"
+  pr-review-summary:
+    description: Append an AI-generated summary (bullets, risk note, overview) to the PR description on open/ready events.
+    default: "true"
   min-severity:
     description: Lowest severity worth posting and counting — critical, high, medium, or low.
     default: low
@@ -103,17 +91,14 @@ runs:
         RESOLVE_TOKEN: ${{ inputs.resolve-token }}
         ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
         CURSOR_API_KEY: ${{ inputs.cursor-api-key }}
-        CLAUDE_ROUTINE_API_KEY: ${{ inputs.claude-routine-api-key }}
-        CLAUDE_ROUTINE_ID: ${{ inputs.claude-routine-id }}
-        CLAUDE_ROUTINE_URL: ${{ inputs.claude-routine-url }}
         REVIEW_MODEL: ${{ inputs.review-model }}
         FIRST_REVIEW_MODEL: ${{ inputs.first-review-model }}
-        CLAUDE_MODE: ${{ inputs.claude-mode }}
         CLAUDE_MODEL: ${{ inputs.claude-model }}
         CURSOR_MODEL: ${{ inputs.cursor-model }}
         ADDITIONAL_CONTEXT: ${{ inputs.additional-context }}
         APPROVAL_INCLUDE: ${{ inputs.approval-include }}
         APPROVAL_DISABLE: ${{ inputs.approval-disable }}
+        PR_REVIEW_SUMMARY: ${{ inputs.pr-review-summary }}
         MIN_SEVERITY: ${{ inputs.min-severity }}
         LOW_FINDINGS_CAP: ${{ inputs.low-findings-cap }}
         MAX_FINDINGS: ${{ inputs.max-findings }}

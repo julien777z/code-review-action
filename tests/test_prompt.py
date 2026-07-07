@@ -6,6 +6,8 @@ from code_review.prompt import (
     existing_findings_block,
     pull_request_message,
     review_instructions,
+    summary_instructions,
+    summary_prompt,
 )
 
 
@@ -110,3 +112,48 @@ class TestCursorPrompt:
 
         assert '"severity"' in prompt
         assert "DIFF_BODY" in prompt
+
+
+class TestSummaryInstructions:
+    """Test that the summary instructions carry the three-part contract and safety."""
+
+    def test_includes_contract_sections(self) -> None:
+        """Test that the Summary, Risk, and Overview sections are described."""
+
+        text = summary_instructions()
+
+        assert "### Summary" in text
+        assert "Risk" in text
+        assert "### Overview" in text
+
+    def test_includes_prompt_injection_safety(self) -> None:
+        """Test that the instructions mark pull request content as untrusted data."""
+
+        assert "untrusted" in summary_instructions()
+
+    def test_includes_additional_context(self, mock_config) -> None:
+        """Test that configured additional context is appended."""
+
+        mock_config(additional_context="Prefer typed models.")
+
+        assert "Prefer typed models." in summary_instructions()
+
+
+class TestSummaryPrompt:
+    """Test that the summary prompt combines the contract and the fenced diff."""
+
+    def test_combines_contract_and_diff(self, pull_request_factory) -> None:
+        """Test that the single-string prompt carries the contract and the diff body."""
+
+        inputs = ReviewInputs(pr=pull_request_factory(), diff="DIFF_BODY")
+        prompt = summary_prompt(inputs)
+
+        assert "### Summary" in prompt
+        assert "DIFF_BODY" in prompt
+
+    def test_wraps_diff_as_untrusted(self, pull_request_factory) -> None:
+        """Test that the diff is fenced with a random marker."""
+
+        inputs = ReviewInputs(pr=pull_request_factory(), diff="DIFF_BODY")
+
+        assert re.search(r"<untrusted_diff [0-9a-f]+>", summary_prompt(inputs)) is not None

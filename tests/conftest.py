@@ -1,10 +1,10 @@
 from collections.abc import AsyncIterator, Callable
 from datetime import timedelta
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from code_review.config import CONFIG, ClaudeMode, ReviewModel
+from code_review.config import CONFIG, ReviewModel
 from code_review.models.shared.findings import Finding
 from code_review.models.shared.github_event import GithubEvent
 from code_review.models.shared.pull_request import PullRequestContext, ReviewInputs
@@ -23,16 +23,14 @@ def mock_config(monkeypatch) -> Callable[..., None]:
             "resolve_token": "",
             "anthropic_api_key": "",
             "cursor_api_key": "",
-            "claude_routine_api_key": "",
-            "claude_routine_id": None,
             "review_model": ReviewModel.AUTO,
             "first_review_model": None,
-            "claude_mode": ClaudeMode.API,
             "claude_model": "claude-opus-4-8",
             "cursor_model": "composer-2.5",
             "additional_context": "",
             "approval_include": frozenset({Severity.CRITICAL}),
             "approval_disable": False,
+            "pr_review_summary": True,
             "min_severity": Severity.LOW,
             "low_findings_cap": 3,
             "max_findings": None,
@@ -147,6 +145,41 @@ def review_github_mocks(monkeypatch) -> dict[str, AsyncMock]:
     }
     for name, mock in mocks.items():
         monkeypatch.setattr(f"code_review.review.{name}", mock)
+
+    return mocks
+
+
+@pytest.fixture
+def anthropic_client_factory() -> Callable[..., MagicMock]:
+    """Build an AsyncAnthropic-style async context manager whose messages.create returns text blocks."""
+
+    def _build(text: str = "Summary text") -> MagicMock:
+        block = MagicMock()
+        block.type = "text"
+        block.text = text
+        message = MagicMock()
+        message.content = [block]
+        client = MagicMock()
+        client.messages.create = AsyncMock(return_value=message)
+        client.__aenter__ = AsyncMock(return_value=client)
+        client.__aexit__ = AsyncMock(return_value=False)
+
+        return client
+
+    return _build
+
+
+@pytest.fixture
+def summary_github_mocks(monkeypatch) -> dict[str, AsyncMock]:
+    """Patch the GitHub seams post_pr_summary calls and return the mocks for assertion."""
+
+    mocks = {
+        "pull_request_diff": AsyncMock(return_value="DIFF_BODY"),
+        "pull_request_body": AsyncMock(return_value=""),
+        "update_pull_request_body": AsyncMock(return_value=None),
+    }
+    for name, mock in mocks.items():
+        monkeypatch.setattr(f"code_review.summary.{name}", mock)
 
     return mocks
 

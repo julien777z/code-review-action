@@ -34,8 +34,8 @@ jobs:
           cursor-api-key: ${{ secrets.CURSOR_API_KEY }}
 ```
 
-Provide at least one backend credential (`anthropic-api-key`, `cursor-api-key`, or the
-`claude-routine-*` pair). Comment `agent review` on a PR to trigger a manual review.
+Provide at least one backend credential (`anthropic-api-key` or `cursor-api-key`). Comment
+`agent review` on a PR to trigger a manual review.
 
 ## Examples
 
@@ -79,17 +79,20 @@ with:
 ## Choosing the model
 
 - `review-model` — `auto` (default), `claude`, or `cursor`. `auto` prefers Claude when an Anthropic
-  key (or routine credentials) is set, otherwise uses Cursor.
+  key is set, otherwise uses Cursor.
 - `first-review-model` — optional backend used for the PR's first review (opened / ready for review).
   When empty, `review-model` is used for every event. Example: `first-review-model: claude` with
   `review-model: cursor` reviews the opened PR with Claude and later pushes with Cursor.
 
-## Claude: API vs routine
+## PR description summary
 
-`claude-mode: api` (default) calls the Anthropic Messages API directly in the runner. `claude-mode:
-routine` fires a hosted Claude Code routine instead — set `claude-routine-api-key` and either
-`claude-routine-id` or `claude-routine-url`. The PR context, extra context, and approval policy are
-sent in the fire request, so the routine needs no manual setup beyond the code-review skill.
+On the first review of a PR (opened or marked ready for review), the action appends an AI-generated
+summary — a short bullet list of the change, a risk note, and an overview — to the PR description.
+Whatever the author wrote stays at the top; the summary is added below it, between hidden markers so a
+later review replaces the section in place instead of stacking a second one. It runs only on those
+first-review events, never on later pushes.
+
+- `pr-review-summary` — set to `false` to turn the summary off (default `true`).
 
 ## Approval behaviour
 
@@ -174,17 +177,14 @@ with:
 | `resolve-token` | — | Token to resolve the action's own threads; needs a GitHub App token (see above) |
 | `anthropic-api-key` | — | Anthropic key for the Claude API backend |
 | `cursor-api-key` | — | Cursor key for the Cursor backend |
-| `claude-routine-api-key` | — | Key for firing a hosted Claude routine |
-| `claude-routine-id` | — | Routine id (mutually exclusive with `claude-routine-url`) |
-| `claude-routine-url` | — | Routine fire URL; the id is parsed from it |
 | `review-model` | `auto` | `auto` \| `claude` \| `cursor` |
 | `first-review-model` | — | Backend for the first review; empty uses `review-model` |
-| `claude-mode` | `api` | `api` \| `routine` |
 | `claude-model` | `claude-opus-4-8` | Anthropic model id |
 | `cursor-model` | `composer-2.5` | Cursor model id |
 | `additional-context` | — | Extra context for the review |
 | `approval-include` | `critical` | Severities that request changes when open |
 | `approval-disable` | `false` | Comments only; skip the verdict |
+| `pr-review-summary` | `true` | Append an AI summary to the PR description on the first review |
 | `min-severity` | `low` | Lowest severity worth posting |
 | `low-findings-cap` | `3` | Max low-severity findings per review |
 | `max-findings` | — | Overall inline-comment cap (empty = uncapped) |
