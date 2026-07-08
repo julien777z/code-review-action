@@ -31,7 +31,7 @@ GITHUB_DIFF_TOO_LARGE_PHRASES: Final[tuple[str, ...]] = (
 )
 
 
-def _github_error_text(exc: subprocess.CalledProcessError) -> str:
+def github_error_text(exc: subprocess.CalledProcessError) -> str:
     """Return combined `gh` error output for message-based classification."""
 
     parts: list[str] = []
@@ -47,7 +47,7 @@ def _github_error_text(exc: subprocess.CalledProcessError) -> str:
 def is_github_rate_limit(exc: subprocess.CalledProcessError) -> bool:
     """Return True when a `gh` failure is GitHub API rate limiting."""
 
-    text = _github_error_text(exc)
+    text = github_error_text(exc)
 
     return any(phrase in text for phrase in GITHUB_RATE_LIMIT_PHRASES)
 
@@ -55,7 +55,7 @@ def is_github_rate_limit(exc: subprocess.CalledProcessError) -> bool:
 def is_diff_too_large(exc: subprocess.CalledProcessError) -> bool:
     """Return True when a `gh pr diff` failure indicates the diff exceeds GitHub's size cap."""
 
-    text = _github_error_text(exc)
+    text = github_error_text(exc)
 
     return any(phrase in text for phrase in GITHUB_DIFF_TOO_LARGE_PHRASES)
 
