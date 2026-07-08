@@ -1,23 +1,26 @@
 import logging
 import os
 import subprocess
-from collections.abc import AsyncIterator, Callable
-from enum import StrEnum
+from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import Final, TypedDict
+from typing import Final
 
 import anthropic
 from cursor_sdk import CursorAgentError
 
-from code_review.config import CONFIG, SETTINGS, ReviewModel
+from code_review.config import CONFIG, SETTINGS
+from code_review.errors import ReviewBackendError
 from code_review.github import add_reaction, fetch_pull_request, remove_reaction
-from code_review.models.github_event import GithubEvent
+from code_review.models.backend import Backend, BackendHandlers
+from code_review.models.config import ReviewModel
 from code_review.models.findings import Finding
+from code_review.models.github_event import GithubEvent
 from code_review.models.pull_request import PullRequestContext, ReviewInputs
-from code_review.review import ReviewBackendError, ReviewRoundResult, run_review_round
+from code_review.models.review import ReviewRoundResult
+from code_review.review import run_review_round
 from code_review.review_backends import claude, cursor
 from code_review.utils.jsonl import iter_findings
-from code_review.summary import GenerateSummary, SummaryGenerationError, post_pr_summary
+from code_review.summary import SummaryGenerationError, post_pr_summary
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 logger = logging.getLogger("code_review")
@@ -26,26 +29,6 @@ PULL_REQUEST_ACTIONS = ("opened", "synchronize", "ready_for_review")
 FIRST_REVIEW_ACTIONS = ("opened", "ready_for_review")
 
 SUMMARY_BASE_ERRORS: Final[tuple[type[Exception], ...]] = (SummaryGenerationError, subprocess.CalledProcessError)
-
-ReviewTextStream = Callable[[PullRequestContext, ReviewInputs], AsyncIterator[str]]
-BackendRetryable = Callable[[Exception], bool]
-
-
-class Backend(StrEnum):
-    """The concrete backend resolved for this run."""
-
-    CURSOR = "cursor"
-    CLAUDE = "claude"
-
-
-class BackendHandlers(TypedDict):
-    """Backend behavior and error policy used by the shared runner."""
-
-    review_text: ReviewTextStream
-    generate_summary: GenerateSummary
-    errors: tuple[type[Exception], ...]
-    retryable: BackendRetryable
-    label: str
 
 
 def cursor_error_retryable(exc: Exception) -> bool:

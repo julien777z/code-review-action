@@ -6,16 +6,15 @@ import httpx
 import pytest
 from cursor_sdk import CursorAgentError
 
-from code_review.config import ReviewModel
+from code_review.errors import ReviewBackendError
+from code_review.models.backend import Backend, BackendHandlers
+from code_review.models.config import ReviewModel
 from code_review.models.findings import Finding
 from code_review.models.github_event import GithubEvent
 from code_review.review_backends import claude, cursor
-from code_review.review import ReviewBackendError
 from code_review.summary import SummaryGenerationError
 from code_review.runtime import (
     BACKENDS,
-    Backend,
-    BackendHandlers,
     association_allowed,
     is_eligible,
     is_first_review_event,

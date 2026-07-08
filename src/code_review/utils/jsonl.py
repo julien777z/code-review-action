@@ -3,8 +3,8 @@ from typing import Final
 
 from pydantic import ValidationError
 
-from code_review import review
 from code_review.config import CONFIG
+from code_review.errors import ReviewBackendError
 from code_review.models.findings import Finding, FindingCategory, RawFinding
 from code_review.models.severity import DiffSide, Severity
 
@@ -76,7 +76,7 @@ async def iter_findings(chunks: AsyncIterator[str]) -> AsyncIterator[Finding]:
 
     if produced:
         if truncated_finding_buffer(buffer):
-            raise review.ReviewBackendError("The review model output was truncated mid-finding.", retryable=True)
+            raise ReviewBackendError("The review model output was truncated mid-finding.", retryable=True)
 
         return
 
@@ -87,7 +87,7 @@ async def iter_findings(chunks: AsyncIterator[str]) -> AsyncIterator[Finding]:
 
     if full.strip():
         snippet = full.strip()[:UNPARSEABLE_SNIPPET_CHARS]
-        raise review.ReviewBackendError(
+        raise ReviewBackendError(
             f"The review model produced unparseable output (expected JSONL findings). Output started with: {snippet}",
             retryable=True,
         )

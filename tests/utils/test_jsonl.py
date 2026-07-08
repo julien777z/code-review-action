@@ -6,7 +6,7 @@ import pytest
 from code_review.config import CONFIG
 from code_review.models.findings import Finding, FindingCategory
 from code_review.models.severity import DiffSide, Severity
-from code_review.review import ReviewBackendError
+from code_review.errors import ReviewBackendError
 from code_review.utils.jsonl import iter_findings, parse_finding_line
 
 

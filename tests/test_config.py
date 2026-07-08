@@ -1,6 +1,7 @@
 import pytest
 
-from code_review.config import ReviewModel, Settings, parse_bool, split_list
+from code_review.config import Settings, parse_bool, split_list
+from code_review.models.config import ReviewModel
 from code_review.models.severity import Severity
 
 

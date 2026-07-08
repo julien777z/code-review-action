@@ -4,15 +4,17 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from code_review.config import CONFIG, ReviewModel
+from code_review.config import CONFIG
+from code_review.errors import ReviewBackendError
+from code_review.models.backend import Backend, BackendHandlers, GetBackendFindings
+from code_review.models.config import ReviewModel
 from code_review.models.findings import Finding, FindingCategory
 from code_review.models.github_event import GithubEvent
 from code_review.models.pull_request import PullRequestContext, ReviewInputs
+from code_review.models.review import ReviewRoundResult
 from code_review.models.severity import DiffSide, Severity
 from code_review.models.threads import ReviewThread, ThreadCommentAuthor, ThreadCommentNode, ThreadComments
-from code_review.review import GetFindings, ReviewBackendError, ReviewRoundResult
 from code_review.review_backends import cursor
-from code_review.runtime import Backend, BackendHandlers
 
 
 @pytest.fixture
@@ -89,10 +91,10 @@ def review_inputs_factory(pull_request_factory) -> Callable[..., ReviewInputs]:
 
 
 @pytest.fixture
-def flaky_stream_factory(monkeypatch) -> Callable[..., tuple[GetFindings, list[int]]]:
+def flaky_stream_factory(monkeypatch) -> Callable[..., tuple[GetBackendFindings, list[int]]]:
     """Build a streaming get_findings double that fails a set number of times before yielding findings."""
 
-    monkeypatch.setattr("code_review.review.REVIEW_RETRY_BACKOFF", timedelta(0))
+    monkeypatch.setattr("code_review.review_findings.REVIEW_RETRY_BACKOFF", timedelta(0))
 
     def _build(
         *,
@@ -100,7 +102,7 @@ def flaky_stream_factory(monkeypatch) -> Callable[..., tuple[GetFindings, list[i
         error: ReviewBackendError,
         result: list[Finding] | None = None,
         yield_before_error: bool = False,
-    ) -> tuple[GetFindings, list[int]]:
+    ) -> tuple[GetBackendFindings, list[int]]:
         calls: list[int] = []
         findings = result if result is not None else []
 
@@ -121,10 +123,10 @@ def flaky_stream_factory(monkeypatch) -> Callable[..., tuple[GetFindings, list[i
 
 
 @pytest.fixture
-def stream_findings_factory() -> Callable[[list[Finding]], GetFindings]:
+def stream_findings_factory() -> Callable[[list[Finding]], GetBackendFindings]:
     """Build a streaming get_findings double that yields a fixed list of findings."""
 
-    def _build(findings: list[Finding]) -> GetFindings:
+    def _build(findings: list[Finding]) -> GetBackendFindings:
         async def _get_findings(inputs: ReviewInputs) -> AsyncIterator[Finding]:
             for finding in findings:
                 yield finding
@@ -151,8 +153,22 @@ def review_github_mocks(monkeypatch) -> dict[str, AsyncMock]:
         "post_review": AsyncMock(return_value=True),
         "resolve_threads": AsyncMock(return_value=None),
     }
-    for name, mock in mocks.items():
-        monkeypatch.setattr(f"code_review.review.{name}", mock)
+    review_names = (
+        "already_reviewed",
+        "head_check_concluded",
+        "current_head_sha",
+        "pull_request_diff_if_available",
+        "diff_anchors",
+        "list_review_threads",
+        "start_check_run",
+        "complete_check_run",
+        "post_review",
+        "resolve_threads",
+    )
+    for name in review_names:
+        monkeypatch.setattr(f"code_review.review.{name}", mocks[name])
+    monkeypatch.setattr("code_review.review_threads.list_review_threads", mocks["list_review_threads"])
+    monkeypatch.setattr("code_review.review_findings.post_comment", mocks["post_comment"])
 
     return mocks
 

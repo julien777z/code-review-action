@@ -16,12 +16,21 @@ from code_review.models.github_event import (
     GithubEvent,
     IssuePullRequestRef,
 )
+from code_review.models.backend import (
+    Backend,
+    BackendHandlers,
+    BackendRetryable,
+    GetBackendFindings,
+    ReviewTextStream,
+)
+from code_review.models.config import ReviewConfig, ReviewModel
 from code_review.models.pull_request import (
     PostedFinding,
     PullRequestBodyUpdate,
     PullRequestContext,
     ReviewInputs,
 )
+from code_review.models.review import FindingPublication, ReviewRoundResult, RoundFindings
 from code_review.models.severity import SEVERITY_ORDER, DiffSide, Severity
 from code_review.models.threads import (
     ReviewThread,
@@ -41,6 +50,11 @@ __all__ = [
     "EventSender",
     "Finding",
     "FindingCategory",
+    "FindingPublication",
+    "Backend",
+    "BackendHandlers",
+    "BackendRetryable",
+    "GetBackendFindings",
     "GithubEvent",
     "IssuePullRequestRef",
     "PostedFinding",
@@ -49,9 +63,14 @@ __all__ = [
     "RawFinding",
     "ReviewComment",
     "ReviewCommentRequest",
+    "ReviewConfig",
     "ReviewInputs",
+    "ReviewModel",
     "ReviewPayload",
+    "ReviewRoundResult",
+    "ReviewTextStream",
     "ReviewThread",
+    "RoundFindings",
     "Severity",
     "ThreadCommentAuthor",
     "ThreadCommentNode",

@@ -1,15 +1,9 @@
 import asyncio
 import logging
 import signal
-from collections.abc import AsyncIterator, Callable
-from datetime import timedelta
-from enum import StrEnum
-from fnmatch import fnmatch
-from typing import Final
 
-from pydantic import BaseModel, Field
-
-from code_review.config import CONFIG, DISCLAIMER, SETTINGS
+from code_review.config import DISCLAIMER, SETTINGS
+from code_review.errors import ReviewBackendError
 from code_review.github import (
     already_reviewed,
     complete_check_run,
@@ -17,464 +11,20 @@ from code_review.github import (
     diff_anchors,
     head_check_concluded,
     list_review_threads,
-    post_comment,
     post_review,
     pull_request_diff_if_available,
     resolve_threads,
     start_check_run,
 )
-from code_review.models.findings import Finding, ReviewCommentRequest, ReviewPayload
-from code_review.models.pull_request import PostedFinding, PullRequestContext, ReviewInputs
-from code_review.models.severity import DiffSide, Severity
-from code_review.models.threads import ReviewThread, ThreadCommentNode
+from code_review.models.backend import GetBackendFindings
+from code_review.models.findings import ReviewPayload
+from code_review.models.pull_request import PullRequestContext, ReviewInputs
+from code_review.models.review import ReviewRoundResult
+from code_review.review_comments import build_verdict_review, compute_verdict, verdict_summary
+from code_review.review_findings import collect_round_findings
+from code_review.review_threads import classify_threads, existing_finding_titles, extract_posted_keys
 
 logger = logging.getLogger("code_review.review")
-
-GetFindings = Callable[[ReviewInputs], AsyncIterator[Finding]]
-
-REVIEW_BACKEND_ATTEMPTS: Final[int] = 3
-REVIEW_RETRY_BACKOFF: Final[timedelta] = timedelta(seconds=2)
-
-
-class ReviewRoundResult(BaseModel):
-    """The outcome of one review round and the diff snapshot it reviewed."""
-
-    exit_code: int
-    diff: str | None = None
-
-
-class ReviewBackendError(Exception):
-    """A backend failed to produce findings (model error or unparseable reply)."""
-
-    def __init__(self, message: str, *, retryable: bool = False) -> None:
-        super().__init__(message)
-        self.retryable = retryable
-
-
-class FindingPublication(StrEnum):
-    """Where a finding was made visible."""
-
-    INLINE = "inline"
-    VERDICT = "verdict"
-    DROPPED = "dropped"
-
-
-class RoundFindings(BaseModel):
-    """Findings visible in the current review round."""
-
-    current_keys: set[tuple[str, str]] = Field(default_factory=set)
-    severity_by_key: dict[tuple[str, str], Severity] = Field(default_factory=dict)
-    out_of_bounds: list[Finding] = Field(default_factory=list)
-    posted_any: bool = False
-
-    @property
-    def needs_verdict_review(self) -> bool:
-        """Return whether the round created visible review content outside the check run."""
-
-        return self.posted_any or bool(self.out_of_bounds)
-
-    def track_current(self, title_key: tuple[str, str], finding: Finding) -> None:
-        """Track this finding as current for thread reconciliation and blocking severity."""
-
-        self.current_keys.add(title_key)
-        self.severity_by_key[title_key] = finding.severity
-
-    def drop_current(self, title_key: tuple[str, str]) -> None:
-        """Remove a finding that could not be made visible."""
-
-        self.current_keys.discard(title_key)
-        self.severity_by_key.pop(title_key, None)
-
-    def track_publication(
-        self, title_key: tuple[str, str], finding: Finding, publication: FindingPublication
-    ) -> None:
-        """Record where a finding was published."""
-
-        match publication:
-            case FindingPublication.INLINE:
-                self.posted_any = True
-            case FindingPublication.VERDICT:
-                self.out_of_bounds.append(finding)
-            case FindingPublication.DROPPED:
-                self.drop_current(title_key)
-
-
-async def stream_findings_with_retry(
-    get_findings: GetFindings, inputs: ReviewInputs
-) -> AsyncIterator[Finding]:
-    """Stream the backend's findings, retrying transient failures only before the first one arrives."""
-
-    for attempt in range(REVIEW_BACKEND_ATTEMPTS):
-        produced = False
-        try:
-            async for finding in get_findings(inputs):
-                produced = True
-                yield finding
-
-            return
-        except ReviewBackendError as exc:
-            if produced or not exc.retryable or attempt == REVIEW_BACKEND_ATTEMPTS - 1:
-                raise
-
-            backoff = REVIEW_RETRY_BACKOFF * (2**attempt)
-            logger.warning("Review backend failed; retrying in %ss: %s", backoff.total_seconds(), exc)
-
-            await asyncio.sleep(backoff.total_seconds())
-
-
-def thread_title(comment: ThreadCommentNode) -> str | None:
-    """Return the finding title from this tier's comment body (the `### ` heading), if present."""
-
-    return next((row[4:].strip() for row in comment.body.splitlines() if row.startswith("### ")), None)
-
-
-def thread_severity(comment: ThreadCommentNode) -> Severity | None:
-    """Return the severity from this tier's current fixed severity line."""
-
-    split_body = comment.body.split(CONFIG["untrusted_input_open"], 1)
-    if len(split_body) != 2:
-        return None
-
-    fenced_body = split_body[1].split(CONFIG["untrusted_input_close"], 1)[0]
-    lines = [row.strip() for row in fenced_body.splitlines()]
-    try:
-        heading_index = next(index for index, row in enumerate(lines) if row.startswith("### "))
-    except StopIteration:
-        return None
-
-    line = next((row for row in lines[heading_index + 1 :] if row), "")
-    severity_line = line.split("<br>", 1)[0]
-    if not severity_line.startswith("**") or not severity_line.endswith(" Severity**"):
-        return None
-
-    severity_text = severity_line.removeprefix("**").removesuffix(" Severity**")
-    try:
-        return Severity.from_str(severity_text)
-    except ValueError:
-        return None
-
-
-def finding_severity_line(finding: Finding) -> str:
-    """Return the prominent severity line shown below the finding title."""
-
-    return f"**{finding.severity.value.capitalize()} Severity**"
-
-
-def finding_category_footer(finding: Finding) -> str:
-    """Return the small category footer for review comments."""
-
-    return f"<sub>{finding.category.label}</sub>"
-
-
-def is_tier_comment(comment: ThreadCommentNode | None, marker: str) -> bool:
-    """Return True when the comment is the runner's own posting, identified by the marker."""
-
-    if comment is None:
-        return False
-
-    return marker in comment.body
-
-
-async def existing_finding_titles(repo: str, pr_number: int, marker: str) -> dict[str, list[PostedFinding]]:
-    """Return the runner's posted (severity, title) pairs per file (open and resolved)."""
-
-    threads = await list_review_threads(repo, pr_number)
-    findings: dict[str, list[PostedFinding]] = {}
-    for thread in threads:
-        comment = next(iter(thread.comments.nodes), None)
-        if not is_tier_comment(comment, marker) or comment is None:
-            continue
-
-        title = thread_title(comment)
-        if comment.path and title:
-            severity = thread_severity(comment)
-            findings.setdefault(comment.path, []).append(
-                PostedFinding(severity=severity.value if severity else "", title=title)
-            )
-
-    return findings
-
-
-def extract_posted_keys(threads: list[ReviewThread], marker: str) -> set[tuple[str, str]]:
-    """Return every (path, title) the runner has already posted, open or resolved."""
-
-    keys: set[tuple[str, str]] = set()
-
-    for thread in threads:
-        comment = next(iter(thread.comments.nodes), None)
-        if not is_tier_comment(comment, marker) or comment is None:
-            continue
-
-        title = thread_title(comment)
-        if title is None:
-            continue
-
-        keys.add((comment.path or "", title))
-
-    return keys
-
-
-def classify_threads(
-    threads: list[ReviewThread],
-    marker: str,
-    current_keys: set[tuple[str, str]],
-    reviewed_files: set[str],
-) -> tuple[set[tuple[str, str]], list[str], set[tuple[str, str]]]:
-    """Split the runner's threads into still-open, stale (to resolve), and kept-blocking keys."""
-
-    open_keys: set[tuple[str, str]] = set()
-    stale_ids: list[str] = []
-    kept_blocking_keys: set[tuple[str, str]] = set()
-
-    for thread in threads:
-        comment = next(iter(thread.comments.nodes), None)
-        if not is_tier_comment(comment, marker) or comment is None:
-            continue
-
-        title = thread_title(comment)
-        if title is None:
-            continue
-
-        key = (comment.path or "", title)
-        if thread.is_resolved:
-            continue
-
-        if key in current_keys:
-            open_keys.add(key)
-
-            continue
-
-        severity = thread_severity(comment)
-        is_blocking = severity is not None and severity in SETTINGS.approval_include
-
-        if thread.is_outdated or (comment.path in reviewed_files and not is_blocking):
-            stale_ids.append(thread.id)
-        else:
-            open_keys.add(key)
-            if is_blocking:
-                kept_blocking_keys.add(key)
-
-    return open_keys, stale_ids, kept_blocking_keys
-
-
-def path_allowed(path: str) -> bool:
-    """Return whether a path passes the include/exclude glob filters."""
-
-    if SETTINGS.include_paths and not any(fnmatch(path, glob) for glob in SETTINGS.include_paths):
-        return False
-
-    return not any(fnmatch(path, glob) for glob in SETTINGS.exclude_paths)
-
-
-def finding_kept(finding: Finding) -> bool:
-    """Return True when a finding passes the severity bar and the path filters."""
-
-    return finding.severity.meets(SETTINGS.min_severity) and path_allowed(finding.path)
-
-
-def cap_decision(finding: Finding, low_count: int, total_count: int) -> bool:
-    """Return whether to post a finding given the running Low and total caps."""
-
-    if SETTINGS.max_findings is not None and total_count >= SETTINGS.max_findings:
-        return False
-
-    if finding.severity is Severity.LOW and low_count >= SETTINGS.low_findings_cap:
-        return False
-
-    return True
-
-
-def comment_body(finding: Finding, marker: str) -> str:
-    """Render one inline comment body with category and severity."""
-
-    return (
-        f"{CONFIG['untrusted_input_open']}\n"
-        f"### {finding.title}\n\n{finding_severity_line(finding)}<br>{finding_category_footer(finding)}\n\n{finding.body}\n"
-        f"{CONFIG['untrusted_input_close']}\n\n"
-        f"{DISCLAIMER}\n\n{marker}"
-    )
-
-
-def finding_anchors(finding: Finding, anchors: dict[str, tuple[set[int], set[int]]]) -> bool:
-    """Return True if the finding's line is present on its diff side."""
-
-    right, left = anchors.get(finding.path, (set(), set()))
-
-    return finding.line in (left if finding.side is DiffSide.LEFT else right)
-
-
-def is_postable(
-    finding: Finding, anchors: dict[str, tuple[set[int], set[int]]], unpatched: set[str]
-) -> bool:
-    """Return True if the finding can be posted: inline-anchorable, or on a changed file with no patch."""
-
-    return finding_anchors(finding, anchors) or finding.path in unpatched
-
-
-def finding_title_key(finding: Finding) -> tuple[str, str]:
-    """Return the path/title identity used to reconcile review threads."""
-
-    return finding.path, finding.title.strip()
-
-
-def finding_anchor_key(finding: Finding) -> tuple[str, int, DiffSide, str]:
-    """Return the anchor identity used to deduplicate streamed findings."""
-
-    return finding.path, finding.line, finding.side, finding.title.strip()
-
-
-def claim_postable_title(
-    title_key: tuple[str, str],
-    posted_keys: set[tuple[str, str]],
-    seen_new_keys: set[tuple[str, str]],
-) -> bool:
-    """Return True once for a title that can still be posted in this round."""
-
-    if title_key in posted_keys or title_key in seen_new_keys:
-        return False
-
-    seen_new_keys.add(title_key)
-
-    return True
-
-
-async def publish_finding(
-    pr: PullRequestContext,
-    marker: str,
-    finding: Finding,
-    anchors: dict[str, tuple[set[int], set[int]]],
-) -> FindingPublication:
-    """Publish a finding inline when possible, or mark it for the verdict body."""
-
-    if not finding_anchors(finding, anchors):
-        return FindingPublication.VERDICT
-
-    posted_inline = await post_comment(pr.repo, pr.number, build_inline_comment(pr.head_sha, finding, marker))
-    if posted_inline:
-        return FindingPublication.INLINE
-
-    logger.warning("Could not post inline finding %s:%s.", finding.path, finding.line)
-
-    return FindingPublication.DROPPED
-
-
-async def collect_round_findings(
-    pr: PullRequestContext,
-    marker: str,
-    get_findings: GetFindings,
-    inputs: ReviewInputs,
-    anchors: dict[str, tuple[set[int], set[int]]],
-    unpatched: set[str],
-    posted_keys: set[tuple[str, str]],
-) -> RoundFindings:
-    """Stream, deduplicate, cap, and publish findings for this review round."""
-
-    findings = RoundFindings()
-    seen_anchor_keys: set[tuple[str, int, DiffSide, str]] = set()
-    seen_new_keys: set[tuple[str, str]] = set()
-    low_count = 0
-    total_count = 0
-
-    async for finding in stream_findings_with_retry(get_findings, inputs):
-        if not finding_kept(finding):
-            continue
-
-        anchor_key = finding_anchor_key(finding)
-        if anchor_key in seen_anchor_keys:
-            continue
-
-        seen_anchor_keys.add(anchor_key)
-        title_key = finding_title_key(finding)
-        findings.track_current(title_key, finding)
-
-        if not is_postable(finding, anchors, unpatched):
-            continue
-
-        if not claim_postable_title(title_key, posted_keys, seen_new_keys):
-            continue
-
-        if not cap_decision(finding, low_count, total_count):
-            continue
-
-        publication = await publish_finding(pr, marker, finding, anchors)
-        findings.track_publication(title_key, finding, publication)
-        if publication is FindingPublication.DROPPED:
-            continue
-
-        total_count += 1
-        if finding.severity is Severity.LOW:
-            low_count += 1
-
-    return findings
-
-
-def compute_verdict(open_count: int, open_blocking: bool) -> tuple[str, str, str]:
-    """Return the (review event, check conclusion, check title) for the round's open-issue state."""
-
-    if open_count == 0:
-        return "APPROVE", "success", "No unresolved issues"
-
-    if open_blocking:
-        return "REQUEST_CHANGES", "failure", "Blocking issue open"
-
-    plural = "s" if open_count != 1 else ""
-
-    return "COMMENT", "neutral", f"{open_count} unresolved issue{plural}"
-
-
-def verdict_summary(event: str, open_count: int, previous_count: int) -> str:
-    """Phrase the verdict as the count of unresolved issues and how many carried from past reviews."""
-
-    if event == "APPROVE":
-        return "No unresolved issues — approving."
-
-    plural = "s" if open_count != 1 else ""
-    verb = "is" if open_count == 1 else "are"
-    carried = f" (including {previous_count} from a previous review)" if previous_count else ""
-    line = f"There {verb} {open_count} unresolved issue{plural}{carried}."
-
-    if event == "REQUEST_CHANGES":
-        return f"{line} A blocking issue is open — requesting changes."
-
-    return line
-
-
-def build_inline_comment(head_sha: str, finding: Finding, marker: str) -> ReviewCommentRequest:
-    """Build the standalone inline comment request for one anchorable finding."""
-
-    return ReviewCommentRequest(
-        commit_id=head_sha,
-        path=finding.path,
-        line=finding.line,
-        side=finding.side,
-        body=comment_body(finding, marker),
-    )
-
-
-def build_verdict_review(
-    head_sha: str,
-    out_of_bounds: list[Finding],
-    event: str,
-    summary_line: str,
-    marker: str,
-) -> ReviewPayload:
-    """Build the final verdict review: the summary body plus any findings too large to anchor inline."""
-
-    body = summary_line
-    if out_of_bounds:
-        listed = "\n".join(
-            f"- {finding.path}:{finding.line} — {finding_severity_line(finding)} — {finding_category_footer(finding)} — "
-            f"{finding.body}"
-            for finding in out_of_bounds
-        )
-        body = f"{body}\n\nFindings not posted inline:\n{listed}"
-
-    body = (
-        f"{CONFIG['untrusted_input_open']}\n{body}\n{CONFIG['untrusted_input_close']}\n\n"
-        f"{DISCLAIMER}\n\n{marker}"
-    )
-
-    return ReviewPayload(commit_id=head_sha, event=event, body=body, comments=[])
 
 
 async def post_review_or_warn(repo: str, pr_number: int, payload: ReviewPayload, event: str) -> None:
@@ -485,7 +35,7 @@ async def post_review_or_warn(repo: str, pr_number: int, payload: ReviewPayload,
 
 
 async def note_diff_too_large(pr: PullRequestContext, marker: str) -> ReviewRoundResult:
-    """Post a note that the diff is too large to auto-review, record the verdict, and return success."""
+    """Post a note that the diff is too large to auto-review."""
 
     body = f"The diff is too large to auto-review, so this review was skipped.\n\n{DISCLAIMER}\n\n{marker}"
     check_id = None if SETTINGS.approval_disable else await start_check_run(pr.repo, pr.head_sha)
@@ -496,8 +46,10 @@ async def note_diff_too_large(pr: PullRequestContext, marker: str) -> ReviewRoun
     return ReviewRoundResult(exit_code=0)
 
 
-async def run_review_round(pr: PullRequestContext, marker: str, get_findings: GetFindings) -> ReviewRoundResult:
-    """Stream a backend's findings, posting each anchorable one as it arrives, then record the verdict."""
+async def run_review_round(
+    pr: PullRequestContext, marker: str, get_findings: GetBackendFindings
+) -> ReviewRoundResult:
+    """Stream a backend's findings, post review comments, and record the verdict."""
 
     already = (
         await already_reviewed(pr.repo, pr.number, pr.head_sha, marker)
@@ -527,8 +79,6 @@ async def run_review_round(pr: PullRequestContext, marker: str, get_findings: Ge
     review_task = asyncio.current_task()
 
     def _cancel_on_signal() -> None:
-        """Cancel the in-flight review so the check run concludes when the job is cancelled."""
-
         if review_task is not None:
             review_task.cancel()
 
