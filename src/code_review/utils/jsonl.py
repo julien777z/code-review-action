@@ -45,6 +45,12 @@ def parse_finding_line(line: str) -> Finding | None:
     return normalize_raw(raw)
 
 
+def truncated_finding_buffer(buffer: str) -> bool:
+    """Return whether buffered text looks like a cut-off JSON finding."""
+
+    return buffer.strip().startswith("{")
+
+
 async def iter_findings(chunks: AsyncIterator[str]) -> AsyncIterator[Finding]:
     """Yield findings from streamed JSONL chunks, raising on non-JSONL output."""
 
@@ -69,9 +75,7 @@ async def iter_findings(chunks: AsyncIterator[str]) -> AsyncIterator[Finding]:
         buffer = ""
 
     if produced:
-        # A leftover that opens a JSON object is a finding the stream cut off mid-line (for example a
-        # max-tokens truncation); fail loudly rather than dropping it after earlier findings posted.
-        if buffer.strip().startswith("{"):
+        if truncated_finding_buffer(buffer):
             raise review.ReviewBackendError("The review model output was truncated mid-finding.", retryable=True)
 
         return

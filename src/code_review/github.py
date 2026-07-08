@@ -268,7 +268,6 @@ async def list_review_threads(repo: str, pr_number: int) -> list[ReviewThread]:
         )
         threads = [ReviewThread.model_validate(json.loads(line)) for line in raw.splitlines() if line.strip()]
     except (subprocess.CalledProcessError, json.JSONDecodeError, KeyError, TypeError) as exc:
-        # Fail loudly: approving over open threads dropped by a partial fetch would be a false success.
         logger.error("Could not list review threads to reconcile: %s", exc)
 
         raise
@@ -279,8 +278,6 @@ async def list_review_threads(repo: str, pr_number: int) -> list[ReviewThread]:
 async def resolve_threads(repo: str, thread_ids: list[str]) -> None:
     """Resolve the given review threads with the resolve token; the default github token cannot resolve."""
 
-    # The default Actions GITHUB_TOKEN cannot call resolveReviewThread (GitHub rejects it with
-    # "Resource not accessible by integration"), so use the elevated resolve token when one is set.
     token = SETTINGS.resolve_token or SETTINGS.github_token
     mutation = "mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{id}}}"
 

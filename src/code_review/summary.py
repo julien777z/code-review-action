@@ -20,18 +20,25 @@ class SummaryGenerationError(Exception):
     """Raised when the summary model returns empty or unusable output."""
 
 
-def summary_section(summary_text: str) -> str:
-    """Render the marker-delimited summary block appended to the PR description."""
+def strip_summary_markers(summary_text: str) -> str:
+    """Remove marker tokens that would let model output forge summary block boundaries."""
 
-    # Strip our own markers so model output cannot forge a section boundary or a closing fence.
-    fenced = summary_text
+    clean = summary_text
     for token in (
         CONFIG["summary_marker_open"],
         CONFIG["summary_marker_close"],
         CONFIG["untrusted_input_open"],
         CONFIG["untrusted_input_close"],
     ):
-        fenced = fenced.replace(token, "")
+        clean = clean.replace(token, "")
+
+    return clean
+
+
+def summary_section(summary_text: str) -> str:
+    """Render the marker-delimited summary block appended to the PR description."""
+
+    fenced = strip_summary_markers(summary_text)
 
     return (
         f"{CONFIG['summary_marker_open']}\n"

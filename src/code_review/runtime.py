@@ -265,8 +265,6 @@ async def main() -> int:
 
         return 0
 
-    # React with eyes on the trigger (the comment for a manual trigger, otherwise the PR) while the
-    # backend reviews, then remove it once the round finishes.
     subject = reaction_subject(event_name, event, repo, pr_number)
     reaction_id = await add_reaction(subject)
 

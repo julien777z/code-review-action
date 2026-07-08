@@ -3,10 +3,11 @@ import logging
 import signal
 from collections.abc import AsyncIterator, Callable
 from datetime import timedelta
+from enum import StrEnum
 from fnmatch import fnmatch
 from typing import Final
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from code_review.config import CONFIG, DISCLAIMER, SETTINGS
 from code_review.github import (
@@ -48,6 +49,54 @@ class ReviewBackendError(Exception):
     def __init__(self, message: str, *, retryable: bool = False) -> None:
         super().__init__(message)
         self.retryable = retryable
+
+
+class FindingPublication(StrEnum):
+    """Where a finding was made visible."""
+
+    INLINE = "inline"
+    VERDICT = "verdict"
+    DROPPED = "dropped"
+
+
+class RoundFindings(BaseModel):
+    """Findings visible in the current review round."""
+
+    current_keys: set[tuple[str, str]] = Field(default_factory=set)
+    severity_by_key: dict[tuple[str, str], Severity] = Field(default_factory=dict)
+    out_of_bounds: list[Finding] = Field(default_factory=list)
+    posted_any: bool = False
+
+    @property
+    def needs_verdict_review(self) -> bool:
+        """Return whether the round created visible review content outside the check run."""
+
+        return self.posted_any or bool(self.out_of_bounds)
+
+    def track_current(self, title_key: tuple[str, str], finding: Finding) -> None:
+        """Track this finding as current for thread reconciliation and blocking severity."""
+
+        self.current_keys.add(title_key)
+        self.severity_by_key[title_key] = finding.severity
+
+    def drop_current(self, title_key: tuple[str, str]) -> None:
+        """Remove a finding that could not be made visible."""
+
+        self.current_keys.discard(title_key)
+        self.severity_by_key.pop(title_key, None)
+
+    def track_publication(
+        self, title_key: tuple[str, str], finding: Finding, publication: FindingPublication
+    ) -> None:
+        """Record where a finding was published."""
+
+        match publication:
+            case FindingPublication.INLINE:
+                self.posted_any = True
+            case FindingPublication.VERDICT:
+                self.out_of_bounds.append(finding)
+            case FindingPublication.DROPPED:
+                self.drop_current(title_key)
 
 
 async def stream_findings_with_retry(
@@ -123,8 +172,6 @@ def is_tier_comment(comment: ThreadCommentNode | None, marker: str) -> bool:
     if comment is None:
         return False
 
-    # Match on the marker alone, not the author: the action may post as github-actions[bot], a GitHub
-    # App, or a PAT user, but every comment it writes carries the marker.
     return marker in comment.body
 
 
@@ -264,6 +311,103 @@ def is_postable(
     return finding_anchors(finding, anchors) or finding.path in unpatched
 
 
+def finding_title_key(finding: Finding) -> tuple[str, str]:
+    """Return the path/title identity used to reconcile review threads."""
+
+    return finding.path, finding.title.strip()
+
+
+def finding_anchor_key(finding: Finding) -> tuple[str, int, DiffSide, str]:
+    """Return the anchor identity used to deduplicate streamed findings."""
+
+    return finding.path, finding.line, finding.side, finding.title.strip()
+
+
+def claim_postable_title(
+    title_key: tuple[str, str],
+    posted_keys: set[tuple[str, str]],
+    seen_new_keys: set[tuple[str, str]],
+) -> bool:
+    """Return True once for a title that can still be posted in this round."""
+
+    if title_key in posted_keys or title_key in seen_new_keys:
+        return False
+
+    seen_new_keys.add(title_key)
+
+    return True
+
+
+async def publish_finding(
+    pr: PullRequestContext,
+    marker: str,
+    finding: Finding,
+    anchors: dict[str, tuple[set[int], set[int]]],
+) -> FindingPublication:
+    """Publish a finding inline when possible, or mark it for the verdict body."""
+
+    if not finding_anchors(finding, anchors):
+        return FindingPublication.VERDICT
+
+    posted_inline = await post_comment(pr.repo, pr.number, build_inline_comment(pr.head_sha, finding, marker))
+    if posted_inline:
+        return FindingPublication.INLINE
+
+    logger.warning("Could not post inline finding %s:%s.", finding.path, finding.line)
+
+    return FindingPublication.DROPPED
+
+
+async def collect_round_findings(
+    pr: PullRequestContext,
+    marker: str,
+    get_findings: GetFindings,
+    inputs: ReviewInputs,
+    anchors: dict[str, tuple[set[int], set[int]]],
+    unpatched: set[str],
+    posted_keys: set[tuple[str, str]],
+) -> RoundFindings:
+    """Stream, deduplicate, cap, and publish findings for this review round."""
+
+    findings = RoundFindings()
+    seen_anchor_keys: set[tuple[str, int, DiffSide, str]] = set()
+    seen_new_keys: set[tuple[str, str]] = set()
+    low_count = 0
+    total_count = 0
+
+    async for finding in stream_findings_with_retry(get_findings, inputs):
+        if not finding_kept(finding):
+            continue
+
+        anchor_key = finding_anchor_key(finding)
+        if anchor_key in seen_anchor_keys:
+            continue
+
+        seen_anchor_keys.add(anchor_key)
+        title_key = finding_title_key(finding)
+        findings.track_current(title_key, finding)
+
+        if not is_postable(finding, anchors, unpatched):
+            continue
+
+        if not claim_postable_title(title_key, posted_keys, seen_new_keys):
+            continue
+
+        if not cap_decision(finding, low_count, total_count):
+            continue
+
+        publication = await publish_finding(pr, marker, finding, anchors)
+        findings.track_publication(title_key, finding, publication)
+        if publication is FindingPublication.DROPPED:
+            continue
+
+        total_count += 1
+        if finding.severity is Severity.LOW:
+            low_count += 1
+
+    return findings
+
+
 def compute_verdict(open_count: int, open_blocking: bool) -> tuple[str, str, str]:
     """Return the (review event, check conclusion, check title) for the round's open-issue state."""
 
@@ -379,7 +523,6 @@ async def run_review_round(pr: PullRequestContext, marker: str, get_findings: Ge
 
     check_id = None if SETTINGS.approval_disable else await start_check_run(pr.repo, pr.head_sha)
     concluded = False
-    posted_any = False
     loop = asyncio.get_running_loop()
     review_task = asyncio.current_task()
 
@@ -404,57 +547,10 @@ async def run_review_round(pr: PullRequestContext, marker: str, get_findings: Ge
         threads = await list_review_threads(pr.repo, pr.number)
         posted_keys = extract_posted_keys(threads, marker)
 
-        seen_anchor_keys: set[tuple[str, int, DiffSide, str]] = set()
-        seen_new_keys: set[tuple[str, str]] = set()
-        current_keys: set[tuple[str, str]] = set()
-        severity_by_key: dict[tuple[str, str], Severity] = {}
-        out_of_bounds: list[Finding] = []
-        low_count = 0
-        total_count = 0
-
         try:
-            async for finding in stream_findings_with_retry(get_findings, inputs):
-                if not finding_kept(finding):
-                    continue
-
-                anchor_key = (finding.path, finding.line, finding.side, finding.title.strip())
-                if anchor_key in seen_anchor_keys:
-                    continue
-
-                seen_anchor_keys.add(anchor_key)
-                title_key = (finding.path, finding.title.strip())
-                current_keys.add(title_key)
-                severity_by_key[title_key] = finding.severity
-
-                if title_key in posted_keys or title_key in seen_new_keys:
-                    continue
-
-                if not is_postable(finding, anchors, unpatched):
-                    continue
-
-                # Claim the (path, title) slot for the first postable finding before the cap check, so a
-                # later same-titled finding cannot slip past a capped earlier one.
-                seen_new_keys.add(title_key)
-
-                if not cap_decision(finding, low_count, total_count):
-                    continue
-
-                if finding_anchors(finding, anchors):
-                    posted_inline = await post_comment(pr.repo, pr.number, build_inline_comment(pr.head_sha, finding, marker))
-                    if not posted_inline:
-                        logger.warning("Could not post inline finding %s:%s.", finding.path, finding.line)
-                        current_keys.discard(title_key)
-                        severity_by_key.pop(title_key, None)
-
-                        continue
-
-                    posted_any = True
-                else:
-                    out_of_bounds.append(finding)
-
-                total_count += 1
-                if finding.severity is Severity.LOW:
-                    low_count += 1
+            findings = await collect_round_findings(
+                pr, marker, get_findings, inputs, anchors, unpatched, posted_keys
+            )
         except ReviewBackendError as exc:
             logger.error("Review backend failed: %s", exc)
             await complete_check_run(pr.repo, check_id, "action_required", "Review failed", str(exc))
@@ -462,13 +558,15 @@ async def run_review_round(pr: PullRequestContext, marker: str, get_findings: Ge
 
             return ReviewRoundResult(exit_code=1, diff=diff)
 
-        open_existing, stale_ids, kept_blocking = classify_threads(threads, marker, current_keys, reviewed_files)
+        open_existing, stale_ids, kept_blocking = classify_threads(
+            threads, marker, findings.current_keys, reviewed_files
+        )
 
-        new_open_keys = {key for key in current_keys if key not in posted_keys}
+        new_open_keys = {key for key in findings.current_keys if key not in posted_keys}
         open_keys = open_existing | new_open_keys
         open_count = len(open_keys)
         open_blocking = bool(kept_blocking) or any(
-            severity_by_key.get(key) in SETTINGS.approval_include for key in open_keys
+            findings.severity_by_key.get(key) in SETTINGS.approval_include for key in open_keys
         )
 
         previous_count = len(open_existing)
@@ -479,12 +577,10 @@ async def run_review_round(pr: PullRequestContext, marker: str, get_findings: Ge
 
         summary = verdict_summary(event, open_count, previous_count)
 
-        # Post the verdict review only when this round produced something new; otherwise the check run
-        # carries the verdict.
-        if (posted_any or out_of_bounds or SETTINGS.approval_disable) and not await already_reviewed(
+        if (findings.needs_verdict_review or SETTINGS.approval_disable) and not await already_reviewed(
             pr.repo, pr.number, pr.head_sha, marker
         ):
-            payload = build_verdict_review(pr.head_sha, out_of_bounds, event, summary, marker)
+            payload = build_verdict_review(pr.head_sha, findings.out_of_bounds, event, summary, marker)
             await post_review_or_warn(pr.repo, pr.number, payload, event)
 
         logger.info("Resolving %d stale thread(s); %d open issue(s) remain.", len(stale_ids), open_count)
