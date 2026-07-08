@@ -6,8 +6,8 @@ import pytest
 from code_review.config import CONFIG
 from code_review.errors import ReviewBackendError
 from code_review.models.severity import Severity
-from code_review.review import run_review_round
-from code_review.review_findings import REVIEW_BACKEND_ATTEMPTS
+from code_review.review.findings import REVIEW_BACKEND_ATTEMPTS
+from code_review.review.round import run_review_round
 
 MARKER = CONFIG["review_marker"]
 

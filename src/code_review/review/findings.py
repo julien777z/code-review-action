@@ -13,9 +13,9 @@ from code_review.models.findings import Finding
 from code_review.models.pull_request import PullRequestContext, ReviewInputs
 from code_review.models.review import FindingPublication, RoundFindings
 from code_review.models.severity import DiffSide, Severity
-from code_review.review_comments import build_inline_comment
+from code_review.review.comments import build_inline_comment
 
-logger = logging.getLogger("code_review.review_findings")
+logger = logging.getLogger("code_review.review.findings")
 
 REVIEW_BACKEND_ATTEMPTS: Final[int] = 3
 REVIEW_RETRY_BACKOFF: Final[timedelta] = timedelta(seconds=2)

@@ -3,7 +3,7 @@ import pytest
 from code_review.config import CONFIG, DISCLAIMER
 from code_review.models.findings import FindingCategory
 from code_review.models.severity import DiffSide, Severity
-from code_review.review_comments import (
+from code_review.review.comments import (
     build_inline_comment,
     build_verdict_review,
     comment_body,

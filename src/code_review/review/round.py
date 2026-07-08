@@ -20,9 +20,9 @@ from code_review.models.backend import GetBackendFindings
 from code_review.models.findings import ReviewPayload
 from code_review.models.pull_request import PullRequestContext, ReviewInputs
 from code_review.models.review import ReviewRoundResult
-from code_review.review_comments import build_verdict_review, compute_verdict, verdict_summary
-from code_review.review_findings import collect_round_findings
-from code_review.review_threads import classify_threads, existing_finding_titles, extract_posted_keys
+from code_review.review.comments import build_verdict_review, compute_verdict, verdict_summary
+from code_review.review.findings import collect_round_findings
+from code_review.review.threads import classify_threads, existing_finding_titles, extract_posted_keys
 
 logger = logging.getLogger("code_review.review")
 

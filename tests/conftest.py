@@ -94,7 +94,7 @@ def review_inputs_factory(pull_request_factory) -> Callable[..., ReviewInputs]:
 def flaky_stream_factory(monkeypatch) -> Callable[..., tuple[GetBackendFindings, list[int]]]:
     """Build a streaming get_findings double that fails a set number of times before yielding findings."""
 
-    monkeypatch.setattr("code_review.review_findings.REVIEW_RETRY_BACKOFF", timedelta(0))
+    monkeypatch.setattr("code_review.review.findings.REVIEW_RETRY_BACKOFF", timedelta(0))
 
     def _build(
         *,
@@ -166,9 +166,9 @@ def review_github_mocks(monkeypatch) -> dict[str, AsyncMock]:
         "resolve_threads",
     )
     for name in review_names:
-        monkeypatch.setattr(f"code_review.review.{name}", mocks[name])
-    monkeypatch.setattr("code_review.review_threads.list_review_threads", mocks["list_review_threads"])
-    monkeypatch.setattr("code_review.review_findings.post_comment", mocks["post_comment"])
+        monkeypatch.setattr(f"code_review.review.round.{name}", mocks[name])
+    monkeypatch.setattr("code_review.review.threads.list_review_threads", mocks["list_review_threads"])
+    monkeypatch.setattr("code_review.review.findings.post_comment", mocks["post_comment"])
 
     return mocks
 

@@ -17,7 +17,7 @@ from code_review.models.findings import Finding
 from code_review.models.github_event import GithubEvent
 from code_review.models.pull_request import PullRequestContext, ReviewInputs
 from code_review.models.review import ReviewRoundResult
-from code_review.review import run_review_round
+from code_review.review.round import run_review_round
 from code_review.review_backends import claude, cursor
 from code_review.utils.jsonl import iter_findings
 from code_review.summary import SummaryGenerationError, post_pr_summary

@@ -3,7 +3,7 @@ from code_review.github import list_review_threads
 from code_review.models.pull_request import PostedFinding
 from code_review.models.severity import Severity
 from code_review.models.threads import ReviewThread, ThreadCommentNode
-from code_review.review_comments import thread_severity, thread_title
+from code_review.review.comments import thread_severity, thread_title
 
 
 def is_tier_comment(comment: ThreadCommentNode | None, marker: str) -> bool:

@@ -6,7 +6,7 @@ import pytest
 from code_review.errors import ReviewBackendError
 from code_review.models.findings import Finding
 from code_review.models.severity import DiffSide, Severity
-from code_review.review_findings import (
+from code_review.review.findings import (
     REVIEW_BACKEND_ATTEMPTS,
     cap_decision,
     finding_anchors,

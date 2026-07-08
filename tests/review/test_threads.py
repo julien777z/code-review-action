@@ -6,7 +6,7 @@ import pytest
 
 from code_review.config import CONFIG
 from code_review.models.severity import Severity
-from code_review.review_threads import (
+from code_review.review.threads import (
     classify_threads,
     existing_finding_titles,
     extract_posted_keys,
@@ -49,7 +49,7 @@ class TestExistingFindingTitles:
             review_thread_factory(title="Mine", severity="Critical", marker=MARKER, path="src/app.py"),
             review_thread_factory(title="Human", path="src/app.py", body="### Human\n\nA human note."),
         ]
-        monkeypatch.setattr("code_review.review_threads.list_review_threads", AsyncMock(return_value=threads))
+        monkeypatch.setattr("code_review.review.threads.list_review_threads", AsyncMock(return_value=threads))
 
         result = asyncio.run(existing_finding_titles("octo/repo", 7, MARKER))
 
@@ -61,7 +61,7 @@ class TestExistingFindingTitles:
         """Test that thread listing failures are not treated as an empty prior-finding set."""
 
         monkeypatch.setattr(
-            "code_review.review_threads.list_review_threads",
+            "code_review.review.threads.list_review_threads",
             AsyncMock(side_effect=subprocess.CalledProcessError(1, ["gh", "api"])),
         )
 
