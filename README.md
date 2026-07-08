@@ -43,11 +43,6 @@ jobs:
           cursor-api-key: ${{ secrets.CURSOR_API_KEY }}
 ```
 
-`enforce-project-rules` is on by default and loads `.cursor/rules` from the checked-out
-workspace. Check out the PR head so manual `agent review` comments and automatic reviews use
-the same rule files as the branch under review — `issue_comment` workflows otherwise
-checkout the default branch.
-
 Provide at least one backend credential (`anthropic-api-key`, `cursor-api-key`, or the
 `claude-routine-*` pair). Comment `agent review` on a PR to trigger a manual review.
 
