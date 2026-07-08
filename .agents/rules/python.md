@@ -1,6 +1,6 @@
 ---
-name: python
 description: Follow modern Python typing, import, formatting, error handling, and maintainability conventions.
+alwaysApply: true
 ---
 
 # Python Rules

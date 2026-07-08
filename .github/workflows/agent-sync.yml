@@ -52,6 +52,7 @@ jobs:
 
           git add -u
 
+          if [ -d ".agents" ]; then git add .agents/; fi
           if [ -d ".claude" ]; then git add .claude/; fi
           if [ -d ".cursor" ]; then git add .cursor/; fi
           if [ -d ".codex" ]; then git add .codex/; fi

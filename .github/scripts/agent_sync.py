@@ -1,6 +1,7 @@
 import argparse
 import difflib
 import json
+import os
 import re
 import shutil
 import sys
@@ -25,6 +26,20 @@ NUMBERED_COPY_PATTERN: Final[re.Pattern[str]] = re.compile(r" \d+$")
 TEXT_CACHE: dict[Path, str | None] = {}
 
 
+class FrontMatterDumper(yaml.SafeDumper):
+    """SafeDumper variant that renders multiline strings as literal blocks."""
+
+
+def represent_multiline_str(dumper: yaml.SafeDumper, value: str) -> yaml.ScalarNode:
+    """Render strings containing newlines with literal block style."""
+
+    style = "|" if "\n" in value else None
+    return dumper.represent_scalar("tag:yaml.org,2002:str", value, style=style)
+
+
+FrontMatterDumper.add_representer(str, represent_multiline_str)
+
+
 class OutputFile(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -33,6 +48,7 @@ class OutputFile(BaseModel):
     kind: str
     slug: str
     source_path: Path | None
+    link_target: Path | None = None
 
 
 class DiffEntry(BaseModel):
@@ -80,8 +96,11 @@ class AgentFrontMatter(BaseModel):
 
 
 class RuleFrontMatter(BaseModel):
-    model_config = ConfigDict(extra="allow", strict=True)
+    model_config = ConfigDict(extra="allow", strict=True, populate_by_name=True)
 
+    description: str | None = None
+    globs: str | list[str] | None = None
+    always_apply: bool = Field(default=True, alias="alwaysApply")
     starlark: str | None = None
 
 
@@ -109,9 +128,19 @@ def main() -> int:
         return 1
 
     for diff in diffs:
+        if diff.output.link_target is not None:
+            continue
         write_text(diff.output.target_path, diff.output.content)
         status = "created" if diff.existing is None else "updated"
         console.print(f"  [green]✓[/green] {status}: {diff.output.target_path}")
+
+    for diff in diffs:
+        if diff.output.link_target is None:
+            continue
+        write_symlink(diff.output.target_path, diff.output.link_target)
+        console.print(
+            f"  [green]✓[/green] linked: {diff.output.target_path} -> {expected_link_text(diff.output)}"
+        )
 
     for stale_path in stale_paths:
         delete_path(stale_path)
@@ -262,7 +291,6 @@ def generate_skill_outputs() -> list[OutputFile]:
             continue
 
         front_matter, content = parse_markdown_file(source_path, SkillFrontMatter)
-        source_content = read_text(source_path) or ""
 
         codex_name = nonempty_str(front_matter.get("name")) or slug_to_codex_name(slug)
         if not SAFE_SLUG_PATTERN.match(codex_name):
@@ -273,24 +301,29 @@ def generate_skill_outputs() -> list[OutputFile]:
 
         codex_description = nonempty_str(front_matter.get("description")) or derive_description(content)
 
-        # (platform, skill-dir-name) — codex lives under its sanitized name, the others under the slug.
-        skill_dirs = (("cursor", slug), ("claude", slug), ("codex", codex_name))
-
-        skill_md_content = {
-            "cursor": ensure_trailing_newline(source_content),
-            "claude": ensure_trailing_newline(source_content),
-            "codex": assemble_codex_skill(content, codex_name, codex_description),
-        }
-        for platform, dir_name in skill_dirs:
+        # Claude and Cursor read the source skill directory through relative
+        # links; only Codex needs a transformed physical copy.
+        for platform in ("claude", "cursor"):
             outputs.append(
                 OutputFile(
-                    target_path=ROOT_DIR / f".{platform}" / "skills" / dir_name / "SKILL.md",
-                    content=skill_md_content[platform],
+                    target_path=ROOT_DIR / f".{platform}" / "skills" / slug,
+                    content="",
                     kind=f"{platform}_skill",
                     slug=slug,
                     source_path=source_path,
+                    link_target=skill_dir,
                 )
             )
+
+        outputs.append(
+            OutputFile(
+                target_path=ROOT_DIR / ".codex" / "skills" / codex_name / "SKILL.md",
+                content=assemble_codex_skill(content, codex_name, codex_description),
+                kind="codex_skill",
+                slug=slug,
+                source_path=source_path,
+            )
+        )
 
         for asset_path in sorted(skill_dir.rglob("*")):
             if not asset_path.is_file() or asset_path.name == "SKILL.md":
@@ -299,16 +332,15 @@ def generate_skill_outputs() -> list[OutputFile]:
             if asset_content is None:
                 continue
             relative = asset_path.relative_to(skill_dir)
-            for platform, dir_name in skill_dirs:
-                outputs.append(
-                    OutputFile(
-                        target_path=ROOT_DIR / f".{platform}" / "skills" / dir_name / relative,
-                        content=ensure_trailing_newline(asset_content),
-                        kind=f"{platform}_skill_asset",
-                        slug=slug,
-                        source_path=asset_path,
-                    )
+            outputs.append(
+                OutputFile(
+                    target_path=ROOT_DIR / ".codex" / "skills" / codex_name / relative,
+                    content=ensure_trailing_newline(asset_content),
+                    kind="codex_skill_asset",
+                    slug=slug,
+                    source_path=asset_path,
                 )
+            )
 
     return outputs
 
@@ -397,7 +429,7 @@ def generate_agent_outputs(
 
 
 def generate_rule_outputs() -> list[OutputFile]:
-    """Sync .agents/rules/<name>.md to .claude/rules/*.md, .cursor/rules/*.mdc, and Starlark .codex/rules/*.rules."""
+    """Normalize .agents/rules/<name>.md in place, link Claude/Cursor rule paths to it, and emit Starlark .codex/rules/*.rules."""
 
     outputs: list[OutputFile] = []
     rules_dir = AGENTS_DIR / "rules"
@@ -410,22 +442,24 @@ def generate_rule_outputs() -> list[OutputFile]:
         if body.strip():
             outputs.append(
                 OutputFile(
-                    target_path=ROOT_DIR / ".claude" / "rules" / f"{slug}.md",
-                    content=ensure_trailing_newline(body),
-                    kind="claude_rule",
+                    target_path=path,
+                    content=normalize_rule_source(front_matter, body),
+                    kind="agents_rule",
                     slug=slug,
                     source_path=path,
                 )
             )
-            outputs.append(
-                OutputFile(
-                    target_path=ROOT_DIR / ".cursor" / "rules" / f"{slug}.mdc",
-                    content=assemble_cursor_rule(body, always_apply=True),
-                    kind="cursor_rule",
-                    slug=slug,
-                    source_path=path,
+            for platform, filename in (("claude", f"{slug}.md"), ("cursor", f"{slug}.mdc")):
+                outputs.append(
+                    OutputFile(
+                        target_path=ROOT_DIR / f".{platform}" / "rules" / filename,
+                        content="",
+                        kind=f"{platform}_rule",
+                        slug=slug,
+                        source_path=path,
+                        link_target=path,
+                    )
                 )
-            )
 
         # Codex execution-policy files must be Starlark, not Markdown. Only emit
         # when the source explicitly provides `starlark:` front matter; otherwise
@@ -497,11 +531,27 @@ def generate_settings_outputs(platform_settings: dict[str, dict]) -> list[Output
     return outputs
 
 
-def assemble_cursor_rule(body: str, always_apply: bool) -> str:
-    """Build a Cursor .mdc file with alwaysApply front matter."""
+def normalize_rule_source(front_matter: dict, body: str) -> str:
+    """Rebuild a rule source file with unified, deterministically ordered front matter."""
 
-    front_matter = "---\n" + f"alwaysApply: {str(always_apply).lower()}" + "\n---\n\n"
-    return front_matter + ensure_trailing_newline(body)
+    normalized: dict = {}
+    for key in ("description", "globs"):
+        value = front_matter.get(key)
+        if value:
+            normalized[key] = value
+
+    always_apply = front_matter.get("alwaysApply")
+    normalized["alwaysApply"] = always_apply if isinstance(always_apply, bool) else True
+
+    starlark = front_matter.get("starlark")
+    if isinstance(starlark, str) and starlark.strip():
+        normalized["starlark"] = starlark
+
+    known_keys = {"name", "description", "globs", "alwaysApply", "starlark"}
+    for key in sorted(set(front_matter) - known_keys):
+        normalized[key] = front_matter[key]
+
+    return render_front_matter(normalized, body)
 
 
 def assemble_codex_skill(body: str, name: str, description: str) -> str:
@@ -515,8 +565,9 @@ def render_front_matter(front_matter: dict, body: str) -> str:
     """Serialize a dict as YAML front matter wrapped in --- delimiters."""
 
     if front_matter:
-        front = yaml.safe_dump(
+        front = yaml.dump(
             front_matter,
+            Dumper=FrontMatterDumper,
             sort_keys=False,
             default_flow_style=False,
             width=10_000,
@@ -571,14 +622,27 @@ def ensure_trailing_newline(text: str) -> str:
 
 
 def compute_diffs(outputs: list[OutputFile]) -> list[DiffEntry]:
-    """Compare generated outputs against on-disk files and return entries that differ."""
+    """Compare generated outputs and symlinks against on-disk state and return differing entries."""
 
     diffs: list[DiffEntry] = []
     for output in outputs:
+        if output.link_target is not None:
+            existing_link = read_link(output.target_path)
+            if existing_link != expected_link_text(output):
+                diffs.append(DiffEntry(output=output, existing=existing_link))
+            continue
+
         existing = read_text(output.target_path)
         if existing is None or existing != output.content or missing_exec_bit(output):
             diffs.append(DiffEntry(output=output, existing=existing))
     return diffs
+
+
+def expected_link_text(output: OutputFile) -> str:
+    """Return the relative symlink text a link output should carry on disk."""
+
+    assert output.link_target is not None
+    return os.path.relpath(output.link_target, output.target_path.parent)
 
 
 def is_executable_output(path: Path, content: str) -> bool:
@@ -602,11 +666,17 @@ def compute_stale_paths(
 ) -> list[Path]:
     """Find generated files/directories that no longer map to .agents sources."""
 
+    skill_kinds = {"codex_skill", "claude_skill", "cursor_skill"}
     expected_paths = {output.target_path for output in outputs}
-    expected_skill_dirs = {
+    linked_dirs = {
+        output.target_path
+        for output in outputs
+        if output.link_target is not None and output.kind in skill_kinds
+    }
+    expected_skill_dirs = linked_dirs | {
         output.target_path.parent
         for output in outputs
-        if output.kind in {"codex_skill", "claude_skill", "cursor_skill"}
+        if output.kind in skill_kinds and output.link_target is None
     }
     stale_paths: set[Path] = set()
 
@@ -631,7 +701,9 @@ def compute_stale_paths(
             continue
 
         for path in directory.glob(pattern):
-            if path.is_file() and path not in expected_paths:
+            if any(linked in path.parents for linked in linked_dirs):
+                continue
+            if (path.is_file() or path.is_symlink()) and path not in expected_paths:
                 stale_paths.add(path)
 
     # `.codex/rules/*.rules` are only managed when the file carries the sync
@@ -663,7 +735,7 @@ def compute_stale_paths(
         if not skills_dir.exists():
             continue
         for path in skills_dir.iterdir():
-            if path.is_dir() and path not in expected_skill_dirs:
+            if (path.is_dir() or path.is_symlink()) and path not in expected_skill_dirs:
                 stale_paths.add(path)
 
     return sorted(stale_paths, key=str)
@@ -688,14 +760,39 @@ def write_text(path: Path, content: str) -> None:
     """Write content to a file, creating parent directories and updating the read cache."""
 
     path.parent.mkdir(parents=True, exist_ok=True)
+    if path.is_symlink():
+        path.unlink()
     path.write_text(content, encoding="utf-8")
     if is_executable_output(path, content):
         path.chmod(0o755)
     TEXT_CACHE[path] = content
 
 
+def write_symlink(path: Path, target: Path) -> None:
+    """Create a relative symlink at path pointing to target, replacing any existing entry."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.is_symlink() or path.exists():
+        delete_path(path)
+    path.symlink_to(os.path.relpath(target, path.parent))
+    TEXT_CACHE.pop(path, None)
+
+
+def read_link(path: Path) -> str | None:
+    """Return the symlink target text for path, or None when it is not a symlink."""
+
+    if not path.is_symlink():
+        return None
+    return os.readlink(path)
+
+
 def delete_path(path: Path) -> None:
-    """Delete a file or directory and clear any cached text entries."""
+    """Delete a file, directory, or symlink and clear any cached text entries."""
+
+    if path.is_symlink():
+        path.unlink()
+        TEXT_CACHE.pop(path, None)
+        return
 
     if not path.exists():
         return
@@ -723,7 +820,12 @@ def report_diffs(diffs: list[DiffEntry], stale_paths: list[Path]) -> None:
         table.add_row(str(diff.output.target_path), diff.output.kind, status)
 
     for stale_path in stale_paths:
-        kind = "directory" if stale_path.is_dir() else "generated"
+        if stale_path.is_symlink():
+            kind = "symlink"
+        elif stale_path.is_dir():
+            kind = "directory"
+        else:
+            kind = "generated"
         table.add_row(str(stale_path), kind, "stale")
 
     console.print(table)
@@ -739,6 +841,9 @@ def report_diffs(diffs: list[DiffEntry], stale_paths: list[Path]) -> None:
 
 def diff_summary(diff: DiffEntry) -> str:
     """Produce a unified diff between existing and expected content."""
+
+    if diff.output.link_target is not None:
+        return f"symlink -> {expected_link_text(diff.output)}"
 
     existing = diff.existing or ""
     expected = diff.output.content
