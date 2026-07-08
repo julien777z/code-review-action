@@ -1,4 +1,5 @@
 name: Code Review
+
 on:
   pull_request:
     types: [opened, synchronize, ready_for_review]
@@ -11,14 +12,30 @@ permissions:
   checks: write
 
 jobs:
-  review:
-    name: Review
+  Review:
     runs-on: ubuntu-latest
+    if: >-
+      (github.event_name == 'pull_request'
+        && github.event.pull_request.head.repo.full_name == github.repository)
+      || (github.event_name == 'issue_comment'
+        && github.event.issue.pull_request
+        && startsWith(github.event.comment.body, 'agent review'))
     concurrency:
       group: code-review-${{ github.event.pull_request.number || github.event.issue.number }}-${{ github.event_name == 'issue_comment' && 'comment' || 'review' }}
       cancel-in-progress: true
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || format('refs/pull/{0}/head', github.event.issue.number) }}
       - uses: julien777z/code-review-action@v0
         with:
           cursor-api-key: ${{ secrets.CURSOR_API_KEY }}
           resolve-token: ${{ secrets.CODE_REVIEW_TOKEN }}
+          review-model: cursor
+          author-associations: OWNER,MEMBER,COLLABORATOR
+          pr-review-summary: "true"
+          enforce-project-rules: "true"
+          project-rules-severity: "medium"
+          simplify-suggest: "true"
+          simplify-suggest-severity: "medium"
+          simplify-nearby-code: "true"
