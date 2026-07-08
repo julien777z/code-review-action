@@ -1,4 +1,3 @@
-import json
 import logging
 import os
 import subprocess
@@ -128,11 +127,10 @@ def load_event() -> tuple[str, GithubEvent]:
 
     name = os.environ.get("GITHUB_EVENT_NAME", "")
     path = os.environ.get("GITHUB_EVENT_PATH", "")
-    payload: dict[str, object] = {}
     if path and Path(path).exists():
-        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+        return name, GithubEvent.model_validate_json(Path(path).read_text(encoding="utf-8"))
 
-    return name, GithubEvent.model_validate(payload)
+    return name, GithubEvent()
 
 
 def association_allowed(association: str | None) -> bool:
