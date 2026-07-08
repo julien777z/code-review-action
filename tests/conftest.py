@@ -334,9 +334,15 @@ def thread_comment_factory() -> Callable[..., ThreadCommentNode]:
         path: str = "src/app.py",
         body: str | None = None,
     ) -> ThreadCommentNode:
-        resolved_body = (
-            body if body is not None else f"### {title}\n\nDetail.\n\n<sub><em>{category} - {severity}</em></sub>\n\n{marker}"
-        )
+        resolved_body = body
+        if resolved_body is None:
+            resolved_body = (
+                f"{CONFIG['untrusted_input_open']}\n"
+                f"### {title}\n\nDetail.\n"
+                f"{CONFIG['untrusted_input_close']}\n\n"
+                f"<sub><em>{category} - {severity}</em></sub>\n\n"
+                f"{marker}"
+            )
 
         return ThreadCommentNode(author=ThreadCommentAuthor(login=author), body=resolved_body, path=path)
 

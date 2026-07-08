@@ -84,10 +84,14 @@ def thread_title(comment: ThreadCommentNode) -> str | None:
 def thread_severity(comment: ThreadCommentNode) -> Severity | None:
     """Return the severity from this tier's current category/severity footer."""
 
+    split_body = comment.body.rsplit(CONFIG["untrusted_input_close"], 1)
+    if len(split_body) != 2:
+        return None
+
     line = next(
         (
             row.strip()
-            for row in comment.body.splitlines()
+            for row in split_body[1].splitlines()
             if row.strip().startswith("<sub><em>") and row.strip().endswith("</em></sub>")
         ),
         "",
