@@ -69,30 +69,9 @@ async def head_moved(pr: PullRequestContext) -> bool:
     return await current_head_sha(pr.repo, pr.number) != pr.head_sha
 
 
-async def post_pr_summary(pr: PullRequestContext, generate: GenerateSummary) -> None:
-    """Generate a description summary for the PR and merge it into the PR body."""
+async def write_summary_if_current(pr: PullRequestContext, section: str) -> None:
+    """Merge and write the summary only if the PR still points at the reviewed head."""
 
-    if await head_moved(pr):
-        logger.info("Head moved since review; skipping the summary for superseded commit %s.", pr.head_sha)
-
-        return
-
-    try:
-        diff = await pull_request_diff(pr.repo, pr.number)
-    except subprocess.CalledProcessError as exc:
-        if not is_diff_too_large(exc):
-            raise
-
-        logger.info("PR #%s diff is too large to summarize; skipping the summary.", pr.number)
-
-        return
-
-    text = (await generate(summary_prompt(pr, diff))).strip()
-    if not text:
-        raise SummaryGenerationError("The summary model returned no output.")
-
-    # Summary generation can be slow (a full agent session); re-check the head so a push that landed
-    # during it doesn't get this superseded commit's summary written onto the newer PR.
     if await head_moved(pr):
         logger.info("Head moved during summary generation; skipping the summary for superseded commit %s.", pr.head_sha)
 
@@ -100,5 +79,36 @@ async def post_pr_summary(pr: PullRequestContext, generate: GenerateSummary) -> 
 
     body = await pull_request_body(pr.repo, pr.number)
 
-    await update_pull_request_body(pr.repo, pr.number, merge_summary(body, summary_section(text)))
+    if await head_moved(pr):
+        logger.info("Head moved before summary update; skipping the summary for superseded commit %s.", pr.head_sha)
+
+        return
+
+    await update_pull_request_body(pr.repo, pr.number, merge_summary(body, section))
     logger.info("Updated PR #%s description with the generated summary.", pr.number)
+
+
+async def post_pr_summary(pr: PullRequestContext, generate: GenerateSummary, *, diff: str | None = None) -> None:
+    """Generate a description summary for the PR and merge it into the PR body."""
+
+    if await head_moved(pr):
+        logger.info("Head moved since review; skipping the summary for superseded commit %s.", pr.head_sha)
+
+        return
+
+    if diff is None:
+        try:
+            diff = await pull_request_diff(pr.repo, pr.number)
+        except subprocess.CalledProcessError as exc:
+            if not is_diff_too_large(exc):
+                raise
+
+            logger.info("PR #%s diff is too large to summarize; skipping the summary.", pr.number)
+
+            return
+
+    text = (await generate(summary_prompt(pr, diff))).strip()
+    if not text:
+        raise SummaryGenerationError("The summary model returned no output.")
+
+    await write_summary_if_current(pr, summary_section(text))

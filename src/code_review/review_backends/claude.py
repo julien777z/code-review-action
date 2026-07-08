@@ -139,7 +139,7 @@ async def managed_agent_text(pr: PullRequestContext, user_message: str, *, mount
             await teardown_managed_agent(client, environment_id, agent_id, session_id)
 
 
-async def run_claude_review(pr: PullRequestContext) -> int:
+async def run_claude_review(pr: PullRequestContext) -> review.ReviewRoundResult:
     """Review the PR with a Managed Agents session."""
 
     async def _findings(inputs: ReviewInputs) -> AsyncIterator[Finding]:

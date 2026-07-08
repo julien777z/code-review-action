@@ -378,7 +378,8 @@ class TestRunReviewRound:
 
         result = asyncio.run(run_review_round(pull_request_factory(), MARKER, stream_findings_factory(findings)))
 
-        assert result == 0
+        assert result.exit_code == 0
+        assert result.diff == ""
         assert review_github_mocks["post_comment"].await_count == 2
 
     def test_diff_too_large_posts_note_and_skips(
@@ -392,7 +393,7 @@ class TestRunReviewRound:
 
         result = asyncio.run(run_review_round(pull_request_factory(), MARKER, stream_findings_factory([])))
 
-        assert result == 0
+        assert result.exit_code == 0
         review_github_mocks["post_review"].assert_awaited_once()
         body = review_github_mocks["post_review"].await_args.args[2].body
 
@@ -494,7 +495,7 @@ class TestRunReviewRound:
 
         result = asyncio.run(run_review_round(pull_request_factory(head_sha="abc123"), MARKER, stream_findings_factory(findings)))
 
-        assert result == 0
+        assert result.exit_code == 0
         assert review_github_mocks["post_comment"].await_count == 0
         assert review_github_mocks["post_review"].await_count == 0
         assert review_github_mocks["complete_check_run"].await_args.args[2] == "cancelled"
@@ -510,7 +511,7 @@ class TestRunReviewRound:
 
         result = asyncio.run(run_review_round(pull_request_factory(), MARKER, get_findings))
 
-        assert result == 1
+        assert result.exit_code == 1
         assert review_github_mocks["post_comment"].await_count == 0
         assert review_github_mocks["post_review"].await_count == 0
         assert review_github_mocks["complete_check_run"].await_args.args[2] == "action_required"

@@ -221,11 +221,11 @@ with:
 |---|---|---|
 | `github-token` | `${{ github.token }}` | Token to read the diff and post reviews/checks |
 | `resolve-token` | — | Token with pull-request write to resolve the action's own threads (e.g. a GitHub App token) |
-| `anthropic-api-key` | — | Anthropic key for the Claude API backend |
+| `anthropic-api-key` | — | Anthropic key for Claude reviews and PR-summary generation |
 | `cursor-api-key` | — | Cursor key for the Cursor backend |
 | `review-model` | `auto` | `auto` \| `claude` \| `cursor` |
 | `first-review-model` | — | Backend for the first review; empty uses `review-model` |
-| `claude-model` | `claude-opus-4-8` | Anthropic model id |
+| `claude-model` | `claude-opus-4-8` | Anthropic model id for Claude reviews and summaries |
 | `cursor-model` | `composer-2.5` | Cursor model id |
 | `additional-context` | — | Extra context for the review |
 | `approval-include` | `critical` | Severities that request changes when open |

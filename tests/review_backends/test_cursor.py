@@ -65,7 +65,7 @@ class TestRunCursorReview:
 
         monkeypatch.setattr("code_review.review_backends.cursor.run_agent", _run_agent)
 
-        exit_code = asyncio.run(cursor.run_cursor_review(pull_request_factory()))
+        result = asyncio.run(cursor.run_cursor_review(pull_request_factory()))
 
-        assert exit_code == 0
+        assert result.exit_code == 0
         assert recorded["load_project_rules"] is enforce

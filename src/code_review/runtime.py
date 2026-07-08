@@ -14,6 +14,7 @@ from code_review.config import SETTINGS, ReviewModel
 from code_review.github import add_reaction, fetch_pull_request, remove_reaction
 from code_review.models.shared.github_event import GithubEvent
 from code_review.models.shared.pull_request import PullRequestContext
+from code_review.review import ReviewRoundResult
 from code_review.review_backends import claude, cursor
 from code_review.summary import GenerateSummary, SummaryGenerationError, post_pr_summary
 
@@ -30,7 +31,7 @@ SUMMARY_ERRORS: Final[tuple[type[Exception], ...]] = (
     CursorAgentError,
 )
 
-RunReview = Callable[[PullRequestContext], Awaitable[int]]
+RunReview = Callable[[PullRequestContext], Awaitable[ReviewRoundResult]]
 
 
 class Backend(StrEnum):
@@ -210,10 +211,11 @@ async def main() -> int:
 
     try:
         handlers = BACKENDS[backend]
-        exit_code = await handlers["run_review"](pr)
+        result = await handlers["run_review"](pr)
+        exit_code = result.exit_code
         if exit_code == 0 and first_review and SETTINGS.pr_review_summary:
             try:
-                await post_pr_summary(pr, handlers["generate_summary"])
+                await post_pr_summary(pr, handlers["generate_summary"], diff=result.diff)
             except SUMMARY_ERRORS as exc:
                 logger.error("Could not post the PR summary; the review still succeeded: %s", exc)
 

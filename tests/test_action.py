@@ -69,6 +69,19 @@ class TestStringInputs:
         assert review_step(action)["env"][env_name] == "${{ inputs.%s }}" % input_name
 
 
+class TestClaudeInputDescriptions:
+    """Test that Claude input descriptions match the current Managed Agents backend."""
+
+    def test_descriptions_do_not_reference_retired_api_backend(self) -> None:
+        """Test that Claude backend descriptions no longer point operators at the old API-only mode."""
+
+        inputs = load_action()["inputs"]
+
+        assert "API backend" not in inputs["anthropic-api-key"]["description"]
+        assert "API backend" not in inputs["claude-model"]["description"]
+        assert "Managed Agents" in inputs["claude-model"]["description"]
+
+
 class TestRoutineInputsRemoved:
     """Test that the retired Claude routine inputs are no longer declared."""
 

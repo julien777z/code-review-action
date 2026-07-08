@@ -4,6 +4,7 @@ import logging
 import signal
 import subprocess
 from collections.abc import AsyncIterator, Callable
+from dataclasses import dataclass
 from datetime import timedelta
 from fnmatch import fnmatch
 from typing import Final
@@ -36,6 +37,14 @@ GetFindings = Callable[[ReviewInputs], AsyncIterator[Finding]]
 
 REVIEW_BACKEND_ATTEMPTS: Final[int] = 3
 REVIEW_RETRY_BACKOFF: Final[timedelta] = timedelta(seconds=2)
+
+
+@dataclass(frozen=True)
+class ReviewRoundResult:
+    """The outcome of one review round and the diff snapshot it reviewed."""
+
+    exit_code: int
+    diff: str | None = None
 
 
 class ReviewBackendError(Exception):
@@ -345,7 +354,7 @@ async def note_diff_too_large(pr: PullRequestContext, marker: str) -> int:
     return 0
 
 
-async def run_review_round(pr: PullRequestContext, marker: str, get_findings: GetFindings) -> int:
+async def run_review_round(pr: PullRequestContext, marker: str, get_findings: GetFindings) -> ReviewRoundResult:
     """Stream a backend's findings, posting each anchorable one as it arrives, then record the verdict."""
 
     # The verdict of record is the check run (approval on) or the review marker (approval off).
@@ -357,7 +366,7 @@ async def run_review_round(pr: PullRequestContext, marker: str, get_findings: Ge
     if already:
         logger.info("Head %s already reviewed; skipping.", pr.head_sha)
 
-        return 0
+        return ReviewRoundResult(0)
 
     try:
         diff = await pull_request_diff(pr.repo, pr.number)
@@ -367,7 +376,7 @@ async def run_review_round(pr: PullRequestContext, marker: str, get_findings: Ge
 
         logger.warning("PR diff is too large to auto-review; posting a note and skipping.")
 
-        return await note_diff_too_large(pr, marker)
+        return ReviewRoundResult(await note_diff_too_large(pr, marker))
 
     (anchors, unpatched), posted_findings = await asyncio.gather(
         diff_anchors(pr.repo, pr.number),
@@ -399,7 +408,7 @@ async def run_review_round(pr: PullRequestContext, marker: str, get_findings: Ge
             await complete_check_run(pr.repo, check_id, "cancelled", "Superseded", "The head moved before review.")
             concluded = True
 
-            return 0
+            return ReviewRoundResult(0)
 
         reviewed_files = set(anchors) | unpatched
         threads = await list_review_threads(pr.repo, pr.number)
@@ -459,7 +468,7 @@ async def run_review_round(pr: PullRequestContext, marker: str, get_findings: Ge
             await complete_check_run(pr.repo, check_id, "action_required", "Review failed", str(exc))
             concluded = True
 
-            return 1
+            return ReviewRoundResult(1, diff=diff)
 
         open_existing, stale_ids, kept_blocking = classify_threads(threads, marker, current_keys, reviewed_files)
 
@@ -492,12 +501,12 @@ async def run_review_round(pr: PullRequestContext, marker: str, get_findings: Ge
         await complete_check_run(pr.repo, check_id, conclusion, title, summary)
         concluded = True
 
-        return 0
+        return ReviewRoundResult(0, diff=diff)
     except asyncio.CancelledError:
         await complete_check_run(pr.repo, check_id, "cancelled", "Superseded", "The review job was cancelled.")
         concluded = True
 
-        return 1
+        return ReviewRoundResult(1)
     finally:
         for cancel_signal in (signal.SIGTERM, signal.SIGINT):
             loop.remove_signal_handler(cancel_signal)

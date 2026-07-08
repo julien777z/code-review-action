@@ -44,9 +44,9 @@ class TestRunClaudeReview:
         client = managed_agent_client_factory(events)
         monkeypatch.setattr("code_review.review_backends.claude.anthropic.AsyncAnthropic", lambda **kwargs: client)
 
-        exit_code = asyncio.run(claude.run_claude_review(pull_request_factory()))
+        result = asyncio.run(claude.run_claude_review(pull_request_factory()))
 
-        assert exit_code == 0
+        assert result.exit_code == 0
         assert bool(client.beta.sessions.create.await_args.kwargs["resources"]) is repo_mounted
 
 

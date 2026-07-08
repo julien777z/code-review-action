@@ -10,7 +10,7 @@ from code_review.models.shared.github_event import GithubEvent
 from code_review.models.shared.pull_request import PullRequestContext, ReviewInputs
 from code_review.models.shared.severity import DiffSide, Severity
 from code_review.models.shared.threads import ReviewThread, ThreadCommentAuthor, ThreadCommentNode, ThreadComments
-from code_review.review import GetFindings, ReviewBackendError
+from code_review.review import GetFindings, ReviewBackendError, ReviewRoundResult
 from code_review.review_backends import cursor
 from code_review.runtime import Backend
 
@@ -276,7 +276,7 @@ def main_harness(monkeypatch, mock_config, pull_request_factory, pull_request_ev
     ) -> dict[str, AsyncMock | PullRequestContext]:
         mock_config(review_model=ReviewModel.CURSOR, cursor_api_key="key", **config_overrides)
 
-        run_review = AsyncMock(return_value=run_review_result)
+        run_review = AsyncMock(return_value=ReviewRoundResult(run_review_result, diff="REVIEW_DIFF"))
         post_pr_summary = AsyncMock(return_value=None)
         pr = pull_request_factory()
 

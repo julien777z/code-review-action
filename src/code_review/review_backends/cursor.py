@@ -63,7 +63,7 @@ async def run_agent(prompt: str, *, load_project_rules: bool = False) -> AsyncIt
         await agent.close()
 
 
-async def run_cursor_review(pr: PullRequestContext) -> int:
+async def run_cursor_review(pr: PullRequestContext) -> review.ReviewRoundResult:
     """Review the PR with the Cursor backend, streaming each finding as the agent emits it."""
 
     async def _findings(inputs: ReviewInputs) -> AsyncIterator[Finding]:

@@ -265,7 +265,7 @@ class TestMain:
 
         assert mocks["post_pr_summary"].await_count == (1 if summary_posted else 0)
         if summary_posted:
-            mocks["post_pr_summary"].assert_awaited_once_with(mocks["pr"], cursor.generate_text)
+            mocks["post_pr_summary"].assert_awaited_once_with(mocks["pr"], cursor.generate_text, diff="REVIEW_DIFF")
 
     def test_summary_skipped_when_disabled(self, main_harness) -> None:
         """Test that a first review does not post a summary when the setting is off."""

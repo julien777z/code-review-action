@@ -112,6 +112,18 @@ class TestPostPrSummary:
         assert "Generated summary" in body
         assert CONFIG["summary_marker_open"] in body
 
+    def test_uses_provided_review_diff(self, summary_github_mocks, pull_request_factory) -> None:
+        """Test that summary generation reuses the review round's diff snapshot when provided."""
+
+        generate = AsyncMock(return_value="Generated summary")
+
+        asyncio.run(post_pr_summary(pull_request_factory(), generate, diff="REVIEW_DIFF"))
+        prompt = generate.await_args.args[0]
+
+        assert "REVIEW_DIFF" in prompt
+        assert "DIFF_BODY" not in prompt
+        summary_github_mocks["pull_request_diff"].assert_not_awaited()
+
     def test_empty_output_raises_without_updating(self, summary_github_mocks, pull_request_factory) -> None:
         """Test that empty model output raises and does not update the PR body."""
 
@@ -143,6 +155,18 @@ class TestPostPrSummary:
         asyncio.run(post_pr_summary(pr, generate))
 
         generate.assert_awaited_once()
+        summary_github_mocks["update_pull_request_body"].assert_not_awaited()
+
+    def test_skips_when_head_moved_before_update(self, summary_github_mocks, pull_request_factory) -> None:
+        """Test that the final body read and update stay guarded against a last-moment push."""
+
+        pr = pull_request_factory(head_sha="abc123")
+        summary_github_mocks["current_head_sha"].side_effect = ["abc123", "abc123", "moved-sha"]
+        generate = AsyncMock(return_value="Generated summary")
+
+        asyncio.run(post_pr_summary(pr, generate))
+
+        summary_github_mocks["pull_request_body"].assert_awaited_once()
         summary_github_mocks["update_pull_request_body"].assert_not_awaited()
 
     def test_skips_when_diff_too_large(self, summary_github_mocks, pull_request_factory) -> None:

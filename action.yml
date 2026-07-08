@@ -15,7 +15,7 @@ inputs:
     required: false
     default: ""
   anthropic-api-key:
-    description: Anthropic API key for the Claude Messages API backend.
+    description: Anthropic API key for the Claude backend and PR-summary generation.
     required: false
     default: ""
   cursor-api-key:
@@ -29,7 +29,7 @@ inputs:
     description: Backend for the PR's first review (opened/ready). Empty falls back to review-model.
     default: ""
   claude-model:
-    description: Anthropic model id for the Claude API backend.
+    description: Anthropic model id for Claude Managed Agents reviews and Claude PR-summary generation.
     default: claude-opus-4-8
   cursor-model:
     description: Cursor model id for the Cursor backend.
