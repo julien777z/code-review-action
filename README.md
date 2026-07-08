@@ -25,14 +25,28 @@ jobs:
   review:
     name: Review
     runs-on: ubuntu-latest
+    if: >-
+      (github.event_name == 'pull_request'
+        && github.event.pull_request.head.repo.full_name == github.repository)
+      || (github.event_name == 'issue_comment'
+        && github.event.issue.pull_request
+        && startsWith(github.event.comment.body, 'agent review'))
     concurrency:
       group: code-review-${{ github.event.pull_request.number || github.event.issue.number }}-${{ github.event_name == 'issue_comment' && 'comment' || 'review' }}
       cancel-in-progress: true
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || format('refs/pull/{0}/head', github.event.issue.number) }}
       - uses: julien777z/code-review-action@v0
         with:
           cursor-api-key: ${{ secrets.CURSOR_API_KEY }}
 ```
+
+`enforce-project-rules` is on by default and loads `.cursor/rules` from the checked-out
+workspace. Check out the PR head so manual `agent review` comments and automatic reviews use
+the same rule files as the branch under review — `issue_comment` workflows otherwise
+checkout the default branch.
 
 Provide at least one backend credential (`anthropic-api-key`, `cursor-api-key`, or the
 `claude-routine-*` pair). Comment `agent review` on a PR to trigger a manual review.
@@ -125,6 +139,9 @@ yours and lives in your account; no server to run.
 
 ```yaml
 steps:
+  - uses: actions/checkout@v4
+    with:
+      ref: ${{ github.event.pull_request.head.sha || format('refs/pull/{0}/head', github.event.issue.number) }}
   - uses: actions/create-github-app-token@v3
     id: app-token
     with:
