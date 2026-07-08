@@ -4,10 +4,10 @@ from collections.abc import AsyncIterator
 import pytest
 
 from code_review.config import CONFIG
-from code_review.models.shared.findings import Finding
-from code_review.models.shared.severity import DiffSide, Severity
-from code_review.review import ReviewBackendError
-from code_review.review_backends.jsonl import iter_findings, parse_finding_line
+from code_review.models.findings import Finding, FindingCategory
+from code_review.models.severity import DiffSide, Severity
+from code_review.errors import ReviewBackendError
+from code_review.utils.jsonl import iter_findings, parse_finding_line
 
 
 async def text_stream(*parts: str) -> AsyncIterator[str]:
@@ -29,10 +29,51 @@ class TestParseFindingLine:
     def test_parses_and_normalizes_severity(self) -> None:
         """Test that a compact finding line parses with a normalized severity."""
 
-        finding = parse_finding_line('{"path":"a.py","line":3,"side":"RIGHT","severity":"high","title":"T","body":"B"}')
+        finding = parse_finding_line(
+            '{"path":"a.py","line":3,"side":"RIGHT","category":"bug","severity":"high","title":"T","body":"B"}'
+        )
 
         assert finding is not None
+        assert finding.category is FindingCategory.BUG
         assert finding.severity is Severity.HIGH
+
+    def test_parses_category_display_label(self) -> None:
+        """Test that category labels normalize from human-facing text."""
+
+        finding = parse_finding_line(
+            '{"path":"a.py","line":3,"side":"RIGHT","category":"Code Simplification","severity":"low","title":"T","body":"B"}'
+        )
+
+        assert finding is not None
+        assert finding.category is FindingCategory.CODE_SIMPLIFICATION
+
+    @pytest.mark.parametrize(
+        ("category", "expected"),
+        [
+            ("reliability", FindingCategory.BUG),
+            ("maintainability", FindingCategory.CODE_SIMPLIFICATION),
+        ],
+        ids=["reliability-to-bug", "maintainability-to-code-simplification"],
+    )
+    def test_normalizes_overlapping_categories(self, category: str, expected: FindingCategory) -> None:
+        """Test that overlapping category labels normalize to the base taxonomy."""
+
+        finding = parse_finding_line(
+            f'{{"path":"a.py","line":3,"side":"RIGHT","category":"{category}","severity":"medium","title":"T","body":"B"}}'
+        )
+
+        assert finding is not None
+        assert finding.category is expected
+
+    def test_unknown_category_maps_to_other(self) -> None:
+        """Test that unknown category text keeps the finding and labels it as other."""
+
+        finding = parse_finding_line(
+            '{"path":"a.py","line":3,"side":"RIGHT","category":"surprise","severity":"medium","title":"T","body":"B"}'
+        )
+
+        assert finding is not None
+        assert finding.category is FindingCategory.OTHER
 
     def test_normalizes_left_side(self) -> None:
         """Test that a LEFT-side line normalizes the diff side."""
@@ -105,40 +146,20 @@ class TestIterFindings:
 
         assert [finding.title for finding in findings] == ["A"]
 
-    def test_recovers_legacy_findings_object(self) -> None:
-        """Test that a whole-reply {"findings": [...]} object is recovered when JSONL parsing finds none."""
+    @pytest.mark.parametrize(
+        "blob",
+        [
+            '{"findings": [{"path":"a.py","line":1,"side":"RIGHT","severity":"high","title":"A","body":"B"}]}',
+            '[{"path":"a.py","line":1,"side":"LEFT","severity":"low","title":"A","body":"B"}]',
+            '{"findings": []}',
+        ],
+        ids=["findings-object", "array", "empty-findings-object"],
+    )
+    def test_raises_on_non_jsonl_json_shapes(self, blob: str) -> None:
+        """Test that non-JSONL JSON shapes are rejected."""
 
-        blob = '{"findings": [{"path":"a.py","line":1,"side":"RIGHT","severity":"high","title":"A","body":"B"}]}'
-
-        findings = asyncio.run(collect(blob))
-
-        assert [finding.title for finding in findings] == ["A"]
-
-    def test_recovers_fenced_json_array(self) -> None:
-        """Test that a fenced JSON array reply is recovered when JSONL parsing finds none."""
-
-        blob = '```json\n[{"path":"a.py","line":1,"side":"LEFT","severity":"low","title":"A","body":"B"}]\n```'
-
-        findings = asyncio.run(collect(blob))
-
-        assert [finding.side for finding in findings] == [DiffSide.LEFT]
-
-    def test_recovers_a_multiline_bare_finding_object(self) -> None:
-        """Test that a single finding emitted as a pretty-printed object (not a findings array) is recovered."""
-
-        blob = (
-            '{\n  "path": "a.py",\n  "line": 1,\n  "side": "RIGHT",\n'
-            '  "severity": "high",\n  "title": "A",\n  "body": "B"\n}'
-        )
-
-        findings = asyncio.run(collect(blob))
-
-        assert [finding.title for finding in findings] == ["A"]
-
-    def test_empty_findings_object_is_clean(self) -> None:
-        """Test that an explicit empty {"findings": []} reply yields no findings without raising."""
-
-        assert asyncio.run(collect('{"findings": []}')) == []
+        with pytest.raises(ReviewBackendError):
+            asyncio.run(collect(blob))
 
     def test_raises_on_object_without_findings_key(self) -> None:
         """Test that a JSON object lacking a findings key raises instead of approving as zero findings."""

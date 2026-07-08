@@ -1,40 +1,8 @@
 import pytest
 
-from code_review.config import ReviewModel, parse_bool, resolve_routine_id, split_list
-from code_review.models.shared.severity import Severity
-
-ROUTINE_URL = "https://api.anthropic.com/v1/claude_code/routines/rtn_abc/fire"
-
-
-class TestResolveRoutineId:
-    """Test that the routine id resolves from an id or url and rejects both."""
-
-    def test_returns_id_when_only_id_given(self) -> None:
-        """Test that an explicit id is returned unchanged."""
-
-        assert resolve_routine_id("rtn_123", "") == "rtn_123"
-
-    def test_parses_id_from_url(self) -> None:
-        """Test that the id is parsed out of a fire url."""
-
-        assert resolve_routine_id("", ROUTINE_URL) == "rtn_abc"
-
-    def test_returns_none_when_neither_given(self) -> None:
-        """Test that an absent id and url resolve to None."""
-
-        assert resolve_routine_id("", "") is None
-
-    def test_rejects_both(self) -> None:
-        """Test that providing both an id and a url raises."""
-
-        with pytest.raises(ValueError):
-            resolve_routine_id("rtn_123", ROUTINE_URL)
-
-    def test_rejects_malformed_url(self) -> None:
-        """Test that a url without a routine id raises."""
-
-        with pytest.raises(ValueError):
-            resolve_routine_id("", "https://example.com/nope")
+from code_review.config import Settings, parse_bool, split_list
+from code_review.models.config import ReviewModel
+from code_review.models.severity import Severity
 
 
 class TestSplitList:
@@ -77,6 +45,67 @@ class TestReviewModelParse:
         """Test that values parse case-insensitively and empty yields None."""
 
         assert ReviewModel.parse(raw) == expected
+
+
+class TestBooleanSettings:
+    """Test that the boolean feature inputs parse from the environment and carry their default."""
+
+    @pytest.mark.parametrize(
+        ("env_name", "default"),
+        [
+            ("PR_REVIEW_SUMMARY", True),
+            ("ENFORCE_PROJECT_RULES", True),
+            ("SIMPLIFY_SUGGEST", False),
+            ("SIMPLIFY_NEARBY_CODE", False),
+        ],
+        ids=["pr-review-summary", "enforce-project-rules", "simplify-suggest", "simplify-nearby-code"],
+    )
+    def test_defaults(self, monkeypatch, env_name: str, default: bool) -> None:
+        """Test that an unset input falls back to its default."""
+
+        monkeypatch.delenv(env_name, raising=False)
+
+        assert getattr(Settings(), env_name.lower()) is default
+
+    @pytest.mark.parametrize(
+        ("env_name", "raw", "expected"),
+        [
+            ("PR_REVIEW_SUMMARY", "false", False),
+            ("ENFORCE_PROJECT_RULES", "false", False),
+            ("SIMPLIFY_SUGGEST", "true", True),
+            ("SIMPLIFY_NEARBY_CODE", "true", True),
+        ],
+        ids=["pr-review-summary", "enforce-project-rules", "simplify-suggest", "simplify-nearby-code"],
+    )
+    def test_parses_env(self, monkeypatch, env_name: str, raw: str, expected: bool) -> None:
+        """Test that the string input parses to the expected boolean."""
+
+        monkeypatch.setenv(env_name, raw)
+
+        assert getattr(Settings(), env_name.lower()) is expected
+
+
+class TestProjectRulesSeverity:
+    """Test that the project-rules severity input parses, defaulting empty to None."""
+
+    def test_defaults_to_none(self, monkeypatch) -> None:
+        """Test that an unset input leaves the severity unpinned."""
+
+        monkeypatch.delenv("PROJECT_RULES_SEVERITY", raising=False)
+
+        assert Settings().project_rules_severity is None
+
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [("high", Severity.HIGH), ("CRITICAL", Severity.CRITICAL), ("low", Severity.LOW)],
+        ids=["high", "critical-upper", "low"],
+    )
+    def test_parses_env(self, monkeypatch, raw: str, expected: Severity) -> None:
+        """Test that the string input parses case-insensitively to the severity enum."""
+
+        monkeypatch.setenv("PROJECT_RULES_SEVERITY", raw)
+
+        assert Settings().project_rules_severity is expected
 
 
 class TestSeverity:

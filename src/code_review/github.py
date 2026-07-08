@@ -7,23 +7,24 @@ import subprocess
 from typing import Final
 
 from code_review.config import CONFIG, SETTINGS
-from code_review.models.shared.findings import ReviewCommentRequest, ReviewPayload
-from code_review.models.shared.pull_request import PullRequestContext
-from code_review.models.shared.threads import ReviewThread
+from code_review.models.findings import ReviewCommentRequest, ReviewPayload
+from code_review.models.pull_request import PullRequestBodyUpdate, PullRequestContext
+from code_review.models.threads import ReviewThread
 
 logger = logging.getLogger("code_review.github")
 
 HUNK_HEADER: Final[re.Pattern[str]] = re.compile(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@")
-GITHUB_RATE_LIMIT_PHRASES: Final[tuple[str, ...]] = (
-    "api rate limit exceeded",
-    "http 429",
-    "secondary rate limit",
-    "rate limit exceeded",
-    "too many requests",
+GITHUB_DIFF_TOO_LARGE_PHRASES: Final[tuple[str, ...]] = (
+    "diff exceeded",
+    "diff is too large",
+    "too large to",
+    "maximum number of files",
+    "http 406",
+    "not acceptable",
 )
 
 
-def _github_error_text(exc: subprocess.CalledProcessError) -> str:
+def github_error_text(exc: subprocess.CalledProcessError) -> str:
     """Return combined `gh` error output for message-based classification."""
 
     parts: list[str] = []
@@ -36,12 +37,12 @@ def _github_error_text(exc: subprocess.CalledProcessError) -> str:
     return "\n".join(parts).lower()
 
 
-def is_github_rate_limit(exc: subprocess.CalledProcessError) -> bool:
-    """Return True when a `gh` failure is GitHub API rate limiting."""
+def is_diff_too_large(exc: subprocess.CalledProcessError) -> bool:
+    """Return True when a `gh pr diff` failure indicates the diff exceeds GitHub's size cap."""
 
-    text = _github_error_text(exc)
+    text = github_error_text(exc)
 
-    return any(phrase in text for phrase in GITHUB_RATE_LIMIT_PHRASES)
+    return any(phrase in text for phrase in GITHUB_DIFF_TOO_LARGE_PHRASES)
 
 
 async def run_gh(args: list[str], stdin: str | None = None, token: str | None = None) -> str:
@@ -109,27 +110,48 @@ async def pull_request_diff(repo: str, pr_number: int) -> str:
     return await run_gh(["pr", "diff", str(pr_number), "--repo", repo])
 
 
+async def pull_request_diff_if_available(repo: str, pr_number: int) -> str | None:
+    """Return the PR diff, or None when GitHub refuses an oversized diff."""
+
+    try:
+        return await pull_request_diff(repo, pr_number)
+    except subprocess.CalledProcessError as exc:
+        if is_diff_too_large(exc):
+            return None
+
+        raise
+
+
+async def pull_request_body(repo: str, pr_number: int) -> str:
+    """Return the PR's current description text."""
+
+    raw = await run_gh(["pr", "view", str(pr_number), "--repo", repo, "--json", "body"])
+
+    return json.loads(raw).get("body") or ""
+
+
+async def update_pull_request_body(repo: str, pr_number: int, body: str) -> None:
+    """Replace the PR's description."""
+
+    await run_gh(
+        ["api", "--method", "PATCH", f"repos/{repo}/pulls/{pr_number}", "--input", "-"],
+        stdin=PullRequestBodyUpdate(body=body).model_dump_json(),
+    )
+
+
 async def already_reviewed(repo: str, pr_number: int, head_sha: str, marker: str) -> bool:
     """Return True if a review carrying the marker already exists for the given head."""
 
-    try:
-        raw = await run_gh(
-            [
-                "api",
-                "--paginate",
-                f"repos/{repo}/pulls/{pr_number}/reviews",
-                "--jq",
-                '.[] | select(.state != "PENDING" and .state != "DISMISSED" '
-                f'and ((.body // "") | contains("{marker}"))) | .commit_id',
-            ]
-        )
-    except subprocess.CalledProcessError as exc:
-        if is_github_rate_limit(exc):
-            logger.warning("Could not check existing reviews due to GitHub rate limiting; skipping guarded post.")
-
-            return True
-
-        raise
+    raw = await run_gh(
+        [
+            "api",
+            "--paginate",
+            f"repos/{repo}/pulls/{pr_number}/reviews",
+            "--jq",
+            '.[] | select(.state != "PENDING" and .state != "DISMISSED" '
+            f'and ((.body // "") | contains("{marker}"))) | .commit_id',
+        ]
+    )
 
     return head_sha in raw.split()
 
@@ -137,25 +159,17 @@ async def already_reviewed(repo: str, pr_number: int, head_sha: str, marker: str
 async def head_check_concluded(repo: str, head_sha: str) -> bool:
     """Return True if a completed review check run already exists for this head commit."""
 
-    try:
-        raw = await run_gh(
-            [
-                "api",
-                "--paginate",
-                f"repos/{repo}/commits/{head_sha}/check-runs",
-                "--jq",
-                f'.check_runs[] | select(.name == "{CONFIG["status_check_name"]}" '
-                'and .status == "completed" and (.conclusion == "success" '
-                'or .conclusion == "neutral" or .conclusion == "failure")) | .id',
-            ]
-        )
-    except subprocess.CalledProcessError as exc:
-        if is_github_rate_limit(exc):
-            logger.warning("Could not check completed review checks due to GitHub rate limiting; skipping review.")
-
-            return True
-
-        raise
+    raw = await run_gh(
+        [
+            "api",
+            "--paginate",
+            f"repos/{repo}/commits/{head_sha}/check-runs",
+            "--jq",
+            f'.check_runs[] | select(.name == "{CONFIG["status_check_name"]}" '
+            'and .status == "completed" and (.conclusion == "success" '
+            'or .conclusion == "neutral" or .conclusion == "failure")) | .id',
+        ]
+    )
 
     return bool(raw.split())
 
@@ -254,7 +268,6 @@ async def list_review_threads(repo: str, pr_number: int) -> list[ReviewThread]:
         )
         threads = [ReviewThread.model_validate(json.loads(line)) for line in raw.splitlines() if line.strip()]
     except (subprocess.CalledProcessError, json.JSONDecodeError, KeyError, TypeError) as exc:
-        # Fail loudly: approving over open threads dropped by a partial fetch would be a false success.
         logger.error("Could not list review threads to reconcile: %s", exc)
 
         raise
@@ -265,8 +278,6 @@ async def list_review_threads(repo: str, pr_number: int) -> list[ReviewThread]:
 async def resolve_threads(repo: str, thread_ids: list[str]) -> None:
     """Resolve the given review threads with the resolve token; the default github token cannot resolve."""
 
-    # The default Actions GITHUB_TOKEN cannot call resolveReviewThread (GitHub rejects it with
-    # "Resource not accessible by integration"), so use the elevated resolve token when one is set.
     token = SETTINGS.resolve_token or SETTINGS.github_token
     mutation = "mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{id}}}"
 

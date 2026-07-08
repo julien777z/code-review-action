@@ -1,15 +1,27 @@
-import json
 import logging
 import os
-from enum import StrEnum
+import subprocess
+from collections.abc import AsyncIterator
+from functools import partial
 from pathlib import Path
+from typing import Final
 
-from code_review.config import SETTINGS, ClaudeMode, ReviewModel
+import anthropic
+from cursor_sdk import CursorAgentError
+
+from code_review.config import CONFIG, SETTINGS
+from code_review.errors import ReviewBackendError
 from code_review.github import add_reaction, fetch_pull_request, remove_reaction
-from code_review.models.shared.github_event import GithubEvent
-from code_review.models.shared.pull_request import PullRequestContext
-from code_review.review_backends.claude import fire_claude_routine, run_claude_api_review
-from code_review.review_backends.cursor import run_cursor_review
+from code_review.models.backend import Backend, BackendHandlers
+from code_review.models.config import ReviewModel
+from code_review.models.findings import Finding
+from code_review.models.github_event import GithubEvent
+from code_review.models.pull_request import PullRequestContext, ReviewInputs
+from code_review.models.review import ReviewRoundResult
+from code_review.review.round import run_review_round
+from code_review.review_backends import claude, cursor
+from code_review.utils.jsonl import iter_findings
+from code_review.summary import SummaryGenerationError, post_pr_summary
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 logger = logging.getLogger("code_review")
@@ -17,13 +29,77 @@ logger = logging.getLogger("code_review")
 PULL_REQUEST_ACTIONS = ("opened", "synchronize", "ready_for_review")
 FIRST_REVIEW_ACTIONS = ("opened", "ready_for_review")
 
+SUMMARY_BASE_ERRORS: Final[tuple[type[Exception], ...]] = (SummaryGenerationError, subprocess.CalledProcessError)
 
-class Backend(StrEnum):
-    """The concrete backend resolved for this run."""
 
-    CURSOR = "cursor"
-    CLAUDE_API = "claude_api"
-    CLAUDE_ROUTINE = "claude_routine"
+def cursor_error_retryable(exc: Exception) -> bool:
+    """Return whether a Cursor backend exception should be retried."""
+
+    return isinstance(exc, CursorAgentError) and exc.is_retryable
+
+
+def claude_error_retryable(exc: Exception) -> bool:
+    """Return whether a Claude backend exception should be retried."""
+
+    return isinstance(exc, anthropic.APIError) and claude.is_retryable_api_error(exc)
+
+
+BACKENDS: Final[dict[Backend, BackendHandlers]] = {
+    Backend.CURSOR: BackendHandlers(
+        review_text=cursor.review_text,
+        generate_summary=cursor.generate_text,
+        errors=(CursorAgentError,),
+        retryable=cursor_error_retryable,
+        label="Cursor",
+    ),
+    Backend.CLAUDE: BackendHandlers(
+        review_text=claude.review_text,
+        generate_summary=claude.generate_text,
+        errors=(anthropic.APIError,),
+        retryable=claude_error_retryable,
+        label="Claude",
+    ),
+}
+
+
+async def backend_text_chunks(
+    handlers: BackendHandlers, pr: PullRequestContext, inputs: ReviewInputs
+) -> AsyncIterator[str]:
+    """Stream backend text and convert declared backend failures into review errors."""
+
+    produced = False
+    try:
+        async for chunk in handlers["review_text"](pr, inputs):
+            produced = True
+            yield chunk
+    except handlers["errors"] as exc:
+        raise ReviewBackendError(
+            f"{handlers['label']} review failed: {exc}", retryable=handlers["retryable"](exc)
+        ) from exc
+
+    if not produced:
+        raise ReviewBackendError(f"{handlers['label']} review produced no output.", retryable=True)
+
+
+async def stream_backend_findings(
+    handlers: BackendHandlers, pr: PullRequestContext, inputs: ReviewInputs
+) -> AsyncIterator[Finding]:
+    """Parse JSONL findings from the backend text stream."""
+
+    async for finding in iter_findings(backend_text_chunks(handlers, pr, inputs)):
+        yield finding
+
+
+async def run_backend_review(pr: PullRequestContext, handlers: BackendHandlers) -> ReviewRoundResult:
+    """Run a PR review through the shared backend policy."""
+
+    return await run_review_round(pr, CONFIG["review_marker"], partial(stream_backend_findings, handlers, pr))
+
+
+def summary_errors(handlers: BackendHandlers) -> tuple[type[Exception], ...]:
+    """Return errors that make optional summary posting fail without failing review."""
+
+    return (*SUMMARY_BASE_ERRORS, *handlers["errors"])
 
 
 def load_event() -> tuple[str, GithubEvent]:
@@ -31,11 +107,10 @@ def load_event() -> tuple[str, GithubEvent]:
 
     name = os.environ.get("GITHUB_EVENT_NAME", "")
     path = os.environ.get("GITHUB_EVENT_PATH", "")
-    payload: dict[str, object] = {}
     if path and Path(path).exists():
-        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+        return name, GithubEvent.model_validate_json(Path(path).read_text(encoding="utf-8"))
 
-    return name, GithubEvent.model_validate(payload)
+    return name, GithubEvent()
 
 
 def association_allowed(association: str | None) -> bool:
@@ -113,21 +188,6 @@ def reaction_subject(event_name: str, event: GithubEvent, repo: str, pr_number: 
     return f"repos/{repo}/issues/{pr_number}"
 
 
-def claude_available() -> bool:
-    """Return whether Claude can run in the configured mode (api key, or routine creds)."""
-
-    if SETTINGS.claude_mode is ClaudeMode.ROUTINE:
-        return bool(SETTINGS.claude_routine_api_key and SETTINGS.claude_routine_id)
-
-    return bool(SETTINGS.anthropic_api_key)
-
-
-def claude_backend() -> Backend:
-    """Map the Claude mode to its concrete backend."""
-
-    return Backend.CLAUDE_ROUTINE if SETTINGS.claude_mode is ClaudeMode.ROUTINE else Backend.CLAUDE_API
-
-
 def select_backend(first_review: bool) -> Backend | None:
     """Pick the backend for this event, resolving `auto` and skipping when creds are missing."""
 
@@ -139,28 +199,16 @@ def select_backend(first_review: bool) -> Backend | None:
 
     match requested:
         case ReviewModel.AUTO:
-            if claude_available():
-                return claude_backend()
+            if SETTINGS.anthropic_api_key:
+                return Backend.CLAUDE
 
             return Backend.CURSOR if SETTINGS.cursor_api_key else None
         case ReviewModel.CLAUDE:
-            return claude_backend() if claude_available() else None
+            return Backend.CLAUDE if SETTINGS.anthropic_api_key else None
         case ReviewModel.CURSOR:
             return Backend.CURSOR if SETTINGS.cursor_api_key else None
         case _:
             return None
-
-
-async def run(pr: PullRequestContext, backend: Backend) -> int:
-    """Dispatch the resolved backend for the PR."""
-
-    match backend:
-        case Backend.CURSOR:
-            return await run_cursor_review(pr)
-        case Backend.CLAUDE_API:
-            return await run_claude_api_review(pr)
-        case Backend.CLAUDE_ROUTINE:
-            return await fire_claude_routine(pr)
 
 
 async def main() -> int:
@@ -178,7 +226,8 @@ async def main() -> int:
 
         return 1
 
-    backend = select_backend(is_first_review_event(event_name, event))
+    first_review = is_first_review_event(event_name, event)
+    backend = select_backend(first_review)
     if backend is None:
         logger.info("No review backend is configured for this event; skipping.")
 
@@ -196,16 +245,20 @@ async def main() -> int:
 
         return 0
 
-    if backend is Backend.CLAUDE_ROUTINE:
-        return await run(pr, backend)
-
-    # React with eyes on the trigger (the comment for a manual trigger, otherwise the PR) while the
-    # synchronous backends review, then remove it once the round finishes.
     subject = reaction_subject(event_name, event, repo, pr_number)
     reaction_id = await add_reaction(subject)
 
     try:
-        return await run(pr, backend)
+        handlers = BACKENDS[backend]
+        result = await run_backend_review(pr, handlers)
+        exit_code = result.exit_code
+        if exit_code == 0 and first_review and SETTINGS.pr_review_summary:
+            try:
+                await post_pr_summary(pr, handlers["generate_summary"], diff=result.diff)
+            except summary_errors(handlers) as exc:
+                logger.error("Could not post the PR summary; the review still succeeded: %s", exc)
+
+        return exit_code
     finally:
         if reaction_id is not None:
             await remove_reaction(subject, reaction_id)

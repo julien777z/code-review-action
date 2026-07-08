@@ -1,16 +1,20 @@
 from collections.abc import AsyncIterator, Callable
 from datetime import timedelta
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from code_review.config import CONFIG, ClaudeMode, ReviewModel
-from code_review.models.shared.findings import Finding
-from code_review.models.shared.github_event import GithubEvent
-from code_review.models.shared.pull_request import PullRequestContext, ReviewInputs
-from code_review.models.shared.severity import DiffSide, Severity
-from code_review.models.shared.threads import ReviewThread, ThreadCommentAuthor, ThreadCommentNode, ThreadComments
-from code_review.review import GetFindings, ReviewBackendError
+from code_review.config import CONFIG
+from code_review.errors import ReviewBackendError
+from code_review.models.backend import Backend, BackendHandlers, GetBackendFindings
+from code_review.models.config import ReviewModel
+from code_review.models.findings import Finding, FindingCategory
+from code_review.models.github_event import GithubEvent
+from code_review.models.pull_request import PullRequestContext, ReviewInputs
+from code_review.models.review import ReviewRoundResult
+from code_review.models.severity import DiffSide, Severity
+from code_review.models.threads import ReviewThread, ThreadCommentAuthor, ThreadCommentNode, ThreadComments
+from code_review.review_backends import cursor
 
 
 @pytest.fixture
@@ -23,16 +27,19 @@ def mock_config(monkeypatch) -> Callable[..., None]:
             "resolve_token": "",
             "anthropic_api_key": "",
             "cursor_api_key": "",
-            "claude_routine_api_key": "",
-            "claude_routine_id": None,
             "review_model": ReviewModel.AUTO,
             "first_review_model": None,
-            "claude_mode": ClaudeMode.API,
             "claude_model": "claude-opus-4-8",
             "cursor_model": "composer-2.5",
             "additional_context": "",
             "approval_include": frozenset({Severity.CRITICAL}),
             "approval_disable": False,
+            "pr_review_summary": True,
+            "enforce_project_rules": True,
+            "project_rules_severity": None,
+            "simplify_suggest": False,
+            "simplify_suggest_severity": None,
+            "simplify_nearby_code": False,
             "min_severity": Severity.LOW,
             "low_findings_cap": 3,
             "max_findings": None,
@@ -60,6 +67,7 @@ def finding_factory() -> Callable[..., Finding]:
             "path": "src/app.py",
             "line": 10,
             "side": DiffSide.RIGHT,
+            "category": FindingCategory.BUG,
             "severity": Severity.HIGH,
             "title": "Off-by-one error",
             "body": "The loop overruns the array.",
@@ -83,10 +91,10 @@ def review_inputs_factory(pull_request_factory) -> Callable[..., ReviewInputs]:
 
 
 @pytest.fixture
-def flaky_stream_factory(monkeypatch) -> Callable[..., tuple[GetFindings, list[int]]]:
+def flaky_stream_factory(monkeypatch) -> Callable[..., tuple[GetBackendFindings, list[int]]]:
     """Build a streaming get_findings double that fails a set number of times before yielding findings."""
 
-    monkeypatch.setattr("code_review.review.REVIEW_RETRY_BACKOFF", timedelta(0))
+    monkeypatch.setattr("code_review.review.findings.REVIEW_RETRY_BACKOFF", timedelta(0))
 
     def _build(
         *,
@@ -94,7 +102,7 @@ def flaky_stream_factory(monkeypatch) -> Callable[..., tuple[GetFindings, list[i
         error: ReviewBackendError,
         result: list[Finding] | None = None,
         yield_before_error: bool = False,
-    ) -> tuple[GetFindings, list[int]]:
+    ) -> tuple[GetBackendFindings, list[int]]:
         calls: list[int] = []
         findings = result if result is not None else []
 
@@ -115,10 +123,10 @@ def flaky_stream_factory(monkeypatch) -> Callable[..., tuple[GetFindings, list[i
 
 
 @pytest.fixture
-def stream_findings_factory() -> Callable[[list[Finding]], GetFindings]:
+def stream_findings_factory() -> Callable[[list[Finding]], GetBackendFindings]:
     """Build a streaming get_findings double that yields a fixed list of findings."""
 
-    def _build(findings: list[Finding]) -> GetFindings:
+    def _build(findings: list[Finding]) -> GetBackendFindings:
         async def _get_findings(inputs: ReviewInputs) -> AsyncIterator[Finding]:
             for finding in findings:
                 yield finding
@@ -136,7 +144,7 @@ def review_github_mocks(monkeypatch) -> dict[str, AsyncMock]:
         "already_reviewed": AsyncMock(return_value=False),
         "head_check_concluded": AsyncMock(return_value=False),
         "current_head_sha": AsyncMock(return_value="abc123"),
-        "pull_request_diff": AsyncMock(return_value=""),
+        "pull_request_diff_if_available": AsyncMock(return_value=""),
         "diff_anchors": AsyncMock(return_value=({}, set())),
         "list_review_threads": AsyncMock(return_value=[]),
         "start_check_run": AsyncMock(return_value="check-1"),
@@ -145,10 +153,174 @@ def review_github_mocks(monkeypatch) -> dict[str, AsyncMock]:
         "post_review": AsyncMock(return_value=True),
         "resolve_threads": AsyncMock(return_value=None),
     }
-    for name, mock in mocks.items():
-        monkeypatch.setattr(f"code_review.review.{name}", mock)
+    review_names = (
+        "already_reviewed",
+        "head_check_concluded",
+        "current_head_sha",
+        "pull_request_diff_if_available",
+        "diff_anchors",
+        "list_review_threads",
+        "start_check_run",
+        "complete_check_run",
+        "post_review",
+        "resolve_threads",
+    )
+    for name in review_names:
+        monkeypatch.setattr(f"code_review.review.round.{name}", mocks[name])
+    monkeypatch.setattr("code_review.review.threads.list_review_threads", mocks["list_review_threads"])
+    monkeypatch.setattr("code_review.review.findings.post_comment", mocks["post_comment"])
 
     return mocks
+
+
+@pytest.fixture
+def anthropic_client_factory() -> Callable[..., MagicMock]:
+    """Build an AsyncAnthropic-style async context manager whose messages.create returns text blocks."""
+
+    def _build(text: str = "Summary text") -> MagicMock:
+        block = MagicMock()
+        block.type = "text"
+        block.text = text
+        message = MagicMock()
+        message.content = [block]
+        client = MagicMock()
+        client.messages.create = AsyncMock(return_value=message)
+        client.__aenter__ = AsyncMock(return_value=client)
+        client.__aexit__ = AsyncMock(return_value=False)
+
+        return client
+
+    return _build
+
+
+class FakeManagedStream:
+    """An async context manager and async iterator over a fixed list of Managed Agents events."""
+
+    def __init__(self, events: list[MagicMock]) -> None:
+        self._events = list(events)
+
+    async def __aenter__(self) -> "FakeManagedStream":
+        return self
+
+    async def __aexit__(self, *args: object) -> bool:
+        return False
+
+    def __aiter__(self) -> "FakeManagedStream":
+        return self
+
+    async def __anext__(self) -> MagicMock:
+        if not self._events:
+            raise StopAsyncIteration
+
+        return self._events.pop(0)
+
+
+@pytest.fixture
+def managed_agent_event_factory() -> Callable[..., MagicMock]:
+    """Build Managed Agents stream events (agent.message, idle, terminated) as SDK-shaped doubles."""
+
+    def _build(event_type: str, *, text: str | None = None, stop_reason: str | None = None) -> MagicMock:
+        event = MagicMock()
+        event.type = event_type
+        if event_type == "agent.message":
+            block = MagicMock()
+            block.type = "text"
+            block.text = text
+            event.content = [block]
+        if event_type == "session.status_idle":
+            event.stop_reason = MagicMock()
+            event.stop_reason.type = stop_reason
+
+        return event
+
+    return _build
+
+
+@pytest.fixture
+def managed_agent_client_factory() -> Callable[..., MagicMock]:
+    """Build an AsyncAnthropic double driving a Managed Agents session over the given events."""
+
+    def _build(events: list[MagicMock]) -> MagicMock:
+        client = MagicMock()
+        client.__aenter__ = AsyncMock(return_value=client)
+        client.__aexit__ = AsyncMock(return_value=False)
+
+        environment = MagicMock()
+        environment.id = "env-created"
+        client.beta.environments.create = AsyncMock(return_value=environment)
+        client.beta.environments.delete = AsyncMock(return_value=None)
+
+        agent = MagicMock()
+        agent.id = "agent-1"
+        agent.version = "v1"
+        client.beta.agents.create = AsyncMock(return_value=agent)
+        client.beta.agents.archive = AsyncMock(return_value=None)
+
+        session = MagicMock()
+        session.id = "session-1"
+        client.beta.sessions.create = AsyncMock(return_value=session)
+        client.beta.sessions.delete = AsyncMock(return_value=None)
+        client.beta.sessions.events.send = AsyncMock(return_value=None)
+        client.beta.sessions.events.stream = AsyncMock(return_value=FakeManagedStream(events))
+
+        return client
+
+    return _build
+
+
+@pytest.fixture
+def summary_github_mocks(monkeypatch) -> dict[str, AsyncMock]:
+    """Patch the GitHub seams post_pr_summary calls and return the mocks for assertion."""
+
+    mocks = {
+        "current_head_sha": AsyncMock(return_value="abc123"),
+        "pull_request_diff_if_available": AsyncMock(return_value="DIFF_BODY"),
+        "pull_request_body": AsyncMock(return_value=""),
+        "update_pull_request_body": AsyncMock(return_value=None),
+    }
+    for name, mock in mocks.items():
+        monkeypatch.setattr(f"code_review.summary.{name}", mock)
+
+    return mocks
+
+
+@pytest.fixture
+def main_harness(monkeypatch, mock_config, pull_request_factory, pull_request_event_factory) -> Callable[..., dict[str, AsyncMock | PullRequestContext]]:
+    """Patch the seams main() drives and return the mocks; set the event action and review result per call."""
+
+    def _setup(
+        *, action: str = "opened", run_review_result: int = 0, **config_overrides
+    ) -> dict[str, AsyncMock | PullRequestContext]:
+        mock_config(review_model=ReviewModel.CURSOR, cursor_api_key="key", **config_overrides)
+
+        run_backend_review = AsyncMock(return_value=ReviewRoundResult(exit_code=run_review_result, diff="REVIEW_DIFF"))
+        post_pr_summary = AsyncMock(return_value=None)
+        pr = pull_request_factory()
+        handlers = BackendHandlers(
+            review_text=cursor.review_text,
+            generate_summary=cursor.generate_text,
+            errors=(cursor.CursorAgentError,),
+            retryable=lambda exc: isinstance(exc, cursor.CursorAgentError) and exc.is_retryable,
+            label="Cursor",
+        )
+
+        monkeypatch.setattr(
+            "code_review.runtime.BACKENDS",
+            {Backend.CURSOR: handlers},
+        )
+        monkeypatch.setattr("code_review.runtime.run_backend_review", run_backend_review)
+        monkeypatch.setattr("code_review.runtime.post_pr_summary", post_pr_summary)
+        monkeypatch.setattr("code_review.runtime.add_reaction", AsyncMock(return_value=None))
+        monkeypatch.setattr("code_review.runtime.remove_reaction", AsyncMock(return_value=None))
+        monkeypatch.setattr("code_review.runtime.fetch_pull_request", AsyncMock(return_value=pr))
+        monkeypatch.setattr(
+            "code_review.runtime.load_event",
+            lambda: ("pull_request", pull_request_event_factory(action=action)),
+        )
+
+        return {"handlers": handlers, "run_backend_review": run_backend_review, "post_pr_summary": post_pr_summary, "pr": pr}
+
+    return _setup
 
 
 @pytest.fixture
@@ -179,13 +351,21 @@ def thread_comment_factory() -> Callable[..., ThreadCommentNode]:
     def _build(
         *,
         title: str = "Off-by-one error",
+        category: str = "Bug",
         severity: str = "Critical",
         marker: str = CONFIG["review_marker"],
         author: str = "github-actions[bot]",
         path: str = "src/app.py",
         body: str | None = None,
     ) -> ThreadCommentNode:
-        resolved_body = body if body is not None else f"### {title}\n\n**{severity} Severity**\n\nDetail.\n\n{marker}"
+        resolved_body = body
+        if resolved_body is None:
+            resolved_body = (
+                f"{CONFIG['untrusted_input_open']}\n"
+                f"### {title}\n\n**{severity} Severity**<br><sub>{category}</sub>\n\nDetail.\n"
+                f"{CONFIG['untrusted_input_close']}\n\n"
+                f"{marker}"
+            )
 
         return ThreadCommentNode(author=ThreadCommentAuthor(login=author), body=resolved_body, path=path)
 
