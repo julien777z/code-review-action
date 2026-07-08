@@ -128,40 +128,20 @@ class TestIterFindings:
 
         assert [finding.title for finding in findings] == ["A"]
 
-    def test_recovers_legacy_findings_object(self) -> None:
-        """Test that a whole-reply {"findings": [...]} object is recovered when JSONL parsing finds none."""
+    @pytest.mark.parametrize(
+        "blob",
+        [
+            '{"findings": [{"path":"a.py","line":1,"side":"RIGHT","severity":"high","title":"A","body":"B"}]}',
+            '[{"path":"a.py","line":1,"side":"LEFT","severity":"low","title":"A","body":"B"}]',
+            '{"findings": []}',
+        ],
+        ids=["findings-object", "array", "empty-findings-object"],
+    )
+    def test_raises_on_non_jsonl_json_shapes(self, blob: str) -> None:
+        """Test that non-JSONL JSON shapes are rejected."""
 
-        blob = '{"findings": [{"path":"a.py","line":1,"side":"RIGHT","severity":"high","title":"A","body":"B"}]}'
-
-        findings = asyncio.run(collect(blob))
-
-        assert [finding.title for finding in findings] == ["A"]
-
-    def test_recovers_fenced_json_array(self) -> None:
-        """Test that a fenced JSON array reply is recovered when JSONL parsing finds none."""
-
-        blob = '```json\n[{"path":"a.py","line":1,"side":"LEFT","severity":"low","title":"A","body":"B"}]\n```'
-
-        findings = asyncio.run(collect(blob))
-
-        assert [finding.side for finding in findings] == [DiffSide.LEFT]
-
-    def test_recovers_a_multiline_bare_finding_object(self) -> None:
-        """Test that a single finding emitted as a pretty-printed object (not a findings array) is recovered."""
-
-        blob = (
-            '{\n  "path": "a.py",\n  "line": 1,\n  "side": "RIGHT",\n'
-            '  "severity": "high",\n  "title": "A",\n  "body": "B"\n}'
-        )
-
-        findings = asyncio.run(collect(blob))
-
-        assert [finding.title for finding in findings] == ["A"]
-
-    def test_empty_findings_object_is_clean(self) -> None:
-        """Test that an explicit empty {"findings": []} reply yields no findings without raising."""
-
-        assert asyncio.run(collect('{"findings": []}')) == []
+        with pytest.raises(ReviewBackendError):
+            asyncio.run(collect(blob))
 
     def test_raises_on_object_without_findings_key(self) -> None:
         """Test that a JSON object lacking a findings key raises instead of approving as zero findings."""

@@ -82,25 +82,21 @@ def thread_title(comment: ThreadCommentNode) -> str | None:
 
 
 def thread_severity(comment: ThreadCommentNode) -> Severity | None:
-    """Return the severity from this tier's comment body, supporting current and legacy formats."""
+    """Return the severity from this tier's current category/severity footer."""
 
     line = next(
         (
             row.strip()
             for row in comment.body.splitlines()
-            if row.strip().startswith("*")
-            and (" - " in row.strip() or row.strip().lower().endswith("severity**"))
+            if row.strip().startswith("<sub><em>") and row.strip().endswith("</em></sub>")
         ),
         "",
     )
-    label = line.strip("*").strip()
+    label = line.removeprefix("<sub><em>").removesuffix("</em></sub>").strip()
     if not label:
         return None
 
     severity_text = label.rsplit(" - ", 1)[-1]
-    if severity_text.lower().endswith(" severity"):
-        severity_text = severity_text.rsplit(" ", 1)[0]
-
     try:
         return Severity.from_str(severity_text)
     except ValueError:
@@ -111,6 +107,12 @@ def finding_label(finding: Finding) -> str:
     """Return the category/severity label shown in review comments."""
 
     return f"{finding.category.label} - {finding.severity.value.capitalize()}"
+
+
+def finding_label_footer(finding: Finding) -> str:
+    """Return the small italic category/severity footer for review comments."""
+
+    return f"<sub><em>{finding_label(finding)}</em></sub>"
 
 
 def is_tier_comment(comment: ThreadCommentNode | None, marker: str) -> bool:
@@ -246,7 +248,7 @@ def comment_body(finding: Finding, marker: str) -> str:
         f"{CONFIG['untrusted_input_open']}\n"
         f"### {finding.title}\n\n{finding.body}\n"
         f"{CONFIG['untrusted_input_close']}\n\n"
-        f"*{finding_label(finding)}*\n\n"
+        f"{finding_label_footer(finding)}\n\n"
         f"{DISCLAIMER}\n\n{marker}"
     )
 
@@ -322,7 +324,7 @@ def build_verdict_review(
     body = summary_line
     if out_of_bounds:
         listed = "\n".join(
-            f"- {finding.path}:{finding.line} — {finding.body}\n  *{finding_label(finding)}*"
+            f"- {finding.path}:{finding.line} — {finding.body}\n  {finding_label_footer(finding)}"
             for finding in out_of_bounds
         )
         body = f"{body}\n\nFindings not posted inline:\n{listed}"
@@ -335,18 +337,10 @@ def build_verdict_review(
     return ReviewPayload(commit_id=head_sha, event=event, body=body, comments=[])
 
 
-async def post_review_with_fallback(repo: str, pr_number: int, payload: ReviewPayload, event: str) -> None:
-    """Post the review, re-posting an APPROVE the bot cannot submit as a COMMENT."""
+async def post_review_or_warn(repo: str, pr_number: int, payload: ReviewPayload, event: str) -> None:
+    """Post the review and warn when GitHub rejects it."""
 
-    if await post_review(repo, pr_number, payload):
-        return
-
-    # github-actions[bot] cannot APPROVE a PR, so re-post a clean verdict as a COMMENT (the check
-    # run stays the real verdict).
-    if event == "APPROVE":
-        payload.event = "COMMENT"
-
-    if event != "APPROVE" or not await post_review(repo, pr_number, payload):
+    if not await post_review(repo, pr_number, payload):
         logger.warning("Could not post the %s review; the check run still records the verdict.", event)
 
 
@@ -453,13 +447,13 @@ async def run_review_round(pr: PullRequestContext, marker: str, get_findings: Ge
                 if not cap_decision(finding, low_count, total_count):
                     continue
 
-                # A finding that anchors and posts inline counts as posted; one that does not anchor, or
-                # whose inline post GitHub rejects, falls back to the verdict body so it stays visible
-                # and counted rather than vanishing while still inflating the open count.
-                posted_inline = finding_anchors(finding, anchors) and await post_comment(
-                    pr.repo, pr.number, build_inline_comment(pr.head_sha, finding, marker)
-                )
-                if posted_inline:
+                if finding_anchors(finding, anchors):
+                    posted_inline = await post_comment(pr.repo, pr.number, build_inline_comment(pr.head_sha, finding, marker))
+                    if not posted_inline:
+                        logger.warning("Could not post inline finding %s:%s.", finding.path, finding.line)
+
+                        continue
+
                     posted_any = True
                 else:
                     out_of_bounds.append(finding)
@@ -497,7 +491,7 @@ async def run_review_round(pr: PullRequestContext, marker: str, get_findings: Ge
             pr.repo, pr.number, pr.head_sha, marker
         ):
             payload = build_verdict_review(pr.head_sha, out_of_bounds, event, summary, marker)
-            await post_review_with_fallback(pr.repo, pr.number, payload, event)
+            await post_review_or_warn(pr.repo, pr.number, payload, event)
 
         logger.info("Resolving %d stale thread(s); %d open issue(s) remain.", len(stale_ids), open_count)
         await resolve_threads(pr.repo, stale_ids)

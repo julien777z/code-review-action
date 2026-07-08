@@ -218,9 +218,10 @@ class TestBuildInlineComment:
         assert request.commit_id == "sha1"
         assert (request.path, request.line, request.side) == ("src/app.py", 12, DiffSide.RIGHT)
         assert "### Leak" in request.body
-        assert "*Bug - Critical*" in request.body
-        assert request.body.index(CONFIG["untrusted_input_close"]) < request.body.index("*Bug - Critical*")
-        assert request.body.index("*Bug - Critical*") < request.body.index(DISCLAIMER)
+        label = "<sub><em>Bug - Critical</em></sub>"
+        assert label in request.body
+        assert request.body.index(CONFIG["untrusted_input_close"]) < request.body.index(label)
+        assert request.body.index(label) < request.body.index(DISCLAIMER)
         assert request.body.rstrip().endswith(MARKER)
 
 
@@ -239,7 +240,7 @@ class TestBuildVerdictReview:
         assert "Found 1 issue." in payload.body
         assert "Findings not posted inline:" in payload.body
         assert "big.txt:1" in payload.body
-        assert "*Bug - High*" in payload.body
+        assert "<sub><em>Bug - High</em></sub>" in payload.body
         assert CONFIG["untrusted_input_open"] in payload.body
         assert CONFIG["untrusted_input_close"] in payload.body
         assert DISCLAIMER in payload.body
@@ -266,9 +267,10 @@ class TestCommentBody:
         )
 
         assert "### Leak" in body
-        assert "*Security - Critical*" in body
-        assert body.index(CONFIG["untrusted_input_close"]) < body.index("*Security - Critical*")
-        assert body.index("*Security - Critical*") < body.index(DISCLAIMER)
+        label = "<sub><em>Security - Critical</em></sub>"
+        assert label in body
+        assert body.index(CONFIG["untrusted_input_close"]) < body.index(label)
+        assert body.index(label) < body.index(DISCLAIMER)
         assert CONFIG["untrusted_input_open"] in body
         assert CONFIG["untrusted_input_close"] in body
         assert DISCLAIMER in body
@@ -293,7 +295,7 @@ class TestThreadParsing:
     def test_unmarked_comment_is_not_tier(self, thread_comment_factory) -> None:
         """Test that a comment without the review marker is not recognized as the runner's."""
 
-        comment = thread_comment_factory(body="### Title\n\n**Critical Severity**\n\nA human note.")
+        comment = thread_comment_factory(body="### Title\n\nA human note.")
 
         assert is_tier_comment(comment, MARKER) is False
 
@@ -305,14 +307,6 @@ class TestThreadParsing:
         assert thread_title(comment) == "Race condition"
         assert thread_severity(comment) is Severity.HIGH
 
-    def test_legacy_severity_line(self, thread_comment_factory) -> None:
-        """Test that legacy severity-only comments still parse for thread reconciliation."""
-
-        comment = thread_comment_factory(body="### Race condition\n\n**High Severity**\n\nDetail.")
-
-        assert thread_severity(comment) is Severity.HIGH
-
-
 class TestExistingFindingTitles:
     """Test that the runner's posted findings are collected per file."""
 
@@ -321,9 +315,7 @@ class TestExistingFindingTitles:
 
         threads = [
             review_thread_factory(title="Mine", severity="Critical", marker=MARKER, path="src/app.py"),
-            review_thread_factory(
-                title="Human", path="src/app.py", body="### Human\n\n**Low Severity**\n\nA human note."
-            ),
+            review_thread_factory(title="Human", path="src/app.py", body="### Human\n\nA human note."),
         ]
         monkeypatch.setattr("code_review.review.list_review_threads", AsyncMock(return_value=threads))
 
@@ -342,9 +334,7 @@ class TestExtractPostedKeys:
 
         threads = [
             review_thread_factory(title="Mine", path="src/app.py", marker=MARKER),
-            review_thread_factory(
-                title="Human", path="src/app.py", body="### Human\n\n**Low Severity**\n\nA human note."
-            ),
+            review_thread_factory(title="Human", path="src/app.py", body="### Human\n\nA human note."),
         ]
 
         assert extract_posted_keys(threads, MARKER) == {("src/app.py", "Mine")}
@@ -529,10 +519,10 @@ class TestRunReviewRound:
         assert review_github_mocks["post_review"].await_count == 0
         assert review_github_mocks["complete_check_run"].await_args.args[2] == "action_required"
 
-    def test_rejected_inline_post_falls_back_to_verdict_body(
+    def test_rejected_inline_post_warns_without_verdict_body(
         self, mock_config, review_github_mocks, stream_findings_factory, pull_request_factory, finding_factory
     ) -> None:
-        """Test that a finding whose inline post is rejected is shown in the verdict body and still counted."""
+        """Test that a finding whose inline post is rejected is not copied into the verdict body."""
 
         review_github_mocks["post_comment"].return_value = False
         review_github_mocks["diff_anchors"].return_value = ({"src/app.py": ({10}, set())}, set())
@@ -541,12 +531,7 @@ class TestRunReviewRound:
         asyncio.run(run_review_round(pull_request_factory(), MARKER, stream_findings_factory(findings)))
 
         assert review_github_mocks["post_comment"].await_count == 1
-        assert review_github_mocks["post_review"].await_count == 1
-
-        payload = review_github_mocks["post_review"].await_args.args[2]
-
-        assert "Findings not posted inline:" in payload.body
-        assert "src/app.py:10" in payload.body
+        assert review_github_mocks["post_review"].await_count == 0
 
     def test_approval_disable_posts_verdict_review_to_record_head(
         self, mock_config, review_github_mocks, stream_findings_factory, pull_request_factory
