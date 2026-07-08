@@ -61,23 +61,17 @@ def merge_summary(body: str, section: str) -> str:
     return f"{body}\n\n{section}"
 
 
-async def head_moved(pr: PullRequestContext) -> bool:
-    """Return whether the PR head advanced past the commit this summary was generated for."""
-
-    return await current_head_sha(pr.repo, pr.number) != pr.head_sha
-
-
 async def write_summary_if_current(pr: PullRequestContext, section: str) -> None:
     """Merge and write the summary only if the PR still points at the reviewed head."""
 
-    if await head_moved(pr):
+    if await current_head_sha(pr.repo, pr.number) != pr.head_sha:
         logger.info("Head moved during summary generation; skipping the summary for superseded commit %s.", pr.head_sha)
 
         return
 
     body = await pull_request_body(pr.repo, pr.number)
 
-    if await head_moved(pr):
+    if await current_head_sha(pr.repo, pr.number) != pr.head_sha:
         logger.info("Head moved before summary update; skipping the summary for superseded commit %s.", pr.head_sha)
 
         return
@@ -89,7 +83,7 @@ async def write_summary_if_current(pr: PullRequestContext, section: str) -> None
 async def post_pr_summary(pr: PullRequestContext, generate: GenerateSummary, *, diff: str | None = None) -> None:
     """Generate a description summary for the PR and merge it into the PR body."""
 
-    if await head_moved(pr):
+    if await current_head_sha(pr.repo, pr.number) != pr.head_sha:
         logger.info("Head moved since review; skipping the summary for superseded commit %s.", pr.head_sha)
 
         return

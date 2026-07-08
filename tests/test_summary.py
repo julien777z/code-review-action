@@ -134,7 +134,7 @@ class TestPostPrSummary:
 
         summary_github_mocks["update_pull_request_body"].assert_not_awaited()
 
-    def test_skips_when_head_moved(self, summary_github_mocks, pull_request_factory) -> None:
+    def test_skips_when_head_advanced(self, summary_github_mocks, pull_request_factory) -> None:
         """Test that the summary is skipped when the head advanced since the review."""
 
         summary_github_mocks["current_head_sha"].return_value = "moved-sha"
@@ -145,7 +145,7 @@ class TestPostPrSummary:
         generate.assert_not_awaited()
         summary_github_mocks["update_pull_request_body"].assert_not_awaited()
 
-    def test_skips_when_head_moved_during_generation(self, summary_github_mocks, pull_request_factory) -> None:
+    def test_skips_when_head_advanced_during_generation(self, summary_github_mocks, pull_request_factory) -> None:
         """Test that a push landing while the summary generates skips the write for the superseded commit."""
 
         pr = pull_request_factory(head_sha="abc123")
@@ -157,7 +157,7 @@ class TestPostPrSummary:
         generate.assert_awaited_once()
         summary_github_mocks["update_pull_request_body"].assert_not_awaited()
 
-    def test_skips_when_head_moved_before_update(self, summary_github_mocks, pull_request_factory) -> None:
+    def test_skips_when_head_advanced_before_update(self, summary_github_mocks, pull_request_factory) -> None:
         """Test that the final body read and update stay guarded against a last-moment push."""
 
         pr = pull_request_factory(head_sha="abc123")

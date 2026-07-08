@@ -503,10 +503,10 @@ class TestRunReviewRound:
 
         assert review_github_mocks["post_comment"].await_count == 0
 
-    def test_head_moved_before_review_skips(
+    def test_head_advanced_before_review_skips(
         self, mock_config, review_github_mocks, stream_findings_factory, pull_request_factory, finding_factory
     ) -> None:
-        """Test that a head that moved before streaming skips the round without posting."""
+        """Test that an advanced head before streaming skips the round without posting."""
 
         review_github_mocks["current_head_sha"].return_value = "moved-sha"
         review_github_mocks["diff_anchors"].return_value = ({"src/app.py": ({10}, set())}, set())
