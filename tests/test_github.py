@@ -9,6 +9,7 @@ from code_review.github import (
     head_check_concluded,
     is_diff_too_large,
     pull_request_body,
+    pull_request_diff_if_available,
     resolve_threads,
     update_pull_request_body,
 )
@@ -129,6 +130,34 @@ class TestIsDiffTooLarge:
         exc = subprocess.CalledProcessError(1, ["gh", "pr", "diff"], stderr="gh: Not Found (HTTP 404)")
 
         assert is_diff_too_large(exc) is False
+
+
+class TestPullRequestDiffIfAvailable:
+    """Test diff fetching with oversized-diff classification."""
+
+    def test_returns_diff_when_available(self, monkeypatch, mock_config) -> None:
+        """Test that an available diff is returned unchanged."""
+
+        monkeypatch.setattr("code_review.github.run_gh", run_gh_returning("diff body"))
+
+        assert asyncio.run(pull_request_diff_if_available("octo/repo", 7)) == "diff body"
+
+    def test_returns_none_for_oversized_diff(self, monkeypatch, mock_config) -> None:
+        """Test that an oversized diff is reported as absent instead of raising."""
+
+        exc = subprocess.CalledProcessError(1, ["gh", "pr", "diff"], stderr="gh: Not Acceptable (HTTP 406)")
+        monkeypatch.setattr("code_review.github.run_gh", run_gh_failing(exc))
+
+        assert asyncio.run(pull_request_diff_if_available("octo/repo", 7)) is None
+
+    def test_propagates_unrelated_diff_error(self, monkeypatch, mock_config) -> None:
+        """Test that non-size diff failures still fail loudly."""
+
+        exc = subprocess.CalledProcessError(1, ["gh", "pr", "diff"], stderr="gh: Not Found (HTTP 404)")
+        monkeypatch.setattr("code_review.github.run_gh", run_gh_failing(exc))
+
+        with pytest.raises(subprocess.CalledProcessError):
+            asyncio.run(pull_request_diff_if_available("octo/repo", 7))
 
 
 class TestPullRequestBody:

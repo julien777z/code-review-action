@@ -122,7 +122,7 @@ class TestPostPrSummary:
 
         assert "REVIEW_DIFF" in prompt
         assert "DIFF_BODY" not in prompt
-        summary_github_mocks["pull_request_diff"].assert_not_awaited()
+        summary_github_mocks["pull_request_diff_if_available"].assert_not_awaited()
 
     def test_empty_output_raises_without_updating(self, summary_github_mocks, pull_request_factory) -> None:
         """Test that empty model output raises and does not update the PR body."""
@@ -172,9 +172,7 @@ class TestPostPrSummary:
     def test_skips_when_diff_too_large(self, summary_github_mocks, pull_request_factory) -> None:
         """Test that an oversized diff skips the summary cleanly without generating or updating."""
 
-        summary_github_mocks["pull_request_diff"].side_effect = subprocess.CalledProcessError(
-            1, "gh", stderr="the diff is too large to display"
-        )
+        summary_github_mocks["pull_request_diff_if_available"].return_value = None
         generate = AsyncMock(return_value="Generated summary")
 
         asyncio.run(post_pr_summary(pull_request_factory(), generate))
@@ -185,7 +183,7 @@ class TestPostPrSummary:
     def test_propagates_unrelated_diff_error(self, summary_github_mocks, pull_request_factory) -> None:
         """Test that a diff failure unrelated to size propagates instead of being silently skipped."""
 
-        summary_github_mocks["pull_request_diff"].side_effect = subprocess.CalledProcessError(
+        summary_github_mocks["pull_request_diff_if_available"].side_effect = subprocess.CalledProcessError(
             1, "gh", stderr="network unreachable"
         )
         generate = AsyncMock(return_value="Generated summary")

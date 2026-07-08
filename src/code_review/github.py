@@ -125,6 +125,18 @@ async def pull_request_diff(repo: str, pr_number: int) -> str:
     return await run_gh(["pr", "diff", str(pr_number), "--repo", repo])
 
 
+async def pull_request_diff_if_available(repo: str, pr_number: int) -> str | None:
+    """Return the PR diff, or None when GitHub refuses an oversized diff."""
+
+    try:
+        return await pull_request_diff(repo, pr_number)
+    except subprocess.CalledProcessError as exc:
+        if is_diff_too_large(exc):
+            return None
+
+        raise
+
+
 async def pull_request_body(repo: str, pr_number: int) -> str:
     """Return the PR's current description text."""
 

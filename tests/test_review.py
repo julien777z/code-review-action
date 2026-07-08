@@ -387,9 +387,7 @@ class TestRunReviewRound:
     ) -> None:
         """Test that an oversized diff posts a note, records a neutral verdict, and returns success."""
 
-        review_github_mocks["pull_request_diff"].side_effect = subprocess.CalledProcessError(
-            1, ["gh", "pr", "diff"], stderr="gh: Not Acceptable (HTTP 406)"
-        )
+        review_github_mocks["pull_request_diff_if_available"].return_value = None
 
         result = asyncio.run(run_review_round(pull_request_factory(), MARKER, stream_findings_factory([])))
 
@@ -405,7 +403,7 @@ class TestRunReviewRound:
     ) -> None:
         """Test that a diff fetch failure unrelated to size still fails loudly."""
 
-        review_github_mocks["pull_request_diff"].side_effect = subprocess.CalledProcessError(
+        review_github_mocks["pull_request_diff_if_available"].side_effect = subprocess.CalledProcessError(
             1, ["gh", "pr", "diff"], stderr="gh: Not Found (HTTP 404)"
         )
 

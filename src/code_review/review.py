@@ -17,11 +17,10 @@ from code_review.github import (
     current_head_sha,
     diff_anchors,
     head_check_concluded,
-    is_diff_too_large,
     list_review_threads,
     post_comment,
     post_review,
-    pull_request_diff,
+    pull_request_diff_if_available,
     resolve_threads,
     start_check_run,
 )
@@ -366,12 +365,8 @@ async def run_review_round(pr: PullRequestContext, marker: str, get_findings: Ge
 
         return ReviewRoundResult(exit_code=0)
 
-    try:
-        diff = await pull_request_diff(pr.repo, pr.number)
-    except subprocess.CalledProcessError as exc:
-        if not is_diff_too_large(exc):
-            raise
-
+    diff = await pull_request_diff_if_available(pr.repo, pr.number)
+    if diff is None:
         logger.warning("PR diff is too large to auto-review; posting a note and skipping.")
 
         return await note_diff_too_large(pr, marker)

@@ -141,7 +141,7 @@ def review_github_mocks(monkeypatch) -> dict[str, AsyncMock]:
         "already_reviewed": AsyncMock(return_value=False),
         "head_check_concluded": AsyncMock(return_value=False),
         "current_head_sha": AsyncMock(return_value="abc123"),
-        "pull_request_diff": AsyncMock(return_value=""),
+        "pull_request_diff_if_available": AsyncMock(return_value=""),
         "diff_anchors": AsyncMock(return_value=({}, set())),
         "list_review_threads": AsyncMock(return_value=[]),
         "start_check_run": AsyncMock(return_value="check-1"),
@@ -257,7 +257,7 @@ def summary_github_mocks(monkeypatch) -> dict[str, AsyncMock]:
 
     mocks = {
         "current_head_sha": AsyncMock(return_value="abc123"),
-        "pull_request_diff": AsyncMock(return_value="DIFF_BODY"),
+        "pull_request_diff_if_available": AsyncMock(return_value="DIFF_BODY"),
         "pull_request_body": AsyncMock(return_value=""),
         "update_pull_request_body": AsyncMock(return_value=None),
     }
