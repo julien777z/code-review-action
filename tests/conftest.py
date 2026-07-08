@@ -338,9 +338,8 @@ def thread_comment_factory() -> Callable[..., ThreadCommentNode]:
         if resolved_body is None:
             resolved_body = (
                 f"{CONFIG['untrusted_input_open']}\n"
-                f"### {title}\n\n**{severity} Severity**\n\nDetail.\n"
+                f"### {title}\n\n**{severity} Severity**\n\n<sub>{category}</sub>\n\nDetail.\n"
                 f"{CONFIG['untrusted_input_close']}\n\n"
-                f"<sub>{category}</sub>\n\n"
                 f"{marker}"
             )
 

@@ -222,10 +222,10 @@ class TestBuildInlineComment:
         category = "<sub>Bug</sub>"
         assert category in request.body
         assert request.body.index("### Leak") < request.body.index("**Critical Severity**")
-        assert request.body.index("**Critical Severity**") < request.body.index("The loop overruns the array.")
+        assert request.body.index("**Critical Severity**") < request.body.index(category)
+        assert request.body.index(category) < request.body.index("The loop overruns the array.")
         assert request.body.index("The loop overruns the array.") < request.body.index(CONFIG["untrusted_input_close"])
-        assert request.body.index(CONFIG["untrusted_input_close"]) < request.body.index(category)
-        assert request.body.index(category) < request.body.index(DISCLAIMER)
+        assert request.body.index(CONFIG["untrusted_input_close"]) < request.body.index(DISCLAIMER)
         assert request.body.rstrip().endswith(MARKER)
 
 
@@ -246,6 +246,7 @@ class TestBuildVerdictReview:
         assert "big.txt:1" in payload.body
         assert "**High Severity**" in payload.body
         assert "<sub>Bug</sub>" in payload.body
+        assert payload.body.index("**High Severity**") < payload.body.index("<sub>Bug</sub>")
         assert CONFIG["untrusted_input_open"] in payload.body
         assert CONFIG["untrusted_input_close"] in payload.body
         assert DISCLAIMER in payload.body
@@ -276,10 +277,10 @@ class TestCommentBody:
         category = "<sub>Security</sub>"
         assert category in body
         assert body.index("### Leak") < body.index("**Critical Severity**")
-        assert body.index("**Critical Severity**") < body.index("The loop overruns the array.")
+        assert body.index("**Critical Severity**") < body.index(category)
+        assert body.index(category) < body.index("The loop overruns the array.")
         assert body.index("The loop overruns the array.") < body.index(CONFIG["untrusted_input_close"])
-        assert body.index(CONFIG["untrusted_input_close"]) < body.index(category)
-        assert body.index(category) < body.index(DISCLAIMER)
+        assert body.index(CONFIG["untrusted_input_close"]) < body.index(DISCLAIMER)
         assert CONFIG["untrusted_input_open"] in body
         assert CONFIG["untrusted_input_close"] in body
         assert DISCLAIMER in body
@@ -309,7 +310,7 @@ class TestThreadParsing:
         assert is_tier_comment(comment, MARKER) is False
 
     def test_title_and_current_severity(self, thread_comment_factory) -> None:
-        """Test that the title heading and current category/severity line parse from the comment body."""
+        """Test that the title heading and current severity line parse from the comment body."""
 
         comment = thread_comment_factory(title="Race condition", severity="High")
 
@@ -323,10 +324,10 @@ class TestThreadParsing:
             f"{CONFIG['untrusted_input_open']}\n"
             "### Race condition\n\n"
             "**High Severity**\n\n"
+            "<sub>Bug</sub>\n\n"
             "Line from the reviewed code:\n"
             "**Low Severity**\n"
             f"{CONFIG['untrusted_input_close']}\n\n"
-            "<sub>Bug</sub>\n\n"
             f"{MARKER}"
         )
         comment = thread_comment_factory(body=body)

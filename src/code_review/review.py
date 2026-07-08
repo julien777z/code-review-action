@@ -249,9 +249,8 @@ def comment_body(finding: Finding, marker: str) -> str:
 
     return (
         f"{CONFIG['untrusted_input_open']}\n"
-        f"### {finding.title}\n\n{finding_severity_line(finding)}\n\n{finding.body}\n"
+        f"### {finding.title}\n\n{finding_severity_line(finding)}\n\n{finding_category_footer(finding)}\n\n{finding.body}\n"
         f"{CONFIG['untrusted_input_close']}\n\n"
-        f"{finding_category_footer(finding)}\n\n"
         f"{DISCLAIMER}\n\n{marker}"
     )
 
@@ -327,8 +326,8 @@ def build_verdict_review(
     body = summary_line
     if out_of_bounds:
         listed = "\n".join(
-            f"- {finding.path}:{finding.line} — {finding_severity_line(finding)} — {finding.body}\n"
-            f"  {finding_category_footer(finding)}"
+            f"- {finding.path}:{finding.line} — {finding_severity_line(finding)} — {finding_category_footer(finding)} — "
+            f"{finding.body}"
             for finding in out_of_bounds
         )
         body = f"{body}\n\nFindings not posted inline:\n{listed}"
