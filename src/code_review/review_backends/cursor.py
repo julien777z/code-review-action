@@ -69,7 +69,10 @@ async def run_cursor_review(pr: PullRequestContext) -> review.ReviewRoundResult:
     async def _findings(inputs: ReviewInputs) -> AsyncIterator[Finding]:
         try:
             async for finding in iter_findings(
-                run_agent(cursor_prompt(inputs), load_project_rules=SETTINGS.enforce_project_rules)
+                run_agent(
+                    cursor_prompt(inputs),
+                    load_project_rules=SETTINGS.enforce_project_rules or SETTINGS.simplify_nearby_code,
+                )
             ):
                 yield finding
         except CursorAgentError as exc:

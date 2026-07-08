@@ -47,15 +47,26 @@ class TestGenerateText:
 
 
 class TestRunCursorReview:
-    """Test that the review turn loads the project rules only when enforcement is on."""
+    """Test that the review turn loads project rules when repo context is needed."""
 
-    @pytest.mark.parametrize("enforce", [True, False], ids=["enforcing", "not-enforcing"])
+    @pytest.mark.parametrize(
+        ("enforce", "nearby", "loads_rules"),
+        [(True, False, True), (False, True, True), (False, False, False)],
+        ids=["enforcing", "nearby-code", "neither"],
+    )
     def test_review_loads_rules_per_enforcement(
-        self, monkeypatch, mock_config, pull_request_factory, review_github_mocks, enforce: bool
+        self,
+        monkeypatch,
+        mock_config,
+        pull_request_factory,
+        review_github_mocks,
+        enforce: bool,
+        nearby: bool,
+        loads_rules: bool,
     ) -> None:
-        """Test that run_agent is asked to load project rules to match the enforcement setting."""
+        """Test that run_agent is asked to load project rules when review criteria need repo context."""
 
-        mock_config(cursor_api_key="key", enforce_project_rules=enforce)
+        mock_config(cursor_api_key="key", enforce_project_rules=enforce, simplify_nearby_code=nearby)
         recorded: dict[str, bool] = {}
 
         def _run_agent(prompt: str, *, load_project_rules: bool = False) -> AsyncIterator[str]:
@@ -68,4 +79,4 @@ class TestRunCursorReview:
         result = asyncio.run(cursor.run_cursor_review(pull_request_factory()))
 
         assert result.exit_code == 0
-        assert recorded["load_project_rules"] is enforce
+        assert recorded["load_project_rules"] is loads_rules
