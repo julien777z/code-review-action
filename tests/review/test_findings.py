@@ -1,5 +1,6 @@
 import asyncio
 from collections.abc import AsyncIterator
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -9,6 +10,7 @@ from code_review.models.severity import DiffSide, Severity
 from code_review.review.findings import (
     REVIEW_BACKEND_ATTEMPTS,
     cap_decision,
+    collect_round_findings,
     finding_anchors,
     finding_kept,
     is_postable,
@@ -149,3 +151,64 @@ class TestAnchoring:
         finding = finding_factory(path="src/app.py", line=999)
 
         assert is_postable(finding, {"src/app.py": ({10}, set())}, set()) is False
+
+
+class TestCollectRoundFindings:
+    """Test that collected findings track only visible review content."""
+
+    def test_capped_finding_is_not_current(
+        self,
+        mock_config,
+        monkeypatch,
+        pull_request_factory,
+        review_inputs_factory,
+        stream_findings_factory,
+        finding_factory,
+    ) -> None:
+        """Test that a capped finding cannot affect thread reconciliation or blocking state."""
+
+        mock_config(max_findings=0)
+        monkeypatch.setattr("code_review.review.findings.post_comment", AsyncMock(return_value=True))
+        finding = finding_factory(path="src/app.py", line=10, severity=Severity.CRITICAL)
+
+        result = asyncio.run(
+            collect_round_findings(
+                pull_request_factory(),
+                "marker",
+                stream_findings_factory([finding]),
+                review_inputs_factory(),
+                {"src/app.py": ({10}, set())},
+                set(),
+                set(),
+            )
+        )
+
+        assert result.current_keys == set()
+        assert result.severity_by_key == {}
+        assert result.needs_verdict_review is False
+
+    def test_existing_reposted_finding_remains_current(
+        self,
+        pull_request_factory,
+        review_inputs_factory,
+        stream_findings_factory,
+        finding_factory,
+    ) -> None:
+        """Test that a finding already posted on the PR keeps its thread current."""
+
+        finding = finding_factory(path="src/app.py", line=10, title="Already posted")
+
+        result = asyncio.run(
+            collect_round_findings(
+                pull_request_factory(),
+                "marker",
+                stream_findings_factory([finding]),
+                review_inputs_factory(),
+                {"src/app.py": ({10}, set())},
+                set(),
+                {("src/app.py", "Already posted")},
+            )
+        )
+
+        assert result.current_keys == {("src/app.py", "Already posted")}
+        assert result.severity_by_key[("src/app.py", "Already posted")] is Severity.HIGH

@@ -18,7 +18,6 @@ class FindingPublication(StrEnum):
 
     INLINE = "inline"
     VERDICT = "verdict"
-    DROPPED = "dropped"
 
 
 class RoundFindings(BaseModel):
@@ -41,14 +40,8 @@ class RoundFindings(BaseModel):
         self.current_keys.add(title_key)
         self.severity_by_key[title_key] = finding.severity
 
-    def drop_current(self, title_key: tuple[str, str]) -> None:
-        """Remove a finding that could not be made visible."""
-
-        self.current_keys.discard(title_key)
-        self.severity_by_key.pop(title_key, None)
-
     def track_publication(
-        self, title_key: tuple[str, str], finding: Finding, publication: FindingPublication
+        self, finding: Finding, publication: FindingPublication
     ) -> None:
         """Record where a finding was published."""
 
@@ -57,5 +50,3 @@ class RoundFindings(BaseModel):
                 self.posted_any = True
             case FindingPublication.VERDICT:
                 self.out_of_bounds.append(finding)
-            case FindingPublication.DROPPED:
-                self.drop_current(title_key)

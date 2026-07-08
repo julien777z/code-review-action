@@ -99,21 +99,6 @@ def finding_anchor_key(finding: Finding) -> tuple[str, int, DiffSide, str]:
     return finding.path, finding.line, finding.side, finding.title.strip()
 
 
-def claim_postable_title(
-    title_key: tuple[str, str],
-    posted_keys: set[tuple[str, str]],
-    seen_new_keys: set[tuple[str, str]],
-) -> bool:
-    """Return True once for a title that can still be posted in this round."""
-
-    if title_key in posted_keys or title_key in seen_new_keys:
-        return False
-
-    seen_new_keys.add(title_key)
-
-    return True
-
-
 async def publish_finding(
     pr: PullRequestContext,
     marker: str,
@@ -131,7 +116,7 @@ async def publish_finding(
 
     logger.warning("Could not post inline finding %s:%s.", finding.path, finding.line)
 
-    return FindingPublication.DROPPED
+    return FindingPublication.VERDICT
 
 
 async def collect_round_findings(
@@ -161,21 +146,25 @@ async def collect_round_findings(
 
         seen_anchor_keys.add(anchor_key)
         title_key = finding_title_key(finding)
-        findings.track_current(title_key, finding)
 
         if not is_postable(finding, anchors, unpatched):
             continue
 
-        if not claim_postable_title(title_key, posted_keys, seen_new_keys):
+        if title_key in posted_keys:
+            findings.track_current(title_key, finding)
+
+            continue
+
+        if title_key in seen_new_keys:
             continue
 
         if not cap_decision(finding, low_count, total_count):
             continue
 
         publication = await publish_finding(pr, marker, finding, anchors)
-        findings.track_publication(title_key, finding, publication)
-        if publication is FindingPublication.DROPPED:
-            continue
+        findings.track_current(title_key, finding)
+        findings.track_publication(finding, publication)
+        seen_new_keys.add(title_key)
 
         total_count += 1
         if finding.severity is Severity.LOW:

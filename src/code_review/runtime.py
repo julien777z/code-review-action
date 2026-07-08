@@ -2,6 +2,7 @@ import logging
 import os
 import subprocess
 from collections.abc import AsyncIterator
+from functools import partial
 from pathlib import Path
 from typing import Final
 
@@ -92,11 +93,7 @@ async def stream_backend_findings(
 async def run_backend_review(pr: PullRequestContext, handlers: BackendHandlers) -> ReviewRoundResult:
     """Run a PR review through the shared backend policy."""
 
-    async def _findings(inputs: ReviewInputs) -> AsyncIterator[Finding]:
-        async for finding in stream_backend_findings(handlers, pr, inputs):
-            yield finding
-
-    return await run_review_round(pr, CONFIG["review_marker"], _findings)
+    return await run_review_round(pr, CONFIG["review_marker"], partial(stream_backend_findings, handlers, pr))
 
 
 def summary_errors(handlers: BackendHandlers) -> tuple[type[Exception], ...]:

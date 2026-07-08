@@ -166,10 +166,10 @@ class TestRunReviewRound:
         assert review_github_mocks["post_review"].await_count == 0
         assert review_github_mocks["complete_check_run"].await_args.args[2] == "action_required"
 
-    def test_rejected_inline_post_warns_without_verdict_body(
+    def test_rejected_inline_post_goes_to_verdict_body(
         self, mock_config, review_github_mocks, stream_findings_factory, pull_request_factory, finding_factory
     ) -> None:
-        """Test that a finding whose inline post is rejected is not counted or copied into the verdict body."""
+        """Test that a finding whose inline post is rejected is still visible in the verdict body."""
 
         review_github_mocks["post_comment"].return_value = False
         review_github_mocks["diff_anchors"].return_value = ({"src/app.py": ({10}, set())}, set())
@@ -179,8 +179,13 @@ class TestRunReviewRound:
 
         assert result.exit_code == 0
         assert review_github_mocks["post_comment"].await_count == 1
-        assert review_github_mocks["post_review"].await_count == 0
-        assert review_github_mocks["complete_check_run"].await_args.args[2] == "success"
+        assert review_github_mocks["post_review"].await_count == 1
+        payload = review_github_mocks["post_review"].await_args.args[2]
+
+        assert "Findings not posted inline:" in payload.body
+        assert "Off-by-one error" not in payload.body
+        assert "The loop overruns the array." in payload.body
+        assert review_github_mocks["complete_check_run"].await_args.args[2] == "neutral"
 
     def test_approval_disable_posts_verdict_review_to_record_head(
         self, mock_config, review_github_mocks, stream_findings_factory, pull_request_factory
