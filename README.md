@@ -30,7 +30,7 @@ jobs:
         && github.event.pull_request.head.repo.full_name == github.repository)
       || (github.event_name == 'issue_comment'
         && github.event.issue.pull_request
-        && startsWith(github.event.comment.body, 'agent review'))
+        && startsWith(toLower(trim(github.event.comment.body)), 'agent review'))
     concurrency:
       group: code-review-${{ github.event.pull_request.number || github.event.issue.number }}-${{ github.event_name == 'issue_comment' && 'comment' || 'review' }}
       cancel-in-progress: true
