@@ -1,6 +1,40 @@
+from enum import StrEnum
+from typing import Self
+
 from pydantic import BaseModel
 
 from code_review.models.shared.severity import DiffSide, Severity
+
+
+class FindingCategory(StrEnum):
+    """Finding category shown beside severity in review comments."""
+
+    BUG = "bug"
+    CODE_SIMPLIFICATION = "code_simplification"
+    SECURITY = "security"
+    PERFORMANCE = "performance"
+    RELIABILITY = "reliability"
+    MAINTAINABILITY = "maintainability"
+    TESTING = "testing"
+    DOCUMENTATION = "documentation"
+    PROJECT_RULE = "project_rule"
+    OTHER = "other"
+
+    @classmethod
+    def from_str(cls, value: str) -> Self:
+        """Parse category names from snake-case, hyphenated, or display-label text."""
+
+        normalized = value.strip().lower().replace("-", "_").replace(" ", "_")
+        try:
+            return cls(normalized)
+        except ValueError:
+            return cls.OTHER
+
+    @property
+    def label(self) -> str:
+        """Return the human-facing category label."""
+
+        return self.value.replace("_", " ").title()
 
 
 class Finding(BaseModel):
@@ -9,6 +43,7 @@ class Finding(BaseModel):
     path: str
     line: int
     side: DiffSide = DiffSide.RIGHT
+    category: FindingCategory = FindingCategory.BUG
     severity: Severity
     title: str
     body: str
@@ -20,6 +55,7 @@ class RawFinding(BaseModel):
     path: str
     line: int
     side: str = "RIGHT"
+    category: str = FindingCategory.BUG.value
     severity: str
     title: str
     body: str

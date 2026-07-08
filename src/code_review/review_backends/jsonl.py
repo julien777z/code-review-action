@@ -7,7 +7,7 @@ from pydantic import ValidationError
 
 from code_review import review
 from code_review.config import CONFIG
-from code_review.models.shared.findings import Finding, RawFinding
+from code_review.models.shared.findings import Finding, FindingCategory, RawFinding
 from code_review.models.shared.severity import DiffSide, Severity
 
 FENCE: Final[re.Pattern[str]] = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL)
@@ -26,6 +26,7 @@ def normalize_raw(raw: RawFinding) -> Finding | None:
         path=raw.path,
         line=raw.line,
         side=DiffSide.from_str(raw.side),
+        category=FindingCategory.from_str(raw.category),
         severity=severity,
         title=raw.title,
         body=raw.body,

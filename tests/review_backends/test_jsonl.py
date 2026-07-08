@@ -4,7 +4,7 @@ from collections.abc import AsyncIterator
 import pytest
 
 from code_review.config import CONFIG
-from code_review.models.shared.findings import Finding
+from code_review.models.shared.findings import Finding, FindingCategory
 from code_review.models.shared.severity import DiffSide, Severity
 from code_review.review import ReviewBackendError
 from code_review.review_backends.jsonl import iter_findings, parse_finding_line
@@ -29,10 +29,33 @@ class TestParseFindingLine:
     def test_parses_and_normalizes_severity(self) -> None:
         """Test that a compact finding line parses with a normalized severity."""
 
-        finding = parse_finding_line('{"path":"a.py","line":3,"side":"RIGHT","severity":"high","title":"T","body":"B"}')
+        finding = parse_finding_line(
+            '{"path":"a.py","line":3,"side":"RIGHT","category":"bug","severity":"high","title":"T","body":"B"}'
+        )
 
         assert finding is not None
+        assert finding.category is FindingCategory.BUG
         assert finding.severity is Severity.HIGH
+
+    def test_parses_category_display_label(self) -> None:
+        """Test that category labels normalize from human-facing text."""
+
+        finding = parse_finding_line(
+            '{"path":"a.py","line":3,"side":"RIGHT","category":"Code Simplification","severity":"low","title":"T","body":"B"}'
+        )
+
+        assert finding is not None
+        assert finding.category is FindingCategory.CODE_SIMPLIFICATION
+
+    def test_unknown_category_falls_back_to_other(self) -> None:
+        """Test that unknown category text keeps the finding and labels it as other."""
+
+        finding = parse_finding_line(
+            '{"path":"a.py","line":3,"side":"RIGHT","category":"surprise","severity":"medium","title":"T","body":"B"}'
+        )
+
+        assert finding is not None
+        assert finding.category is FindingCategory.OTHER
 
     def test_normalizes_left_side(self) -> None:
         """Test that a LEFT-side line normalizes the diff side."""

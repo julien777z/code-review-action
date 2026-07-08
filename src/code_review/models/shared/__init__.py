@@ -1,5 +1,6 @@
 from code_review.models.shared.findings import (
     Finding,
+    FindingCategory,
     RawFinding,
     ReviewComment,
     ReviewCommentRequest,
@@ -39,6 +40,7 @@ __all__ = [
     "EventRepo",
     "EventSender",
     "Finding",
+    "FindingCategory",
     "GithubEvent",
     "IssuePullRequestRef",
     "PostedFinding",

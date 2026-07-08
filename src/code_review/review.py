@@ -82,24 +82,35 @@ def thread_title(comment: ThreadCommentNode) -> str | None:
 
 
 def thread_severity(comment: ThreadCommentNode) -> Severity | None:
-    """Return the severity from this tier's comment body (the `**X Severity**` line), if present."""
+    """Return the severity from this tier's comment body, supporting current and legacy formats."""
 
     line = next(
         (
             row.strip()
             for row in comment.body.splitlines()
-            if row.strip().startswith("**") and row.strip().lower().endswith("severity**")
+            if row.strip().startswith("*")
+            and (" - " in row.strip() or row.strip().lower().endswith("severity**"))
         ),
         "",
     )
-    words = line.strip("*").split()
-    if not words:
+    label = line.strip("*").strip()
+    if not label:
         return None
 
+    severity_text = label.rsplit(" - ", 1)[-1]
+    if severity_text.lower().endswith(" severity"):
+        severity_text = severity_text.rsplit(" ", 1)[0]
+
     try:
-        return Severity.from_str(words[0])
+        return Severity.from_str(severity_text)
     except ValueError:
         return None
+
+
+def finding_label(finding: Finding) -> str:
+    """Return the category/severity label shown in review comments."""
+
+    return f"{finding.category.label} - {finding.severity.value.capitalize()}"
 
 
 def is_tier_comment(comment: ThreadCommentNode | None, marker: str) -> bool:
@@ -229,13 +240,13 @@ def cap_decision(finding: Finding, low_count: int, total_count: int) -> bool:
 
 
 def comment_body(finding: Finding, marker: str) -> str:
-    """Render one inline comment body in the severity format."""
+    """Render one inline comment body with category and severity."""
 
     return (
         f"{CONFIG['untrusted_input_open']}\n"
-        f"### {finding.title}\n\n**{finding.severity.value.capitalize()} Severity**\n\n"
-        f"{finding.body}\n"
+        f"### {finding.title}\n\n{finding.body}\n"
         f"{CONFIG['untrusted_input_close']}\n\n"
+        f"*{finding_label(finding)}*\n\n"
         f"{DISCLAIMER}\n\n{marker}"
     )
 
@@ -311,7 +322,7 @@ def build_verdict_review(
     body = summary_line
     if out_of_bounds:
         listed = "\n".join(
-            f"- {finding.path}:{finding.line} — {finding.severity.value.capitalize()} — {finding.body}"
+            f"- {finding.path}:{finding.line} — {finding.body}\n  *{finding_label(finding)}*"
             for finding in out_of_bounds
         )
         body = f"{body}\n\nFindings not posted inline:\n{listed}"

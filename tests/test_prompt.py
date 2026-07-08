@@ -22,6 +22,8 @@ class TestReviewInstructions:
 
         assert "code-review" in text
         assert "JSONL" in text
+        assert '"category"' in text
+        assert "code_simplification" in text
         assert '"severity"' in text
 
     def test_includes_prompt_injection_safety(self) -> None:
@@ -78,6 +80,7 @@ class TestReviewInstructions:
         text = review_instructions()
 
         assert "code-simplify" in text
+        assert "Code Simplify" in text
         assert "nearby and related code" not in text
 
     def test_nearby_code_implies_simplifications(self, mock_config) -> None:

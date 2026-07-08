@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from code_review.config import CONFIG, ReviewModel
-from code_review.models.shared.findings import Finding
+from code_review.models.shared.findings import Finding, FindingCategory
 from code_review.models.shared.github_event import GithubEvent
 from code_review.models.shared.pull_request import PullRequestContext, ReviewInputs
 from code_review.models.shared.severity import DiffSide, Severity
@@ -65,6 +65,7 @@ def finding_factory() -> Callable[..., Finding]:
             "path": "src/app.py",
             "line": 10,
             "side": DiffSide.RIGHT,
+            "category": FindingCategory.BUG,
             "severity": Severity.HIGH,
             "title": "Off-by-one error",
             "body": "The loop overruns the array.",
@@ -326,13 +327,14 @@ def thread_comment_factory() -> Callable[..., ThreadCommentNode]:
     def _build(
         *,
         title: str = "Off-by-one error",
+        category: str = "Bug",
         severity: str = "Critical",
         marker: str = CONFIG["review_marker"],
         author: str = "github-actions[bot]",
         path: str = "src/app.py",
         body: str | None = None,
     ) -> ThreadCommentNode:
-        resolved_body = body if body is not None else f"### {title}\n\n**{severity} Severity**\n\nDetail.\n\n{marker}"
+        resolved_body = body if body is not None else f"### {title}\n\nDetail.\n\n*{category} - {severity}*\n\n{marker}"
 
         return ThreadCommentNode(author=ThreadCommentAuthor(login=author), body=resolved_body, path=path)
 

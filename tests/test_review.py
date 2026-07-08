@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from code_review.config import CONFIG, DISCLAIMER
-from code_review.models.shared.findings import Finding
+from code_review.models.shared.findings import Finding, FindingCategory
 from code_review.models.shared.severity import DiffSide, Severity
 from code_review.review import (
     REVIEW_BACKEND_ATTEMPTS,
@@ -218,7 +218,9 @@ class TestBuildInlineComment:
         assert request.commit_id == "sha1"
         assert (request.path, request.line, request.side) == ("src/app.py", 12, DiffSide.RIGHT)
         assert "### Leak" in request.body
-        assert "**Critical Severity**" in request.body
+        assert "*Bug - Critical*" in request.body
+        assert request.body.index(CONFIG["untrusted_input_close"]) < request.body.index("*Bug - Critical*")
+        assert request.body.index("*Bug - Critical*") < request.body.index(DISCLAIMER)
         assert request.body.rstrip().endswith(MARKER)
 
 
@@ -237,6 +239,7 @@ class TestBuildVerdictReview:
         assert "Found 1 issue." in payload.body
         assert "Findings not posted inline:" in payload.body
         assert "big.txt:1" in payload.body
+        assert "*Bug - High*" in payload.body
         assert CONFIG["untrusted_input_open"] in payload.body
         assert CONFIG["untrusted_input_close"] in payload.body
         assert DISCLAIMER in payload.body
@@ -252,15 +255,20 @@ class TestBuildVerdictReview:
 
 
 class TestCommentBody:
-    """Test that an inline comment renders the title, capitalized severity, and marker."""
+    """Test that an inline comment renders the title, category/severity label, and marker."""
 
     def test_render(self, finding_factory) -> None:
-        """Test that the comment carries the heading, severity line, and runner marker."""
+        """Test that the comment carries the heading, label line, and runner marker."""
 
-        body = comment_body(finding_factory(title="Leak", severity=Severity.CRITICAL), MARKER)
+        body = comment_body(
+            finding_factory(title="Leak", category=FindingCategory.SECURITY, severity=Severity.CRITICAL),
+            MARKER,
+        )
 
         assert "### Leak" in body
-        assert "**Critical Severity**" in body
+        assert "*Security - Critical*" in body
+        assert body.index(CONFIG["untrusted_input_close"]) < body.index("*Security - Critical*")
+        assert body.index("*Security - Critical*") < body.index(DISCLAIMER)
         assert CONFIG["untrusted_input_open"] in body
         assert CONFIG["untrusted_input_close"] in body
         assert DISCLAIMER in body
@@ -289,12 +297,19 @@ class TestThreadParsing:
 
         assert is_tier_comment(comment, MARKER) is False
 
-    def test_title_and_severity(self, thread_comment_factory) -> None:
-        """Test that the title heading and severity line parse from the comment body."""
+    def test_title_and_current_severity(self, thread_comment_factory) -> None:
+        """Test that the title heading and current category/severity line parse from the comment body."""
 
         comment = thread_comment_factory(title="Race condition", severity="High")
 
         assert thread_title(comment) == "Race condition"
+        assert thread_severity(comment) is Severity.HIGH
+
+    def test_legacy_severity_line(self, thread_comment_factory) -> None:
+        """Test that legacy severity-only comments still parse for thread reconciliation."""
+
+        comment = thread_comment_factory(body="### Race condition\n\n**High Severity**\n\nDetail.")
+
         assert thread_severity(comment) is Severity.HIGH
 
 

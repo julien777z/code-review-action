@@ -1,5 +1,6 @@
 import logging
 from collections.abc import AsyncIterator
+from io import StringIO
 from typing import Final
 
 from cursor_sdk import AsyncAgent, AsyncClient, CursorAgentError, LocalAgentOptions, ModelSelection
@@ -84,4 +85,8 @@ async def run_cursor_review(pr: PullRequestContext) -> review.ReviewRoundResult:
 async def generate_text(prompt: str) -> str:
     """Run a single-shot Cursor agent turn and return the joined reply text."""
 
-    return "".join([chunk async for chunk in run_agent(prompt)])
+    output = StringIO()
+    async for chunk in run_agent(prompt):
+        output.write(chunk)
+
+    return output.getvalue()
