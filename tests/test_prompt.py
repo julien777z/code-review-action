@@ -83,8 +83,8 @@ class TestReviewInstructions:
         text = review_instructions()
 
         assert "code-simplify" in text
-        assert "Code Simplify" in text
-        assert "Review-only CI use" in text
+        assert "Code Simplify Review" in text
+        assert "read-only CI review variant" in text
         assert "apply the simplifications you identify directly to the working tree" not in text
         assert "then " + "fix the issues" not in text
         assert "nearby and related code" not in text

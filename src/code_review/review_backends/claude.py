@@ -142,7 +142,7 @@ async def managed_agent_text(pr: PullRequestContext, user_message: str, *, mount
             raise review.ReviewBackendError(
                 f"Claude agent review failed: {exc}", retryable=is_retryable_api_error(exc)
             ) from exc
-        except Exception as exc:
+        except RuntimeError as exc:
             raise review.ReviewBackendError(f"Claude agent setup failed: {exc}", retryable=True) from exc
         finally:
             if environment_id is not None:
