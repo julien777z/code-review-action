@@ -27,7 +27,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha || format('refs/pull/{0}/head', github.event.issue.number) }}
-      - uses: julien777z/code-review-action@v0
+      - uses: ./
         with:
           cursor-api-key: ${{ secrets.CURSOR_API_KEY }}
           resolve-token: ${{ secrets.CODE_REVIEW_TOKEN }}
