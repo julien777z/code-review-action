@@ -1,7 +1,7 @@
 import re
 
-from code_review.models.shared.pull_request import PostedFinding, ReviewInputs
-from code_review.models.shared.severity import Severity
+from code_review.models.pull_request import PostedFinding, ReviewInputs
+from code_review.models.severity import Severity
 from code_review.prompt import (
     cursor_prompt,
     existing_findings_block,

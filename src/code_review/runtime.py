@@ -11,12 +11,12 @@ from cursor_sdk import CursorAgentError
 
 from code_review.config import CONFIG, SETTINGS, ReviewModel
 from code_review.github import add_reaction, fetch_pull_request, remove_reaction
-from code_review.models.shared.github_event import GithubEvent
-from code_review.models.shared.findings import Finding
-from code_review.models.shared.pull_request import PullRequestContext, ReviewInputs
+from code_review.models.github_event import GithubEvent
+from code_review.models.findings import Finding
+from code_review.models.pull_request import PullRequestContext, ReviewInputs
 from code_review.review import ReviewBackendError, ReviewRoundResult, run_review_round
 from code_review.review_backends import claude, cursor
-from code_review.review_backends.jsonl import iter_findings
+from code_review.utils.jsonl import iter_findings
 from code_review.summary import GenerateSummary, SummaryGenerationError, post_pr_summary
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")

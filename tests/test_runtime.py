@@ -7,8 +7,8 @@ import pytest
 from cursor_sdk import CursorAgentError
 
 from code_review.config import ReviewModel
-from code_review.models.shared.findings import Finding
-from code_review.models.shared.github_event import GithubEvent
+from code_review.models.findings import Finding
+from code_review.models.github_event import GithubEvent
 from code_review.review_backends import claude, cursor
 from code_review.review import ReviewBackendError
 from code_review.summary import SummaryGenerationError

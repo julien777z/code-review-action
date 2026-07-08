@@ -7,9 +7,9 @@ import subprocess
 from typing import Final
 
 from code_review.config import CONFIG, SETTINGS
-from code_review.models.shared.findings import ReviewCommentRequest, ReviewPayload
-from code_review.models.shared.pull_request import PullRequestBodyUpdate, PullRequestContext
-from code_review.models.shared.threads import ReviewThread
+from code_review.models.findings import ReviewCommentRequest, ReviewPayload
+from code_review.models.pull_request import PullRequestBodyUpdate, PullRequestContext
+from code_review.models.threads import ReviewThread
 
 logger = logging.getLogger("code_review.github")
 

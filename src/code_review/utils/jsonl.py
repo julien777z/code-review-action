@@ -5,8 +5,8 @@ from pydantic import ValidationError
 
 from code_review import review
 from code_review.config import CONFIG
-from code_review.models.shared.findings import Finding, FindingCategory, RawFinding
-from code_review.models.shared.severity import DiffSide, Severity
+from code_review.models.findings import Finding, FindingCategory, RawFinding
+from code_review.models.severity import DiffSide, Severity
 
 UNPARSEABLE_SNIPPET_CHARS: Final[int] = 500
 

@@ -6,7 +6,7 @@ from typing import Final
 from cursor_sdk import AsyncAgent, AsyncClient, CursorAgentError, LocalAgentOptions, ModelSelection
 
 from code_review.config import SETTINGS
-from code_review.models.shared.pull_request import PullRequestContext, ReviewInputs
+from code_review.models.pull_request import PullRequestContext, ReviewInputs
 from code_review.prompt import cursor_prompt
 
 logger = logging.getLogger("code_review.cursor")

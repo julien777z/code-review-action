@@ -3,7 +3,7 @@ from typing import Final, Self
 
 from pydantic import BaseModel
 
-from code_review.models.shared.severity import DiffSide, Severity
+from code_review.models.severity import DiffSide, Severity
 
 
 class FindingCategory(StrEnum):

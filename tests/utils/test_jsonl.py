@@ -4,10 +4,10 @@ from collections.abc import AsyncIterator
 import pytest
 
 from code_review.config import CONFIG
-from code_review.models.shared.findings import Finding, FindingCategory
-from code_review.models.shared.severity import DiffSide, Severity
+from code_review.models.findings import Finding, FindingCategory
+from code_review.models.severity import DiffSide, Severity
 from code_review.review import ReviewBackendError
-from code_review.review_backends.jsonl import iter_findings, parse_finding_line
+from code_review.utils.jsonl import iter_findings, parse_finding_line
 
 
 async def text_stream(*parts: str) -> AsyncIterator[str]:

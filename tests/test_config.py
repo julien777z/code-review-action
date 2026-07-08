@@ -1,7 +1,7 @@
 import pytest
 
 from code_review.config import ReviewModel, Settings, parse_bool, split_list
-from code_review.models.shared.severity import Severity
+from code_review.models.severity import Severity
 
 
 class TestSplitList:

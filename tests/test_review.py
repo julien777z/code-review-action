@@ -6,8 +6,8 @@ from unittest.mock import AsyncMock
 import pytest
 
 from code_review.config import CONFIG, DISCLAIMER
-from code_review.models.shared.findings import Finding, FindingCategory
-from code_review.models.shared.severity import DiffSide, Severity
+from code_review.models.findings import Finding, FindingCategory
+from code_review.models.severity import DiffSide, Severity
 from code_review.review import (
     REVIEW_BACKEND_ATTEMPTS,
     ReviewBackendError,

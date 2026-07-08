@@ -5,11 +5,11 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from code_review.config import CONFIG, ReviewModel
-from code_review.models.shared.findings import Finding, FindingCategory
-from code_review.models.shared.github_event import GithubEvent
-from code_review.models.shared.pull_request import PullRequestContext, ReviewInputs
-from code_review.models.shared.severity import DiffSide, Severity
-from code_review.models.shared.threads import ReviewThread, ThreadCommentAuthor, ThreadCommentNode, ThreadComments
+from code_review.models.findings import Finding, FindingCategory
+from code_review.models.github_event import GithubEvent
+from code_review.models.pull_request import PullRequestContext, ReviewInputs
+from code_review.models.severity import DiffSide, Severity
+from code_review.models.threads import ReviewThread, ThreadCommentAuthor, ThreadCommentNode, ThreadComments
 from code_review.review import GetFindings, ReviewBackendError, ReviewRoundResult
 from code_review.review_backends import cursor
 from code_review.runtime import Backend, BackendHandlers

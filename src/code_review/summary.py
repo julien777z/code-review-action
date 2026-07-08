@@ -8,7 +8,7 @@ from code_review.github import (
     pull_request_diff_if_available,
     update_pull_request_body,
 )
-from code_review.models.shared.pull_request import PullRequestContext
+from code_review.models.pull_request import PullRequestContext
 from code_review.prompt import summary_prompt
 
 logger = logging.getLogger("code_review.summary")

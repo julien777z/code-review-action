@@ -5,8 +5,8 @@ from pathlib import Path
 from typing import Final
 
 from code_review.config import CONFIG, SETTINGS
-from code_review.models.shared.pull_request import PullRequestContext, ReviewInputs
-from code_review.models.shared.severity import Severity
+from code_review.models.pull_request import PullRequestContext, ReviewInputs
+from code_review.models.severity import Severity
 
 CODE_REVIEW_SKILL_RELATIVE: Final[str] = ".agents/skills/code-review/SKILL.md"
 CODE_SIMPLIFY_REVIEW_SKILL_RELATIVE: Final[str] = ".agents/skills/code-simplify/REVIEW_ONLY.md"

@@ -22,10 +22,10 @@ from code_review.github import (
     resolve_threads,
     start_check_run,
 )
-from code_review.models.shared.findings import Finding, ReviewCommentRequest, ReviewPayload
-from code_review.models.shared.pull_request import PostedFinding, PullRequestContext, ReviewInputs
-from code_review.models.shared.severity import DiffSide, Severity
-from code_review.models.shared.threads import ReviewThread, ThreadCommentNode
+from code_review.models.findings import Finding, ReviewCommentRequest, ReviewPayload
+from code_review.models.pull_request import PostedFinding, PullRequestContext, ReviewInputs
+from code_review.models.severity import DiffSide, Severity
+from code_review.models.threads import ReviewThread, ThreadCommentNode
 
 logger = logging.getLogger("code_review.review")
 
@@ -197,8 +197,6 @@ def classify_threads(
 
             continue
 
-        # Gone this round: resolve only if outdated, or non-blocking on a re-reviewed file (the agent
-        # re-reports only on changed lines). Keep blocking threads and threads on unreviewed files open.
         severity = thread_severity(comment)
         is_blocking = severity is not None and severity in SETTINGS.approval_include
 
@@ -357,7 +355,6 @@ async def note_diff_too_large(pr: PullRequestContext, marker: str) -> ReviewRoun
 async def run_review_round(pr: PullRequestContext, marker: str, get_findings: GetFindings) -> ReviewRoundResult:
     """Stream a backend's findings, posting each anchorable one as it arrives, then record the verdict."""
 
-    # The verdict of record is the check run (approval on) or the review marker (approval off).
     already = (
         await already_reviewed(pr.repo, pr.number, pr.head_sha, marker)
         if SETTINGS.approval_disable
@@ -386,7 +383,6 @@ async def run_review_round(pr: PullRequestContext, marker: str, get_findings: Ge
     loop = asyncio.get_running_loop()
     review_task = asyncio.current_task()
 
-    # cancel-in-progress would leave this head's check stuck in_progress; conclude it on cancellation.
     def _cancel_on_signal() -> None:
         """Cancel the in-flight review so the check run concludes when the job is cancelled."""
 
@@ -397,8 +393,6 @@ async def run_review_round(pr: PullRequestContext, marker: str, get_findings: Ge
         loop.add_signal_handler(cancel_signal, _cancel_on_signal)
 
     try:
-        # With streaming the comments post mid-run, so the head is gated once here, before the first
-        # one. A mid-stream advance posts on the prior head and self-heals on the next run's reconcile.
         if await current_head_sha(pr.repo, pr.number) != pr.head_sha:
             logger.info("Head moved before review; skipping (the new commit reviews next).")
             await complete_check_run(pr.repo, check_id, "cancelled", "Superseded", "The head moved before review.")
