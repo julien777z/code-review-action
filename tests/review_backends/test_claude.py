@@ -4,6 +4,7 @@ from collections.abc import AsyncIterator
 import pytest
 
 from code_review.config import CONFIG
+from code_review.errors import ReviewBackendError
 from code_review.review_backends import claude
 
 
@@ -47,6 +48,23 @@ class TestReviewText:
 
         assert chunks == [CONFIG["no_findings_marker"]]
         assert bool(client.beta.sessions.create.await_args.kwargs["resources"]) is repo_mounted
+
+    def test_managed_agent_runtime_error_maps_to_review_failure(
+        self, monkeypatch, pull_request_factory, review_inputs_factory
+    ) -> None:
+        """Test that Managed Agents runtime setup failures use the shared review failure path."""
+
+        async def fail_managed_agent_text(*args, **kwargs) -> AsyncIterator[str]:
+            raise RuntimeError("agent setup failed")
+            yield ""
+
+        monkeypatch.setattr(claude, "managed_agent_text", fail_managed_agent_text)
+
+        with pytest.raises(ReviewBackendError) as raised:
+            asyncio.run(collect(claude.review_text(pull_request_factory(), review_inputs_factory())))
+
+        assert raised.value.retryable is False
+        assert "Claude review failed: agent setup failed" in str(raised.value)
 
 
 class TestManagedAgentText:

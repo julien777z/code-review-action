@@ -11,6 +11,7 @@ from anthropic.types.beta import (
 )
 
 from code_review.config import SETTINGS
+from code_review.errors import ReviewBackendError
 from code_review.models.pull_request import PullRequestContext, ReviewInputs
 from code_review.prompt import pull_request_message, review_instructions
 
@@ -136,12 +137,15 @@ async def managed_agent_text(pr: PullRequestContext, user_message: str, *, mount
 async def review_text(pr: PullRequestContext, inputs: ReviewInputs) -> AsyncIterator[str]:
     """Stream Claude's review reply text for the shared runner."""
 
-    async for chunk in managed_agent_text(
-        pr,
-        pull_request_message(inputs),
-        mount_repo=SETTINGS.enforce_project_rules or SETTINGS.simplify_nearby_code,
-    ):
-        yield chunk
+    try:
+        async for chunk in managed_agent_text(
+            pr,
+            pull_request_message(inputs),
+            mount_repo=SETTINGS.enforce_project_rules or SETTINGS.simplify_nearby_code,
+        ):
+            yield chunk
+    except RuntimeError as exc:
+        raise ReviewBackendError(f"Claude review failed: {exc}", retryable=False) from exc
 
 
 async def generate_text(prompt: str) -> str:
