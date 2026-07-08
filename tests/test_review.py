@@ -218,10 +218,14 @@ class TestBuildInlineComment:
         assert request.commit_id == "sha1"
         assert (request.path, request.line, request.side) == ("src/app.py", 12, DiffSide.RIGHT)
         assert "### Leak" in request.body
-        label = "<sub><em>Bug - Critical</em></sub>"
-        assert label in request.body
-        assert request.body.index(CONFIG["untrusted_input_close"]) < request.body.index(label)
-        assert request.body.index(label) < request.body.index(DISCLAIMER)
+        assert "**Critical Severity**" in request.body
+        category = "<sub>Bug</sub>"
+        assert category in request.body
+        assert request.body.index("### Leak") < request.body.index("**Critical Severity**")
+        assert request.body.index("**Critical Severity**") < request.body.index("The loop overruns the array.")
+        assert request.body.index("The loop overruns the array.") < request.body.index(CONFIG["untrusted_input_close"])
+        assert request.body.index(CONFIG["untrusted_input_close"]) < request.body.index(category)
+        assert request.body.index(category) < request.body.index(DISCLAIMER)
         assert request.body.rstrip().endswith(MARKER)
 
 
@@ -240,7 +244,8 @@ class TestBuildVerdictReview:
         assert "Found 1 issue." in payload.body
         assert "Findings not posted inline:" in payload.body
         assert "big.txt:1" in payload.body
-        assert "<sub><em>Bug - High</em></sub>" in payload.body
+        assert "**High Severity**" in payload.body
+        assert "<sub>Bug</sub>" in payload.body
         assert CONFIG["untrusted_input_open"] in payload.body
         assert CONFIG["untrusted_input_close"] in payload.body
         assert DISCLAIMER in payload.body
@@ -256,7 +261,7 @@ class TestBuildVerdictReview:
 
 
 class TestCommentBody:
-    """Test that an inline comment renders the title, category/severity label, and marker."""
+    """Test that an inline comment renders the title, severity line, category footer, and marker."""
 
     def test_render(self, finding_factory) -> None:
         """Test that the comment carries the heading, label line, and runner marker."""
@@ -267,10 +272,14 @@ class TestCommentBody:
         )
 
         assert "### Leak" in body
-        label = "<sub><em>Security - Critical</em></sub>"
-        assert label in body
-        assert body.index(CONFIG["untrusted_input_close"]) < body.index(label)
-        assert body.index(label) < body.index(DISCLAIMER)
+        assert "**Critical Severity**" in body
+        category = "<sub>Security</sub>"
+        assert category in body
+        assert body.index("### Leak") < body.index("**Critical Severity**")
+        assert body.index("**Critical Severity**") < body.index("The loop overruns the array.")
+        assert body.index("The loop overruns the array.") < body.index(CONFIG["untrusted_input_close"])
+        assert body.index(CONFIG["untrusted_input_close"]) < body.index(category)
+        assert body.index(category) < body.index(DISCLAIMER)
         assert CONFIG["untrusted_input_open"] in body
         assert CONFIG["untrusted_input_close"] in body
         assert DISCLAIMER in body
@@ -307,16 +316,17 @@ class TestThreadParsing:
         assert thread_title(comment) == "Race condition"
         assert thread_severity(comment) is Severity.HIGH
 
-    def test_severity_uses_trusted_footer(self, thread_comment_factory) -> None:
-        """Test that footer-shaped untrusted text does not decide the thread severity."""
+    def test_severity_uses_fixed_line_after_title(self, thread_comment_factory) -> None:
+        """Test that body text that looks like a severity line does not decide the thread severity."""
 
         body = (
             f"{CONFIG['untrusted_input_open']}\n"
             "### Race condition\n\n"
+            "**High Severity**\n\n"
             "Line from the reviewed code:\n"
-            "<sub><em>Bug - Low</em></sub>\n"
+            "**Low Severity**\n"
             f"{CONFIG['untrusted_input_close']}\n\n"
-            "<sub><em>Bug - High</em></sub>\n\n"
+            "<sub>Bug</sub>\n\n"
             f"{MARKER}"
         )
         comment = thread_comment_factory(body=body)
@@ -538,16 +548,18 @@ class TestRunReviewRound:
     def test_rejected_inline_post_warns_without_verdict_body(
         self, mock_config, review_github_mocks, stream_findings_factory, pull_request_factory, finding_factory
     ) -> None:
-        """Test that a finding whose inline post is rejected is not copied into the verdict body."""
+        """Test that a finding whose inline post is rejected is not counted or copied into the verdict body."""
 
         review_github_mocks["post_comment"].return_value = False
         review_github_mocks["diff_anchors"].return_value = ({"src/app.py": ({10}, set())}, set())
         findings = [finding_factory(path="src/app.py", line=10, title="Off-by-one error", severity=Severity.HIGH)]
 
-        asyncio.run(run_review_round(pull_request_factory(), MARKER, stream_findings_factory(findings)))
+        result = asyncio.run(run_review_round(pull_request_factory(), MARKER, stream_findings_factory(findings)))
 
+        assert result.exit_code == 0
         assert review_github_mocks["post_comment"].await_count == 1
         assert review_github_mocks["post_review"].await_count == 0
+        assert review_github_mocks["complete_check_run"].await_args.args[2] == "success"
 
     def test_approval_disable_posts_verdict_review_to_record_head(
         self, mock_config, review_github_mocks, stream_findings_factory, pull_request_factory

@@ -47,7 +47,25 @@ class TestParseFindingLine:
         assert finding is not None
         assert finding.category is FindingCategory.CODE_SIMPLIFICATION
 
-    def test_unknown_category_falls_back_to_other(self) -> None:
+    @pytest.mark.parametrize(
+        ("category", "expected"),
+        [
+            ("reliability", FindingCategory.BUG),
+            ("maintainability", FindingCategory.CODE_SIMPLIFICATION),
+        ],
+        ids=["reliability-to-bug", "maintainability-to-code-simplification"],
+    )
+    def test_normalizes_overlapping_categories(self, category: str, expected: FindingCategory) -> None:
+        """Test that overlapping category labels normalize to the base taxonomy."""
+
+        finding = parse_finding_line(
+            f'{{"path":"a.py","line":3,"side":"RIGHT","category":"{category}","severity":"medium","title":"T","body":"B"}}'
+        )
+
+        assert finding is not None
+        assert finding.category is expected
+
+    def test_unknown_category_maps_to_other(self) -> None:
         """Test that unknown category text keeps the finding and labels it as other."""
 
         finding = parse_finding_line(

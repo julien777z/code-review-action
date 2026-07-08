@@ -88,11 +88,12 @@ async def managed_agent_text(pr: PullRequestContext, user_message: str, *, mount
     """Run one Managed Agents turn, streaming the agent's response text and mounting the repo when asked."""
 
     async with anthropic.AsyncAnthropic(api_key=SETTINGS.anthropic_api_key) as client:
-        environment_id = await create_environment(client)
+        environment_id: str | None = None
         agent_id: str | None = None
         session_id: str | None = None
 
         try:
+            environment_id = await create_environment(client)
             agent = await client.beta.agents.create(
                 name=REVIEW_AGENT_NAME,
                 model=SETTINGS.claude_model,
@@ -135,8 +136,17 @@ async def managed_agent_text(pr: PullRequestContext, user_message: str, *, mount
 
             if not produced_text:
                 raise review.ReviewBackendError("The Claude agent session produced no output.", retryable=True)
+        except review.ReviewBackendError:
+            raise
+        except anthropic.APIError as exc:
+            raise review.ReviewBackendError(
+                f"Claude agent review failed: {exc}", retryable=is_retryable_api_error(exc)
+            ) from exc
+        except Exception as exc:
+            raise review.ReviewBackendError(f"Claude agent setup failed: {exc}", retryable=True) from exc
         finally:
-            await teardown_managed_agent(client, environment_id, agent_id, session_id)
+            if environment_id is not None:
+                await teardown_managed_agent(client, environment_id, agent_id, session_id)
 
 
 async def run_claude_review(pr: PullRequestContext) -> review.ReviewRoundResult:

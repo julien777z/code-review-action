@@ -88,6 +88,25 @@ def load_skill(relative_path: str) -> str:
     return (action_root() / relative_path).read_text(encoding="utf-8")
 
 
+def code_simplify_review_skill() -> str:
+    """Return the bundled code-simplify skill adapted for read-only CI review."""
+
+    skill = load_skill(CODE_SIMPLIFY_SKILL_RELATIVE).replace(
+        ", then " + "fix the issues.",
+        ".",
+    )
+    start = skill.index("\n## Applying fixes\n")
+    end = skill.index("\n## Diff scope", start)
+
+    return (
+        skill[:start]
+        + "\n## Review-only CI use\n\n"
+        + "This CI review run is read-only: do not edit files, apply fixes, or describe local changes as made. "
+        + "Use the standards below only to decide which JSONL findings to emit.\n"
+        + skill[end:]
+    )
+
+
 def output_contract() -> str:
     """Describe the JSONL findings contract, category labels, and severity bar for this round."""
 
@@ -99,13 +118,13 @@ def output_contract() -> str:
         "no enclosing array, no wrapper object, no markdown fences, and no prose before, between, or "
         "after the lines. Each line has the form:\n"
         '{"path": "<repo-relative>", "line": <int>, "side": "RIGHT|LEFT", '
-        '"category": "bug|code_simplification|security|performance|reliability|maintainability|testing|documentation|project_rule|other", '
+        '"category": "bug|code_simplification|security|performance|testing|documentation|project_rule|other", '
         '"severity": "critical|high|medium|low", "title": "<short>", "body": "<1-3 sentences>"}\n'
-        "Use `code_simplification` for simplification and maintainability-rubric suggestions, `bug` for "
-        "correctness defects, `security` for vulnerabilities, `performance` for avoidable slowness or "
-        "resource waste, `testing` for missing or broken test "
-        "coverage, `documentation` for docs-only problems, `project_rule` for repository-rule "
-        "violations, and `other` only when no listed category fits. "
+        "Pick exactly one base category: `bug` for correctness, error-handling, or reliability defects; "
+        "`code_simplification` for simplification, maintainability, abstraction, or readability suggestions; "
+        "`security` for vulnerabilities; `performance` for avoidable slowness or resource waste; "
+        "`testing` for missing or broken test coverage; `documentation` for docs-only problems; "
+        "`project_rule` for repository-rule violations; and `other` only when no listed category fits. "
         "Keep each finding on one physical line; write any newline inside `body` as the escape `\\n` "
         "so a finding is never split across lines. Use RIGHT with new-file line numbers for "
         "added/current lines and LEFT with base-file line numbers for removed lines. Only report "
@@ -134,7 +153,7 @@ def review_instructions() -> str:
         sections.append(project_rules_instruction())
 
     if SETTINGS.simplify_suggest or SETTINGS.simplify_nearby_code:
-        sections.append(load_skill(CODE_SIMPLIFY_SKILL_RELATIVE))
+        sections.append(code_simplify_review_skill())
         sections.append(simplification_instruction())
 
     if SETTINGS.simplify_nearby_code:

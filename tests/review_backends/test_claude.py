@@ -147,7 +147,7 @@ class TestManagedAgentText:
         client.beta.agents.create.side_effect = RuntimeError("boom")
         monkeypatch.setattr("code_review.review_backends.claude.anthropic.AsyncAnthropic", lambda **kwargs: client)
 
-        with pytest.raises(RuntimeError):
+        with pytest.raises(review.ReviewBackendError, match="Claude agent setup failed"):
             asyncio.run(collect(claude.managed_agent_text(pull_request_factory(), "review this", mount_repo=True)))
 
         client.beta.environments.delete.assert_awaited_once()

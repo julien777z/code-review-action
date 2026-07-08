@@ -82,41 +82,40 @@ def thread_title(comment: ThreadCommentNode) -> str | None:
 
 
 def thread_severity(comment: ThreadCommentNode) -> Severity | None:
-    """Return the severity from this tier's current category/severity footer."""
+    """Return the severity from this tier's current fixed severity line."""
 
-    split_body = comment.body.rsplit(CONFIG["untrusted_input_close"], 1)
+    split_body = comment.body.split(CONFIG["untrusted_input_open"], 1)
     if len(split_body) != 2:
         return None
 
-    line = next(
-        (
-            row.strip()
-            for row in split_body[1].splitlines()
-            if row.strip().startswith("<sub><em>") and row.strip().endswith("</em></sub>")
-        ),
-        "",
-    )
-    label = line.removeprefix("<sub><em>").removesuffix("</em></sub>").strip()
-    if not label:
+    fenced_body = split_body[1].split(CONFIG["untrusted_input_close"], 1)[0]
+    lines = [row.strip() for row in fenced_body.splitlines()]
+    try:
+        heading_index = next(index for index, row in enumerate(lines) if row.startswith("### "))
+    except StopIteration:
         return None
 
-    severity_text = label.rsplit(" - ", 1)[-1]
+    line = next((row for row in lines[heading_index + 1 :] if row), "")
+    if not line.startswith("**") or not line.endswith(" Severity**"):
+        return None
+
+    severity_text = line.removeprefix("**").removesuffix(" Severity**")
     try:
         return Severity.from_str(severity_text)
     except ValueError:
         return None
 
 
-def finding_label(finding: Finding) -> str:
-    """Return the category/severity label shown in review comments."""
+def finding_severity_line(finding: Finding) -> str:
+    """Return the prominent severity line shown below the finding title."""
 
-    return f"{finding.category.label} - {finding.severity.value.capitalize()}"
+    return f"**{finding.severity.value.capitalize()} Severity**"
 
 
-def finding_label_footer(finding: Finding) -> str:
-    """Return the small italic category/severity footer for review comments."""
+def finding_category_footer(finding: Finding) -> str:
+    """Return the small category footer for review comments."""
 
-    return f"<sub><em>{finding_label(finding)}</em></sub>"
+    return f"<sub>{finding.category.label}</sub>"
 
 
 def is_tier_comment(comment: ThreadCommentNode | None, marker: str) -> bool:
@@ -250,9 +249,9 @@ def comment_body(finding: Finding, marker: str) -> str:
 
     return (
         f"{CONFIG['untrusted_input_open']}\n"
-        f"### {finding.title}\n\n{finding.body}\n"
+        f"### {finding.title}\n\n{finding_severity_line(finding)}\n\n{finding.body}\n"
         f"{CONFIG['untrusted_input_close']}\n\n"
-        f"{finding_label_footer(finding)}\n\n"
+        f"{finding_category_footer(finding)}\n\n"
         f"{DISCLAIMER}\n\n{marker}"
     )
 
@@ -328,7 +327,8 @@ def build_verdict_review(
     body = summary_line
     if out_of_bounds:
         listed = "\n".join(
-            f"- {finding.path}:{finding.line} — {finding.body}\n  {finding_label_footer(finding)}"
+            f"- {finding.path}:{finding.line} — {finding_severity_line(finding)} — {finding.body}\n"
+            f"  {finding_category_footer(finding)}"
             for finding in out_of_bounds
         )
         body = f"{body}\n\nFindings not posted inline:\n{listed}"
@@ -455,6 +455,8 @@ async def run_review_round(pr: PullRequestContext, marker: str, get_findings: Ge
                     posted_inline = await post_comment(pr.repo, pr.number, build_inline_comment(pr.head_sha, finding, marker))
                     if not posted_inline:
                         logger.warning("Could not post inline finding %s:%s.", finding.path, finding.line)
+                        current_keys.discard(title_key)
+                        severity_by_key.pop(title_key, None)
 
                         continue
 

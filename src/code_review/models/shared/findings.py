@@ -1,5 +1,5 @@
 from enum import StrEnum
-from typing import Self
+from typing import Final, Self
 
 from pydantic import BaseModel
 
@@ -7,14 +7,12 @@ from code_review.models.shared.severity import DiffSide, Severity
 
 
 class FindingCategory(StrEnum):
-    """Finding category shown beside severity in review comments."""
+    """Base finding category shown below review comments."""
 
     BUG = "bug"
     CODE_SIMPLIFICATION = "code_simplification"
     SECURITY = "security"
     PERFORMANCE = "performance"
-    RELIABILITY = "reliability"
-    MAINTAINABILITY = "maintainability"
     TESTING = "testing"
     DOCUMENTATION = "documentation"
     PROJECT_RULE = "project_rule"
@@ -28,13 +26,19 @@ class FindingCategory(StrEnum):
         try:
             return cls(normalized)
         except ValueError:
-            return cls.OTHER
+            return CATEGORY_ALIASES.get(normalized, cls.OTHER)
 
     @property
     def label(self) -> str:
         """Return the human-facing category label."""
 
         return self.value.replace("_", " ").title()
+
+
+CATEGORY_ALIASES: Final[dict[str, FindingCategory]] = {
+    "reliability": FindingCategory.BUG,
+    "maintainability": FindingCategory.CODE_SIMPLIFICATION,
+}
 
 
 class Finding(BaseModel):

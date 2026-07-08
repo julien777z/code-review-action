@@ -24,6 +24,9 @@ class TestReviewInstructions:
         assert "JSONL" in text
         assert '"category"' in text
         assert "code_simplification" in text
+        assert "reliability defects" in text
+        assert "maintainability, abstraction" in text
+        assert "reliability|maintainability" not in text
         assert '"severity"' in text
 
     def test_includes_prompt_injection_safety(self) -> None:
@@ -81,6 +84,9 @@ class TestReviewInstructions:
 
         assert "code-simplify" in text
         assert "Code Simplify" in text
+        assert "Review-only CI use" in text
+        assert "apply the simplifications you identify directly to the working tree" not in text
+        assert "then " + "fix the issues" not in text
         assert "nearby and related code" not in text
 
     def test_nearby_code_implies_simplifications(self, mock_config) -> None:
