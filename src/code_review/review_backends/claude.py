@@ -155,13 +155,8 @@ async def run_claude_review(pr: PullRequestContext) -> review.ReviewRoundResult:
     async def _findings(inputs: ReviewInputs) -> AsyncIterator[Finding]:
         mount_repo = SETTINGS.enforce_project_rules or SETTINGS.simplify_nearby_code
         stream = managed_agent_text(pr, pull_request_message(inputs), mount_repo=mount_repo)
-        try:
-            async for finding in iter_findings(stream):
-                yield finding
-        except anthropic.APIError as exc:
-            raise review.ReviewBackendError(
-                f"Claude agent review failed: {exc}", retryable=is_retryable_api_error(exc)
-            ) from exc
+        async for finding in iter_findings(stream):
+            yield finding
 
     return await review.run_review_round(pr, CONFIG["review_marker"], _findings)
 

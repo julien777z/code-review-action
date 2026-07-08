@@ -96,10 +96,11 @@ def thread_severity(comment: ThreadCommentNode) -> Severity | None:
         return None
 
     line = next((row for row in lines[heading_index + 1 :] if row), "")
-    if not line.startswith("**") or not line.endswith(" Severity**"):
+    severity_line = line.split("<br>", 1)[0]
+    if not severity_line.startswith("**") or not severity_line.endswith(" Severity**"):
         return None
 
-    severity_text = line.removeprefix("**").removesuffix(" Severity**")
+    severity_text = severity_line.removeprefix("**").removesuffix(" Severity**")
     try:
         return Severity.from_str(severity_text)
     except ValueError:
@@ -249,7 +250,7 @@ def comment_body(finding: Finding, marker: str) -> str:
 
     return (
         f"{CONFIG['untrusted_input_open']}\n"
-        f"### {finding.title}\n\n{finding_severity_line(finding)}\n\n{finding_category_footer(finding)}\n\n{finding.body}\n"
+        f"### {finding.title}\n\n{finding_severity_line(finding)}<br>{finding_category_footer(finding)}\n\n{finding.body}\n"
         f"{CONFIG['untrusted_input_close']}\n\n"
         f"{DISCLAIMER}\n\n{marker}"
     )

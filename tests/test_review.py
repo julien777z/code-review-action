@@ -223,6 +223,7 @@ class TestBuildInlineComment:
         assert category in request.body
         assert request.body.index("### Leak") < request.body.index("**Critical Severity**")
         assert request.body.index("**Critical Severity**") < request.body.index(category)
+        assert "**Critical Severity**<br><sub>Bug</sub>" in request.body
         assert request.body.index(category) < request.body.index("The loop overruns the array.")
         assert request.body.index("The loop overruns the array.") < request.body.index(CONFIG["untrusted_input_close"])
         assert request.body.index(CONFIG["untrusted_input_close"]) < request.body.index(DISCLAIMER)
@@ -278,6 +279,7 @@ class TestCommentBody:
         assert category in body
         assert body.index("### Leak") < body.index("**Critical Severity**")
         assert body.index("**Critical Severity**") < body.index(category)
+        assert "**Critical Severity**<br><sub>Security</sub>" in body
         assert body.index(category) < body.index("The loop overruns the array.")
         assert body.index("The loop overruns the array.") < body.index(CONFIG["untrusted_input_close"])
         assert body.index(CONFIG["untrusted_input_close"]) < body.index(DISCLAIMER)
@@ -323,8 +325,7 @@ class TestThreadParsing:
         body = (
             f"{CONFIG['untrusted_input_open']}\n"
             "### Race condition\n\n"
-            "**High Severity**\n\n"
-            "<sub>Bug</sub>\n\n"
+            "**High Severity**<br><sub>Bug</sub>\n\n"
             "Line from the reviewed code:\n"
             "**Low Severity**\n"
             f"{CONFIG['untrusted_input_close']}\n\n"
