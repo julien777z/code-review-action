@@ -276,7 +276,7 @@ def main_harness(monkeypatch, mock_config, pull_request_factory, pull_request_ev
     ) -> dict[str, AsyncMock | PullRequestContext]:
         mock_config(review_model=ReviewModel.CURSOR, cursor_api_key="key", **config_overrides)
 
-        run_review = AsyncMock(return_value=ReviewRoundResult(run_review_result, diff="REVIEW_DIFF"))
+        run_review = AsyncMock(return_value=ReviewRoundResult(exit_code=run_review_result, diff="REVIEW_DIFF"))
         post_pr_summary = AsyncMock(return_value=None)
         pr = pull_request_factory()
 

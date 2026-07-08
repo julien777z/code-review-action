@@ -4,12 +4,11 @@ import logging
 import signal
 import subprocess
 from collections.abc import AsyncIterator, Callable
-from dataclasses import dataclass
 from datetime import timedelta
 from fnmatch import fnmatch
 from typing import Final
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from code_review.config import CONFIG, DISCLAIMER, SETTINGS
 from code_review.github import (
@@ -39,8 +38,7 @@ REVIEW_BACKEND_ATTEMPTS: Final[int] = 3
 REVIEW_RETRY_BACKOFF: Final[timedelta] = timedelta(seconds=2)
 
 
-@dataclass(frozen=True)
-class ReviewRoundResult:
+class ReviewRoundResult(BaseModel):
     """The outcome of one review round and the diff snapshot it reviewed."""
 
     exit_code: int
@@ -342,7 +340,7 @@ async def post_review_with_fallback(repo: str, pr_number: int, payload: ReviewPa
         logger.warning("Could not post the %s review; the check run still records the verdict.", event)
 
 
-async def note_diff_too_large(pr: PullRequestContext, marker: str) -> int:
+async def note_diff_too_large(pr: PullRequestContext, marker: str) -> ReviewRoundResult:
     """Post a note that the diff is too large to auto-review, record the verdict, and return success."""
 
     body = f"The diff is too large to auto-review, so this review was skipped.\n\n{DISCLAIMER}\n\n{marker}"
@@ -351,7 +349,7 @@ async def note_diff_too_large(pr: PullRequestContext, marker: str) -> int:
     await post_review(pr.repo, pr.number, ReviewPayload(commit_id=pr.head_sha, event="COMMENT", body=body, comments=[]))
     await complete_check_run(pr.repo, check_id, "neutral", "Diff too large", "The diff is too large to auto-review.")
 
-    return 0
+    return ReviewRoundResult(exit_code=0)
 
 
 async def run_review_round(pr: PullRequestContext, marker: str, get_findings: GetFindings) -> ReviewRoundResult:
@@ -366,7 +364,7 @@ async def run_review_round(pr: PullRequestContext, marker: str, get_findings: Ge
     if already:
         logger.info("Head %s already reviewed; skipping.", pr.head_sha)
 
-        return ReviewRoundResult(0)
+        return ReviewRoundResult(exit_code=0)
 
     try:
         diff = await pull_request_diff(pr.repo, pr.number)
@@ -376,7 +374,7 @@ async def run_review_round(pr: PullRequestContext, marker: str, get_findings: Ge
 
         logger.warning("PR diff is too large to auto-review; posting a note and skipping.")
 
-        return ReviewRoundResult(await note_diff_too_large(pr, marker))
+        return await note_diff_too_large(pr, marker)
 
     (anchors, unpatched), posted_findings = await asyncio.gather(
         diff_anchors(pr.repo, pr.number),
@@ -408,7 +406,7 @@ async def run_review_round(pr: PullRequestContext, marker: str, get_findings: Ge
             await complete_check_run(pr.repo, check_id, "cancelled", "Superseded", "The head moved before review.")
             concluded = True
 
-            return ReviewRoundResult(0)
+            return ReviewRoundResult(exit_code=0)
 
         reviewed_files = set(anchors) | unpatched
         threads = await list_review_threads(pr.repo, pr.number)
@@ -468,7 +466,7 @@ async def run_review_round(pr: PullRequestContext, marker: str, get_findings: Ge
             await complete_check_run(pr.repo, check_id, "action_required", "Review failed", str(exc))
             concluded = True
 
-            return ReviewRoundResult(1, diff=diff)
+            return ReviewRoundResult(exit_code=1, diff=diff)
 
         open_existing, stale_ids, kept_blocking = classify_threads(threads, marker, current_keys, reviewed_files)
 
@@ -501,12 +499,12 @@ async def run_review_round(pr: PullRequestContext, marker: str, get_findings: Ge
         await complete_check_run(pr.repo, check_id, conclusion, title, summary)
         concluded = True
 
-        return ReviewRoundResult(0, diff=diff)
+        return ReviewRoundResult(exit_code=0, diff=diff)
     except asyncio.CancelledError:
         await complete_check_run(pr.repo, check_id, "cancelled", "Superseded", "The review job was cancelled.")
         concluded = True
 
-        return ReviewRoundResult(1)
+        return ReviewRoundResult(exit_code=1)
     finally:
         for cancel_signal in (signal.SIGTERM, signal.SIGINT):
             loop.remove_signal_handler(cancel_signal)
