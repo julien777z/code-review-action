@@ -5,12 +5,9 @@ from typing import Final
 
 from cursor_sdk import AsyncAgent, AsyncClient, CursorAgentError, LocalAgentOptions, ModelSelection
 
-from code_review import review
-from code_review.config import CONFIG, SETTINGS
-from code_review.models.shared.findings import Finding
+from code_review.config import SETTINGS
 from code_review.models.shared.pull_request import PullRequestContext, ReviewInputs
 from code_review.prompt import cursor_prompt
-from code_review.review_backends.jsonl import iter_findings
 
 logger = logging.getLogger("code_review.cursor")
 
@@ -64,22 +61,14 @@ async def run_agent(prompt: str, *, load_project_rules: bool = False) -> AsyncIt
         await agent.close()
 
 
-async def run_cursor_review(pr: PullRequestContext) -> review.ReviewRoundResult:
-    """Review the PR with the Cursor backend, streaming each finding as the agent emits it."""
+async def review_text(pr: PullRequestContext, inputs: ReviewInputs) -> AsyncIterator[str]:
+    """Stream Cursor's review reply text for the shared runner."""
 
-    async def _findings(inputs: ReviewInputs) -> AsyncIterator[Finding]:
-        try:
-            async for finding in iter_findings(
-                run_agent(
-                    cursor_prompt(inputs),
-                    load_project_rules=SETTINGS.enforce_project_rules or SETTINGS.simplify_nearby_code,
-                )
-            ):
-                yield finding
-        except CursorAgentError as exc:
-            raise review.ReviewBackendError(f"Cursor agent run failed: {exc}", retryable=exc.is_retryable) from exc
-
-    return await review.run_review_round(pr, CONFIG["review_marker"], _findings)
+    async for chunk in run_agent(
+        cursor_prompt(inputs),
+        load_project_rules=SETTINGS.enforce_project_rules or SETTINGS.simplify_nearby_code,
+    ):
+        yield chunk
 
 
 async def generate_text(prompt: str) -> str:

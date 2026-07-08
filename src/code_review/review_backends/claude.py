@@ -10,12 +10,9 @@ from anthropic.types.beta import (
     BetaUnrestrictedNetworkParam,
 )
 
-from code_review import review
-from code_review.config import CONFIG, SETTINGS
-from code_review.models.shared.findings import Finding
+from code_review.config import SETTINGS
 from code_review.models.shared.pull_request import PullRequestContext, ReviewInputs
 from code_review.prompt import pull_request_message, review_instructions
-from code_review.review_backends.jsonl import iter_findings
 
 logger = logging.getLogger("code_review.claude")
 
@@ -110,7 +107,6 @@ async def managed_agent_text(pr: PullRequestContext, user_message: str, *, mount
             )
             session_id = session.id
 
-            produced_text = False
             async with await client.beta.sessions.events.stream(
                 session_id=session.id, betas=[MANAGED_AGENTS_BETA]
             ) as stream:
@@ -123,8 +119,6 @@ async def managed_agent_text(pr: PullRequestContext, user_message: str, *, mount
                     if event.type == "agent.message":
                         for block in event.content:
                             if block.type == "text":
-                                produced_text = True
-
                                 yield block.text
                     elif event.type == "session.status_idle":
                         if event.stop_reason.type == "requires_action":
@@ -134,31 +128,20 @@ async def managed_agent_text(pr: PullRequestContext, user_message: str, *, mount
                     elif event.type == "session.status_terminated":
                         break
 
-            if not produced_text:
-                raise review.ReviewBackendError("The Claude agent session produced no output.", retryable=True)
-        except review.ReviewBackendError:
-            raise
-        except anthropic.APIError as exc:
-            raise review.ReviewBackendError(
-                f"Claude agent review failed: {exc}", retryable=is_retryable_api_error(exc)
-            ) from exc
-        except RuntimeError as exc:
-            raise review.ReviewBackendError(f"Claude agent setup failed: {exc}", retryable=True) from exc
         finally:
             if environment_id is not None:
                 await teardown_managed_agent(client, environment_id, agent_id, session_id)
 
 
-async def run_claude_review(pr: PullRequestContext) -> review.ReviewRoundResult:
-    """Review the PR with a Managed Agents session."""
+async def review_text(pr: PullRequestContext, inputs: ReviewInputs) -> AsyncIterator[str]:
+    """Stream Claude's review reply text for the shared runner."""
 
-    async def _findings(inputs: ReviewInputs) -> AsyncIterator[Finding]:
-        mount_repo = SETTINGS.enforce_project_rules or SETTINGS.simplify_nearby_code
-        stream = managed_agent_text(pr, pull_request_message(inputs), mount_repo=mount_repo)
-        async for finding in iter_findings(stream):
-            yield finding
-
-    return await review.run_review_round(pr, CONFIG["review_marker"], _findings)
+    async for chunk in managed_agent_text(
+        pr,
+        pull_request_message(inputs),
+        mount_repo=SETTINGS.enforce_project_rules or SETTINGS.simplify_nearby_code,
+    ):
+        yield chunk
 
 
 async def generate_text(prompt: str) -> str:

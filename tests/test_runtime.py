@@ -1,14 +1,21 @@
 import asyncio
+from collections.abc import AsyncIterator
 
+import anthropic
+import httpx
 import pytest
+from cursor_sdk import CursorAgentError
 
 from code_review.config import ReviewModel
+from code_review.models.shared.findings import Finding
 from code_review.models.shared.github_event import GithubEvent
 from code_review.review_backends import claude, cursor
+from code_review.review import ReviewBackendError
 from code_review.summary import SummaryGenerationError
 from code_review.runtime import (
     BACKENDS,
     Backend,
+    BackendHandlers,
     association_allowed,
     is_eligible,
     is_first_review_event,
@@ -16,7 +23,14 @@ from code_review.runtime import (
     reaction_subject,
     resolve_pr_number,
     select_backend,
+    stream_backend_findings,
 )
+
+
+async def collect_findings(findings: AsyncIterator[Finding]) -> list[Finding]:
+    """Drain an async finding stream into a list."""
+
+    return [finding async for finding in findings]
 
 
 class TestAssociationAllowed:
@@ -179,8 +193,8 @@ class TestSelectBackend:
 
         assert select_backend(False) is Backend.CLAUDE
 
-    def test_auto_falls_back_to_cursor(self, mock_config) -> None:
-        """Test that auto falls back to Cursor when only a Cursor key is set."""
+    def test_auto_selects_cursor_with_only_cursor_key(self, mock_config) -> None:
+        """Test that auto picks Cursor when only a Cursor key is set."""
 
         mock_config(review_model=ReviewModel.AUTO, cursor_api_key="key")
 
@@ -226,23 +240,131 @@ class TestSelectBackend:
 
 
 class TestBackends:
-    """Test that each backend maps to its review runner and summary generator."""
+    """Test that each backend maps to its stream, summary, and error policy."""
 
     @pytest.mark.parametrize(
-        ("backend", "run_review", "generate_summary"),
+        ("backend", "review_text", "generate_summary", "errors"),
         [
-            (Backend.CURSOR, cursor.run_cursor_review, cursor.generate_text),
-            (Backend.CLAUDE, claude.run_claude_review, claude.generate_text),
+            (Backend.CURSOR, cursor.review_text, cursor.generate_text, (CursorAgentError,)),
+            (Backend.CLAUDE, claude.review_text, claude.generate_text, (anthropic.APIError,)),
         ],
         ids=["cursor", "claude"],
     )
-    def test_handlers(self, backend, run_review, generate_summary) -> None:
-        """Test that the handler map wires the runner and generator for a backend."""
+    def test_handlers(self, backend, review_text, generate_summary, errors) -> None:
+        """Test that the handler map wires the streamer, generator, and declared errors."""
 
         handlers = BACKENDS[backend]
 
-        assert handlers["run_review"] is run_review
+        assert handlers["review_text"] is review_text
         assert handlers["generate_summary"] is generate_summary
+        assert handlers["errors"] == errors
+
+
+class TestBackendReviewPolicy:
+    """Test that the shared backend runner owns JSONL parsing and error mapping."""
+
+    def test_parses_backend_text_findings(self, pull_request_factory, review_inputs_factory) -> None:
+        """Test that backend text is parsed into findings by the shared runner."""
+
+        async def review_text(pr, inputs) -> AsyncIterator[str]:
+            yield '{"path":"a.py","line":1,"side":"RIGHT","severity":"high","title":"A","body":"B"}\n'
+
+        handlers = BackendHandlers(
+            review_text=review_text,
+            generate_summary=cursor.generate_text,
+            errors=(CursorAgentError,),
+            retryable=lambda exc: isinstance(exc, CursorAgentError) and exc.is_retryable,
+            label="Cursor",
+        )
+
+        findings = asyncio.run(
+            collect_findings(stream_backend_findings(handlers, pull_request_factory(), review_inputs_factory()))
+        )
+
+        assert [finding.title for finding in findings] == ["A"]
+
+    @pytest.mark.parametrize("retryable", [True, False], ids=["retryable", "terminal"])
+    def test_cursor_error_maps_retryability(self, pull_request_factory, review_inputs_factory, retryable: bool) -> None:
+        """Test that CursorAgentError retryability is preserved by the shared runner."""
+
+        async def review_text(pr, inputs) -> AsyncIterator[str]:
+            raise CursorAgentError("bridge unavailable", is_retryable=retryable)
+            yield ""
+
+        handlers = BackendHandlers(
+            review_text=review_text,
+            generate_summary=cursor.generate_text,
+            errors=(CursorAgentError,),
+            retryable=lambda exc: isinstance(exc, CursorAgentError) and exc.is_retryable,
+            label="Cursor",
+        )
+
+        with pytest.raises(ReviewBackendError) as raised:
+            asyncio.run(collect_findings(stream_backend_findings(handlers, pull_request_factory(), review_inputs_factory())))
+
+        assert raised.value.retryable is retryable
+        assert "Cursor review failed" in str(raised.value)
+
+    def test_claude_api_error_maps_retryable(self, pull_request_factory, review_inputs_factory) -> None:
+        """Test that Anthropic retryability is preserved by the shared runner."""
+
+        request = httpx.Request("GET", "https://api.anthropic.com")
+
+        async def review_text(pr, inputs) -> AsyncIterator[str]:
+            raise anthropic.APIConnectionError(request=request)
+            yield ""
+
+        handlers = BackendHandlers(
+            review_text=review_text,
+            generate_summary=claude.generate_text,
+            errors=(anthropic.APIError,),
+            retryable=lambda exc: isinstance(exc, anthropic.APIError) and claude.is_retryable_api_error(exc),
+            label="Claude",
+        )
+
+        with pytest.raises(ReviewBackendError) as raised:
+            asyncio.run(collect_findings(stream_backend_findings(handlers, pull_request_factory(), review_inputs_factory())))
+
+        assert raised.value.retryable is True
+        assert "Claude review failed" in str(raised.value)
+
+    def test_unexpected_error_propagates(self, pull_request_factory, review_inputs_factory) -> None:
+        """Test that undeclared backend exceptions are not converted."""
+
+        async def review_text(pr, inputs) -> AsyncIterator[str]:
+            raise ValueError("programming error")
+            yield ""
+
+        handlers = BackendHandlers(
+            review_text=review_text,
+            generate_summary=cursor.generate_text,
+            errors=(CursorAgentError,),
+            retryable=lambda exc: False,
+            label="Cursor",
+        )
+
+        with pytest.raises(ValueError):
+            asyncio.run(collect_findings(stream_backend_findings(handlers, pull_request_factory(), review_inputs_factory())))
+
+    def test_empty_backend_output_raises(self, pull_request_factory, review_inputs_factory) -> None:
+        """Test that an empty backend response fails instead of approving cleanly."""
+
+        async def review_text(pr, inputs) -> AsyncIterator[str]:
+            if False:
+                yield ""
+
+        handlers = BackendHandlers(
+            review_text=review_text,
+            generate_summary=cursor.generate_text,
+            errors=(CursorAgentError,),
+            retryable=lambda exc: False,
+            label="Cursor",
+        )
+
+        with pytest.raises(ReviewBackendError, match="produced no output") as raised:
+            asyncio.run(collect_findings(stream_backend_findings(handlers, pull_request_factory(), review_inputs_factory())))
+
+        assert raised.value.retryable is True
 
 
 class TestMain:
@@ -261,7 +383,7 @@ class TestMain:
         exit_code = asyncio.run(main())
 
         assert exit_code == 0
-        mocks["run_review"].assert_awaited_once_with(mocks["pr"])
+        mocks["run_backend_review"].assert_awaited_once_with(mocks["pr"], mocks["handlers"])
 
         assert mocks["post_pr_summary"].await_count == (1 if summary_posted else 0)
         if summary_posted:
@@ -297,4 +419,15 @@ class TestMain:
 
         assert exit_code == 0
 
+        mocks["post_pr_summary"].assert_awaited_once()
+
+    def test_summary_backend_failure_does_not_fail_the_review(self, main_harness) -> None:
+        """Test that an optional summary backend error is isolated from the review result."""
+
+        mocks = main_harness()
+        mocks["post_pr_summary"].side_effect = CursorAgentError("summary failed")
+
+        exit_code = asyncio.run(main())
+
+        assert exit_code == 0
         mocks["post_pr_summary"].assert_awaited_once()

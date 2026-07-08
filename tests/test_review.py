@@ -353,6 +353,17 @@ class TestExistingFindingTitles:
         assert result["src/app.py"][0].title == "Mine"
         assert result["src/app.py"][0].severity == "critical"
 
+    def test_thread_listing_failure_raises(self, monkeypatch) -> None:
+        """Test that thread listing failures are not treated as an empty prior-finding set."""
+
+        monkeypatch.setattr(
+            "code_review.review.list_review_threads",
+            AsyncMock(side_effect=subprocess.CalledProcessError(1, ["gh", "api"])),
+        )
+
+        with pytest.raises(subprocess.CalledProcessError):
+            asyncio.run(existing_finding_titles("octo/repo", 7, MARKER))
+
 
 class TestExtractPostedKeys:
     """Test that the runner's already-posted keys are pulled from the review threads."""

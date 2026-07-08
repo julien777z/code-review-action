@@ -14,13 +14,6 @@ from code_review.models.shared.threads import ReviewThread
 logger = logging.getLogger("code_review.github")
 
 HUNK_HEADER: Final[re.Pattern[str]] = re.compile(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@")
-GITHUB_RATE_LIMIT_PHRASES: Final[tuple[str, ...]] = (
-    "api rate limit exceeded",
-    "http 429",
-    "secondary rate limit",
-    "rate limit exceeded",
-    "too many requests",
-)
 GITHUB_DIFF_TOO_LARGE_PHRASES: Final[tuple[str, ...]] = (
     "diff exceeded",
     "diff is too large",
@@ -42,14 +35,6 @@ def github_error_text(exc: subprocess.CalledProcessError) -> str:
             parts.append(str(value))
 
     return "\n".join(parts).lower()
-
-
-def is_github_rate_limit(exc: subprocess.CalledProcessError) -> bool:
-    """Return True when a `gh` failure is GitHub API rate limiting."""
-
-    text = github_error_text(exc)
-
-    return any(phrase in text for phrase in GITHUB_RATE_LIMIT_PHRASES)
 
 
 def is_diff_too_large(exc: subprocess.CalledProcessError) -> bool:
@@ -157,24 +142,16 @@ async def update_pull_request_body(repo: str, pr_number: int, body: str) -> None
 async def already_reviewed(repo: str, pr_number: int, head_sha: str, marker: str) -> bool:
     """Return True if a review carrying the marker already exists for the given head."""
 
-    try:
-        raw = await run_gh(
-            [
-                "api",
-                "--paginate",
-                f"repos/{repo}/pulls/{pr_number}/reviews",
-                "--jq",
-                '.[] | select(.state != "PENDING" and .state != "DISMISSED" '
-                f'and ((.body // "") | contains("{marker}"))) | .commit_id',
-            ]
-        )
-    except subprocess.CalledProcessError as exc:
-        if is_github_rate_limit(exc):
-            logger.warning("Could not check existing reviews due to GitHub rate limiting; skipping guarded post.")
-
-            return True
-
-        raise
+    raw = await run_gh(
+        [
+            "api",
+            "--paginate",
+            f"repos/{repo}/pulls/{pr_number}/reviews",
+            "--jq",
+            '.[] | select(.state != "PENDING" and .state != "DISMISSED" '
+            f'and ((.body // "") | contains("{marker}"))) | .commit_id',
+        ]
+    )
 
     return head_sha in raw.split()
 
@@ -182,25 +159,17 @@ async def already_reviewed(repo: str, pr_number: int, head_sha: str, marker: str
 async def head_check_concluded(repo: str, head_sha: str) -> bool:
     """Return True if a completed review check run already exists for this head commit."""
 
-    try:
-        raw = await run_gh(
-            [
-                "api",
-                "--paginate",
-                f"repos/{repo}/commits/{head_sha}/check-runs",
-                "--jq",
-                f'.check_runs[] | select(.name == "{CONFIG["status_check_name"]}" '
-                'and .status == "completed" and (.conclusion == "success" '
-                'or .conclusion == "neutral" or .conclusion == "failure")) | .id',
-            ]
-        )
-    except subprocess.CalledProcessError as exc:
-        if is_github_rate_limit(exc):
-            logger.warning("Could not check completed review checks due to GitHub rate limiting; skipping review.")
-
-            return True
-
-        raise
+    raw = await run_gh(
+        [
+            "api",
+            "--paginate",
+            f"repos/{repo}/commits/{head_sha}/check-runs",
+            "--jq",
+            f'.check_runs[] | select(.name == "{CONFIG["status_check_name"]}" '
+            'and .status == "completed" and (.conclusion == "success" '
+            'or .conclusion == "neutral" or .conclusion == "failure")) | .id',
+        ]
+    )
 
     return bool(raw.split())
 

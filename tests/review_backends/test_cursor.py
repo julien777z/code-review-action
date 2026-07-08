@@ -14,6 +14,12 @@ async def chunk_stream(*parts: str) -> AsyncIterator[str]:
         yield part
 
 
+async def collect(chunks: AsyncIterator[str]) -> list[str]:
+    """Drain an async chunk stream into a list."""
+
+    return [chunk async for chunk in chunks]
+
+
 class TestGenerateText:
     """Test that the single-shot Cursor completion joins the streamed chunks."""
 
@@ -46,8 +52,8 @@ class TestGenerateText:
         assert recorded["load_project_rules"] is False
 
 
-class TestRunCursorReview:
-    """Test that the review turn loads project rules when repo context is needed."""
+class TestReviewText:
+    """Test that the review text stream loads project rules when repo context is needed."""
 
     @pytest.mark.parametrize(
         ("enforce", "nearby", "loads_rules"),
@@ -59,7 +65,7 @@ class TestRunCursorReview:
         monkeypatch,
         mock_config,
         pull_request_factory,
-        review_github_mocks,
+        review_inputs_factory,
         enforce: bool,
         nearby: bool,
         loads_rules: bool,
@@ -76,7 +82,7 @@ class TestRunCursorReview:
 
         monkeypatch.setattr("code_review.review_backends.cursor.run_agent", _run_agent)
 
-        result = asyncio.run(cursor.run_cursor_review(pull_request_factory()))
+        chunks = asyncio.run(collect(cursor.review_text(pull_request_factory(), review_inputs_factory())))
 
-        assert result.exit_code == 0
+        assert chunks == [CONFIG["no_findings_marker"]]
         assert recorded["load_project_rules"] is loads_rules

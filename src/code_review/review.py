@@ -1,14 +1,12 @@
 import asyncio
-import json
 import logging
 import signal
-import subprocess
 from collections.abc import AsyncIterator, Callable
 from datetime import timedelta
 from fnmatch import fnmatch
 from typing import Final
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel
 
 from code_review.config import CONFIG, DISCLAIMER, SETTINGS
 from code_review.github import (
@@ -131,13 +129,9 @@ def is_tier_comment(comment: ThreadCommentNode | None, marker: str) -> bool:
 
 
 async def existing_finding_titles(repo: str, pr_number: int, marker: str) -> dict[str, list[PostedFinding]]:
-    """Return the runner's posted (severity, title) pairs per file (open and resolved); best-effort."""
+    """Return the runner's posted (severity, title) pairs per file (open and resolved)."""
 
-    try:
-        threads = await list_review_threads(repo, pr_number)
-    except (subprocess.CalledProcessError, json.JSONDecodeError, KeyError, TypeError, ValidationError):
-        return {}
-
+    threads = await list_review_threads(repo, pr_number)
     findings: dict[str, list[PostedFinding]] = {}
     for thread in threads:
         comment = next(iter(thread.comments.nodes), None)

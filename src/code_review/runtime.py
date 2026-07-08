@@ -2,7 +2,7 @@ import json
 import logging
 import os
 import subprocess
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Callable
 from enum import StrEnum
 from pathlib import Path
 from typing import Final, TypedDict
@@ -10,12 +10,14 @@ from typing import Final, TypedDict
 import anthropic
 from cursor_sdk import CursorAgentError
 
-from code_review.config import SETTINGS, ReviewModel
+from code_review.config import CONFIG, SETTINGS, ReviewModel
 from code_review.github import add_reaction, fetch_pull_request, remove_reaction
 from code_review.models.shared.github_event import GithubEvent
-from code_review.models.shared.pull_request import PullRequestContext
-from code_review.review import ReviewRoundResult
+from code_review.models.shared.findings import Finding
+from code_review.models.shared.pull_request import PullRequestContext, ReviewInputs
+from code_review.review import ReviewBackendError, ReviewRoundResult, run_review_round
 from code_review.review_backends import claude, cursor
+from code_review.review_backends.jsonl import iter_findings
 from code_review.summary import GenerateSummary, SummaryGenerationError, post_pr_summary
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
@@ -24,14 +26,10 @@ logger = logging.getLogger("code_review")
 PULL_REQUEST_ACTIONS = ("opened", "synchronize", "ready_for_review")
 FIRST_REVIEW_ACTIONS = ("opened", "ready_for_review")
 
-SUMMARY_ERRORS: Final[tuple[type[Exception], ...]] = (
-    SummaryGenerationError,
-    subprocess.CalledProcessError,
-    anthropic.APIError,
-    CursorAgentError,
-)
+SUMMARY_BASE_ERRORS: Final[tuple[type[Exception], ...]] = (SummaryGenerationError, subprocess.CalledProcessError)
 
-RunReview = Callable[[PullRequestContext], Awaitable[ReviewRoundResult]]
+ReviewTextStream = Callable[[PullRequestContext, ReviewInputs], AsyncIterator[str]]
+BackendRetryable = Callable[[Exception], bool]
 
 
 class Backend(StrEnum):
@@ -42,22 +40,87 @@ class Backend(StrEnum):
 
 
 class BackendHandlers(TypedDict):
-    """The review runner and summary generator a backend dispatches to."""
+    """Backend behavior and error policy used by the shared runner."""
 
-    run_review: RunReview
+    review_text: ReviewTextStream
     generate_summary: GenerateSummary
+    errors: tuple[type[Exception], ...]
+    retryable: BackendRetryable
+    label: str
+
+
+def cursor_error_retryable(exc: Exception) -> bool:
+    """Return whether a Cursor backend exception should be retried."""
+
+    return isinstance(exc, CursorAgentError) and exc.is_retryable
+
+
+def claude_error_retryable(exc: Exception) -> bool:
+    """Return whether a Claude backend exception should be retried."""
+
+    return isinstance(exc, anthropic.APIError) and claude.is_retryable_api_error(exc)
 
 
 BACKENDS: Final[dict[Backend, BackendHandlers]] = {
     Backend.CURSOR: BackendHandlers(
-        run_review=cursor.run_cursor_review,
+        review_text=cursor.review_text,
         generate_summary=cursor.generate_text,
+        errors=(CursorAgentError,),
+        retryable=cursor_error_retryable,
+        label="Cursor",
     ),
     Backend.CLAUDE: BackendHandlers(
-        run_review=claude.run_claude_review,
+        review_text=claude.review_text,
         generate_summary=claude.generate_text,
+        errors=(anthropic.APIError,),
+        retryable=claude_error_retryable,
+        label="Claude",
     ),
 }
+
+
+async def backend_text_chunks(
+    handlers: BackendHandlers, pr: PullRequestContext, inputs: ReviewInputs
+) -> AsyncIterator[str]:
+    """Stream backend text and convert declared backend failures into review errors."""
+
+    produced = False
+    try:
+        async for chunk in handlers["review_text"](pr, inputs):
+            produced = True
+            yield chunk
+    except handlers["errors"] as exc:
+        raise ReviewBackendError(
+            f"{handlers['label']} review failed: {exc}", retryable=handlers["retryable"](exc)
+        ) from exc
+
+    if not produced:
+        raise ReviewBackendError(f"{handlers['label']} review produced no output.", retryable=True)
+
+
+async def stream_backend_findings(
+    handlers: BackendHandlers, pr: PullRequestContext, inputs: ReviewInputs
+) -> AsyncIterator[Finding]:
+    """Parse JSONL findings from the backend text stream."""
+
+    async for finding in iter_findings(backend_text_chunks(handlers, pr, inputs)):
+        yield finding
+
+
+async def run_backend_review(pr: PullRequestContext, handlers: BackendHandlers) -> ReviewRoundResult:
+    """Run a PR review through the shared backend policy."""
+
+    async def _findings(inputs: ReviewInputs) -> AsyncIterator[Finding]:
+        async for finding in stream_backend_findings(handlers, pr, inputs):
+            yield finding
+
+    return await run_review_round(pr, CONFIG["review_marker"], _findings)
+
+
+def summary_errors(handlers: BackendHandlers) -> tuple[type[Exception], ...]:
+    """Return errors that make optional summary posting fail without failing review."""
+
+    return (*SUMMARY_BASE_ERRORS, *handlers["errors"])
 
 
 def load_event() -> tuple[str, GithubEvent]:
@@ -211,12 +274,12 @@ async def main() -> int:
 
     try:
         handlers = BACKENDS[backend]
-        result = await handlers["run_review"](pr)
+        result = await run_backend_review(pr, handlers)
         exit_code = result.exit_code
         if exit_code == 0 and first_review and SETTINGS.pr_review_summary:
             try:
                 await post_pr_summary(pr, handlers["generate_summary"], diff=result.diff)
-            except SUMMARY_ERRORS as exc:
+            except summary_errors(handlers) as exc:
                 logger.error("Could not post the PR summary; the review still succeeded: %s", exc)
 
         return exit_code

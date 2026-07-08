@@ -3,7 +3,6 @@ from collections.abc import AsyncIterator
 
 import pytest
 
-from code_review import review
 from code_review.config import CONFIG
 from code_review.review_backends import claude
 
@@ -14,8 +13,8 @@ async def collect(chunks: AsyncIterator[str]) -> list[str]:
     return [chunk async for chunk in chunks]
 
 
-class TestRunClaudeReview:
-    """Test that the review runs through a Managed Agents session and mounts the repo per enforcement."""
+class TestReviewText:
+    """Test that the review text stream mounts the repo per enforcement."""
 
     @pytest.mark.parametrize(
         ("enforce", "nearby", "repo_mounted"),
@@ -27,7 +26,7 @@ class TestRunClaudeReview:
         monkeypatch,
         mock_config,
         pull_request_factory,
-        review_github_mocks,
+        review_inputs_factory,
         managed_agent_client_factory,
         managed_agent_event_factory,
         enforce: bool,
@@ -44,9 +43,9 @@ class TestRunClaudeReview:
         client = managed_agent_client_factory(events)
         monkeypatch.setattr("code_review.review_backends.claude.anthropic.AsyncAnthropic", lambda **kwargs: client)
 
-        result = asyncio.run(claude.run_claude_review(pull_request_factory()))
+        chunks = asyncio.run(collect(claude.review_text(pull_request_factory(), review_inputs_factory())))
 
-        assert result.exit_code == 0
+        assert chunks == [CONFIG["no_findings_marker"]]
         assert bool(client.beta.sessions.create.await_args.kwargs["resources"]) is repo_mounted
 
 
@@ -117,8 +116,9 @@ class TestManagedAgentText:
         client = managed_agent_client_factory(events)
         monkeypatch.setattr("code_review.review_backends.claude.anthropic.AsyncAnthropic", lambda **kwargs: client)
 
-        with pytest.raises(review.ReviewBackendError):
-            asyncio.run(collect(claude.managed_agent_text(pull_request_factory(), "review this", mount_repo=True)))
+        chunks = asyncio.run(collect(claude.managed_agent_text(pull_request_factory(), "review this", mount_repo=True)))
+
+        assert chunks == []
 
     def test_creates_and_tears_down_the_run_resources(
         self, monkeypatch, mock_config, pull_request_factory, managed_agent_client_factory, managed_agent_event_factory
@@ -147,7 +147,7 @@ class TestManagedAgentText:
         client.beta.agents.create.side_effect = RuntimeError("boom")
         monkeypatch.setattr("code_review.review_backends.claude.anthropic.AsyncAnthropic", lambda **kwargs: client)
 
-        with pytest.raises(review.ReviewBackendError, match="Claude agent setup failed"):
+        with pytest.raises(RuntimeError, match="boom"):
             asyncio.run(collect(claude.managed_agent_text(pull_request_factory(), "review this", mount_repo=True)))
 
         client.beta.environments.delete.assert_awaited_once()

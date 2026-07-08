@@ -12,7 +12,7 @@ from code_review.models.shared.severity import DiffSide, Severity
 from code_review.models.shared.threads import ReviewThread, ThreadCommentAuthor, ThreadCommentNode, ThreadComments
 from code_review.review import GetFindings, ReviewBackendError, ReviewRoundResult
 from code_review.review_backends import cursor
-from code_review.runtime import Backend
+from code_review.runtime import Backend, BackendHandlers
 
 
 @pytest.fixture
@@ -277,14 +277,22 @@ def main_harness(monkeypatch, mock_config, pull_request_factory, pull_request_ev
     ) -> dict[str, AsyncMock | PullRequestContext]:
         mock_config(review_model=ReviewModel.CURSOR, cursor_api_key="key", **config_overrides)
 
-        run_review = AsyncMock(return_value=ReviewRoundResult(exit_code=run_review_result, diff="REVIEW_DIFF"))
+        run_backend_review = AsyncMock(return_value=ReviewRoundResult(exit_code=run_review_result, diff="REVIEW_DIFF"))
         post_pr_summary = AsyncMock(return_value=None)
         pr = pull_request_factory()
+        handlers = BackendHandlers(
+            review_text=cursor.review_text,
+            generate_summary=cursor.generate_text,
+            errors=(cursor.CursorAgentError,),
+            retryable=lambda exc: isinstance(exc, cursor.CursorAgentError) and exc.is_retryable,
+            label="Cursor",
+        )
 
         monkeypatch.setattr(
             "code_review.runtime.BACKENDS",
-            {Backend.CURSOR: {"run_review": run_review, "generate_summary": cursor.generate_text}},
+            {Backend.CURSOR: handlers},
         )
+        monkeypatch.setattr("code_review.runtime.run_backend_review", run_backend_review)
         monkeypatch.setattr("code_review.runtime.post_pr_summary", post_pr_summary)
         monkeypatch.setattr("code_review.runtime.add_reaction", AsyncMock(return_value=None))
         monkeypatch.setattr("code_review.runtime.remove_reaction", AsyncMock(return_value=None))
@@ -294,7 +302,7 @@ def main_harness(monkeypatch, mock_config, pull_request_factory, pull_request_ev
             lambda: ("pull_request", pull_request_event_factory(action=action)),
         )
 
-        return {"run_review": run_review, "post_pr_summary": post_pr_summary, "pr": pr}
+        return {"handlers": handlers, "run_backend_review": run_backend_review, "post_pr_summary": post_pr_summary, "pr": pr}
 
     return _setup
 
