@@ -19,7 +19,7 @@ from code_review.github import (
 from code_review.models.backend import GetBackendFindings
 from code_review.models.findings import ReviewPayload
 from code_review.models.pull_request import PullRequestContext, ReviewInputs
-from code_review.models.review import ReviewRoundResult
+from code_review.models.review import CheckConclusion, ReviewRoundResult
 from code_review.review.comments import build_verdict_review, compute_verdict, verdict_summary
 from code_review.review.findings import collect_round_findings
 from code_review.review.threads import classify_threads, existing_finding_titles, extract_posted_keys
@@ -36,15 +36,13 @@ async def post_review_or_warn(repo: str, pr_number: int, payload: ReviewPayload,
 
 def resolve_round_verdict(
     open_count: int, open_blocking: bool, previous_count: int, timed_out: bool
-) -> tuple[str, str, str, str]:
+) -> tuple[str, CheckConclusion, str, str]:
     """Return the review event, check conclusion, title, and summary for this round."""
 
     if timed_out:
-        # An incomplete run must not read as reviewed: "timed_out" is one of the conclusions
-        # head_check_concluded excludes, so a re-trigger on the same commit still runs.
-        event, conclusion, title = "COMMENT", "timed_out", "Review timed out"
+        event, conclusion, title = "COMMENT", CheckConclusion.TIMED_OUT, "Review timed out"
     elif SETTINGS.approval_disable:
-        event, conclusion, title = "COMMENT", "neutral", ""
+        event, conclusion, title = "COMMENT", CheckConclusion.NEUTRAL, ""
     else:
         event, conclusion, title = compute_verdict(open_count, open_blocking)
 
@@ -65,7 +63,9 @@ async def note_diff_too_large(pr: PullRequestContext, marker: str) -> ReviewRoun
     check_id = None if SETTINGS.approval_disable else await start_check_run(pr.repo, pr.head_sha)
 
     await post_review(pr.repo, pr.number, ReviewPayload(commit_id=pr.head_sha, event="COMMENT", body=body, comments=[]))
-    await complete_check_run(pr.repo, check_id, "neutral", "Diff too large", "The diff is too large to auto-review.")
+    await complete_check_run(
+        pr.repo, check_id, CheckConclusion.NEUTRAL, "Diff too large", "The diff is too large to auto-review."
+    )
 
     return ReviewRoundResult(exit_code=0)
 
@@ -112,7 +112,9 @@ async def run_review_round(
     try:
         if await current_head_sha(pr.repo, pr.number) != pr.head_sha:
             logger.info("Head moved before review; skipping (the new commit reviews next).")
-            await complete_check_run(pr.repo, check_id, "cancelled", "Superseded", "The head moved before review.")
+            await complete_check_run(
+                pr.repo, check_id, CheckConclusion.CANCELLED, "Superseded", "The head moved before review."
+            )
             concluded = True
 
             return ReviewRoundResult(exit_code=0)
@@ -127,7 +129,7 @@ async def run_review_round(
             )
         except ReviewBackendError as exc:
             logger.error("Review backend failed: %s", exc)
-            await complete_check_run(pr.repo, check_id, "action_required", "Review failed", str(exc))
+            await complete_check_run(pr.repo, check_id, CheckConclusion.ACTION_REQUIRED, "Review failed", str(exc))
             concluded = True
 
             return ReviewRoundResult(exit_code=1, diff=diff)
@@ -163,7 +165,9 @@ async def run_review_round(
 
         return ReviewRoundResult(exit_code=0, diff=diff)
     except asyncio.CancelledError:
-        await complete_check_run(pr.repo, check_id, "cancelled", "Superseded", "The review job was cancelled.")
+        await complete_check_run(
+            pr.repo, check_id, CheckConclusion.CANCELLED, "Superseded", "The review job was cancelled."
+        )
         concluded = True
 
         return ReviewRoundResult(exit_code=1)
@@ -173,5 +177,5 @@ async def run_review_round(
 
         if not concluded:
             await complete_check_run(
-                pr.repo, check_id, "action_required", "Review failed", "The review run did not complete."
+                pr.repo, check_id, CheckConclusion.ACTION_REQUIRED, "Review failed", "The review run did not complete."
             )

@@ -184,9 +184,6 @@ async def collect_round_findings(
 
     review_timeout = SETTINGS.review_timeout
     deadline_seconds = review_timeout.total_seconds() if review_timeout is not None else None
-
-    # The accumulator is owned here, not returned by the loop, so findings already
-    # published survive when the deadline cancels the loop mid-stream.
     findings = RoundFindings()
 
     try:

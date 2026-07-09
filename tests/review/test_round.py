@@ -6,11 +6,26 @@ import pytest
 
 from code_review.config import CONFIG
 from code_review.errors import ReviewBackendError
+from code_review.models.review import REVIEWED_CONCLUSIONS, CheckConclusion
 from code_review.models.severity import Severity
 from code_review.review.findings import REVIEW_BACKEND_ATTEMPTS
 from code_review.review.round import run_review_round
 
 MARKER = CONFIG["review_marker"]
+
+
+class TestIncompleteRunsAllowRetrigger:
+    """Test that an incomplete run's conclusion is not counted as a completed review."""
+
+    @pytest.mark.parametrize(
+        "conclusion",
+        [CheckConclusion.CANCELLED, CheckConclusion.TIMED_OUT, CheckConclusion.ACTION_REQUIRED],
+        ids=["superseded", "timed-out", "failed"],
+    )
+    def test_incomplete_conclusion_is_not_reviewed(self, conclusion: CheckConclusion) -> None:
+        """Test that head_check_concluded's reviewed set excludes incomplete conclusions, so a re-trigger runs."""
+
+        assert conclusion not in REVIEWED_CONCLUSIONS
 
 
 class TestRunReviewRound:

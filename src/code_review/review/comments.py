@@ -1,5 +1,6 @@
 from code_review.config import CONFIG, DISCLAIMER
 from code_review.models.findings import Finding, ReviewCommentRequest, ReviewPayload
+from code_review.models.review import CheckConclusion
 from code_review.models.severity import Severity
 from code_review.models.threads import ThreadCommentNode
 
@@ -71,18 +72,18 @@ def build_inline_comment(head_sha: str, finding: Finding, marker: str) -> Review
     )
 
 
-def compute_verdict(open_count: int, open_blocking: bool) -> tuple[str, str, str]:
+def compute_verdict(open_count: int, open_blocking: bool) -> tuple[str, CheckConclusion, str]:
     """Return the review event, check conclusion, and check title for open issues."""
 
     if open_count == 0:
-        return "APPROVE", "success", "No unresolved issues"
+        return "APPROVE", CheckConclusion.SUCCESS, "No unresolved issues"
 
     if open_blocking:
-        return "REQUEST_CHANGES", "failure", "Blocking issue open"
+        return "REQUEST_CHANGES", CheckConclusion.FAILURE, "Blocking issue open"
 
     plural = "s" if open_count != 1 else ""
 
-    return "COMMENT", "neutral", f"{open_count} unresolved issue{plural}"
+    return "COMMENT", CheckConclusion.NEUTRAL, f"{open_count} unresolved issue{plural}"
 
 
 def verdict_summary(event: str, open_count: int, previous_count: int) -> str:
