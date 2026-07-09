@@ -68,7 +68,6 @@ class Settings(BaseSettings):
     exclude_paths: Annotated[tuple[str, ...], NoDecode] = ()
     trigger_phrase: str = "agent review"
     review_drafts: bool = True
-    author_associations: Annotated[tuple[str, ...], NoDecode] = ()
     pr_number: int | None = None
     review_timeout_minutes: int | None = 15
 
@@ -133,13 +132,6 @@ class Settings(BaseSettings):
         """Split a comma/newline glob list into a tuple."""
 
         return split_list(value) if isinstance(value, str) else value
-
-    @field_validator("author_associations", mode="before")
-    @classmethod
-    def normalize_associations(cls, value: str | tuple[str, ...]) -> tuple[str, ...]:
-        """Split and upper-case the author-association allowlist."""
-
-        return tuple(item.upper() for item in split_list(value)) if isinstance(value, str) else value
 
     @field_validator("review_timeout_minutes", mode="before")
     @classmethod

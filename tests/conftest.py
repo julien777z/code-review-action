@@ -48,7 +48,6 @@ def mock_config(monkeypatch) -> Callable[..., None]:
             "exclude_paths": (),
             "trigger_phrase": "agent review",
             "review_drafts": True,
-            "author_associations": (),
             "pr_number": None,
             "review_timeout_minutes": 15,
         }
@@ -438,7 +437,6 @@ def pull_request_event_factory() -> Callable[..., GithubEvent]:
     def _build(
         *,
         action: str = "opened",
-        author_association: str = "MEMBER",
         head_full_name: str = "octo/repo",
         sender_type: str = "User",
         draft: bool = False,
@@ -450,7 +448,6 @@ def pull_request_event_factory() -> Callable[..., GithubEvent]:
                 "pull_request": {
                     "number": number,
                     "draft": draft,
-                    "author_association": author_association,
                     "head": {"repo": {"full_name": head_full_name}, "sha": "abc123", "ref": "feature"},
                 },
                 "sender": {"type": sender_type},
@@ -467,7 +464,6 @@ def issue_comment_event_factory() -> Callable[..., GithubEvent]:
     def _build(
         *,
         body: str = "agent review please",
-        author_association: str = "MEMBER",
         sender_type: str = "User",
         is_pull_request: bool = True,
         number: int = 7,
@@ -477,7 +473,7 @@ def issue_comment_event_factory() -> Callable[..., GithubEvent]:
             {
                 "action": "created",
                 "issue": {"number": number, "pull_request": {"url": "x"} if is_pull_request else None},
-                "comment": {"id": comment_id, "body": body, "author_association": author_association},
+                "comment": {"id": comment_id, "body": body},
                 "sender": {"type": sender_type},
             }
         )

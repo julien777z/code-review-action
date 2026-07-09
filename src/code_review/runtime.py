@@ -113,17 +113,8 @@ def load_event() -> tuple[str, GithubEvent]:
     return name, GithubEvent()
 
 
-def association_allowed(association: str | None) -> bool:
-    """Return whether the actor's association passes the allowlist (empty allowlist = everyone)."""
-
-    if not SETTINGS.author_associations:
-        return True
-
-    return bool(association) and association.upper() in SETTINGS.author_associations
-
-
 def is_eligible(event_name: str, event: GithubEvent) -> bool:
-    """Return whether this event should trigger a review (fork, bot-comment, association, and phrase gates)."""
+    """Return whether this event should trigger a review (fork, bot-comment, and phrase gates)."""
 
     repo = os.environ.get("GITHUB_REPOSITORY", "")
     sender_type = event.sender.type if event.sender else None
@@ -138,7 +129,6 @@ def is_eligible(event_name: str, event: GithubEvent) -> bool:
                 and event.action in PULL_REQUEST_ACTIONS
                 and head_repo is not None
                 and head_repo.full_name == repo
-                and association_allowed(pull_request.author_association)
             )
         case "issue_comment":
             issue = event.issue
@@ -151,7 +141,6 @@ def is_eligible(event_name: str, event: GithubEvent) -> bool:
                 and comment
                 and sender_type != "Bot"
                 and body.startswith(SETTINGS.trigger_phrase.lower())
-                and association_allowed(comment.author_association)
             )
         case "workflow_dispatch":
             return True

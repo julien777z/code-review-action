@@ -32,7 +32,6 @@ jobs:
         with:
           cursor-api-key: ${{ secrets.CURSOR_API_KEY }}
           resolve-token: ${{ secrets.CODE_REVIEW_TOKEN }}
-          author-associations: OWNER,MEMBER,COLLABORATOR
           project-rules-severity: "medium"
           simplify-suggest: "true"
           simplify-suggest-severity: "medium"
