@@ -365,6 +365,57 @@ class TestDeferredLows:
         assert result.current_keys == {("src/app.py", "Existing")}
         assert result.severity_by_key[("src/app.py", "Existing")] is Severity.LOW
 
+    def test_later_non_low_supersedes_earlier_same_title_low(
+        self, mock_config, monkeypatch, pull_request_factory, review_inputs_factory, stream_findings_factory, finding_factory
+    ) -> None:
+        """Test that a non-low emitted after a same-title buffered low still publishes and wins the title."""
+
+        post_comment = AsyncMock(return_value=True)
+        monkeypatch.setattr("code_review.review.findings.post_comment", post_comment)
+        low = finding_factory(line=10, severity=Severity.LOW, category=FindingCategory.CODE_SIMPLIFICATION, title="Shared")
+        medium = finding_factory(line=20, severity=Severity.MEDIUM, title="Shared")
+
+        result = asyncio.run(
+            collect_round_findings(
+                pull_request_factory(),
+                "marker",
+                stream_findings_factory([low, medium]),
+                review_inputs_factory(),
+                ANCHORS_UP_TO_LINE_30,
+                set(),
+                set(),
+            )
+        )
+
+        assert posted_titles(post_comment) == ["Shared"]
+        assert result.severity_by_key[("src/app.py", "Shared")] is Severity.MEDIUM
+
+    def test_dropped_finding_does_not_claim_its_title(
+        self, mock_config, monkeypatch, pull_request_factory, review_inputs_factory, stream_findings_factory, finding_factory
+    ) -> None:
+        """Test that a finding dropped by the total cap does not block a later distinct finding sharing its title."""
+
+        mock_config(max_findings=1)
+        post_comment = AsyncMock(return_value=True)
+        monkeypatch.setattr("code_review.review.findings.post_comment", post_comment)
+        first = finding_factory(line=10, severity=Severity.MEDIUM, title="Kept")
+        dropped = finding_factory(line=20, severity=Severity.MEDIUM, title="Contested")
+
+        result = asyncio.run(
+            collect_round_findings(
+                pull_request_factory(),
+                "marker",
+                stream_findings_factory([first, dropped]),
+                review_inputs_factory(),
+                ANCHORS_UP_TO_LINE_30,
+                set(),
+                set(),
+            )
+        )
+
+        assert posted_titles(post_comment) == ["Kept"]
+        assert ("src/app.py", "Contested") not in result.current_keys
+
     def test_buffered_lows_dedupe_by_title(
         self, mock_config, monkeypatch, pull_request_factory, review_inputs_factory, stream_findings_factory, finding_factory
     ) -> None:

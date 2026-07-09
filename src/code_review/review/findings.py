@@ -144,7 +144,6 @@ async def publish_round_findings(
     """Stream and deduplicate findings, publishing non-lows immediately and buffering lows for the flush."""
 
     seen_anchor_keys: set[tuple[str, int, DiffSide, str]] = set()
-    seen_new_keys: set[tuple[str, str]] = set()
 
     async for finding in stream_findings_with_retry(get_findings, inputs):
         if not finding_kept(finding):
@@ -165,10 +164,8 @@ async def publish_round_findings(
 
             continue
 
-        if title_key in seen_new_keys:
+        if title_key in findings.current_keys:
             continue
-
-        seen_new_keys.add(title_key)
 
         if finding.severity is Severity.LOW:
             deferred_lows.append(finding)
@@ -198,10 +195,19 @@ async def publish_deferred_lows(
 
     ranked = sorted(enumerate(deferred_lows), key=lambda item: low_finding_rank(item[1], item[0]))
 
-    for _, finding in ranked[:low_slots]:
+    posted = 0
+    for _, finding in ranked:
+        if posted >= low_slots:
+            break
+
+        title_key = finding_title_key(finding)
+        if title_key in findings.current_keys:
+            continue
+
         publication = await publish_finding(pr, marker, finding, anchors)
-        findings.track_current(finding_title_key(finding), finding)
+        findings.track_current(title_key, finding)
         findings.track_publication(finding, publication)
+        posted += 1
 
 
 async def collect_round_findings(
