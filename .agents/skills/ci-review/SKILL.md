@@ -17,9 +17,11 @@ The CI runner has already verified eligibility, fetched the diff (embedded in yo
 - In Step 3, **drop the prior-PRs lens** — it needs GitHub history you should not fetch. Keep the rules, bugs, history, and comments lenses.
 - In Step 4, **do not fetch existing comments** — the prompt already lists prior findings, so re-report any that still apply with the same path and title. **Do not cap or drop low findings yourself** — emit every finding that clears the severity bar and let the runner apply the low-findings cap.
 
-## Review as a single agent, file by file
+## Run the core review yourself, file by file
 
-Do the review yourself as one agent — do **not** fan out to sub-agents. Take code-review's single-thread path: work through the changed files one at a time and apply the review lenses to each file in that one thread. Sub-agents each re-read the diff and rules, which multiplies the work and delays your first finding while you wait for them to return.
+Run the core review lenses (rules, bugs, history, comments) yourself in one thread — do **not** fan them out to sub-agents, which each re-read the diff and rules and delay your first finding. Work through the changed files one at a time, applying those lenses to each file.
+
+The one exception is a separate code-simplification pass: when the runner enables it (its instruction appears below), run that pass in its own sub-agent, in parallel, so the heavier simplification analysis never slows your per-file core review. Emit the sub-agent's suggestions when it returns.
 
 ## Emit findings incrementally as JSONL
 

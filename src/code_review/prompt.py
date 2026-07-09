@@ -61,14 +61,17 @@ def project_rules_instruction() -> str:
 
 
 def simplification_instruction() -> str:
-    """Compose the simplification-suggestion instruction at the configured severity (default low)."""
+    """Compose the simplification-suggestion instruction, delegated to a dedicated sub-agent."""
 
     severity = (SETTINGS.simplify_suggest_severity or Severity.LOW).value
 
     return (
-        "Also suggest code simplifications using your `code-simplify` skill: flag changed code that "
-        "could be simpler — less duplication, less indirection, clearer structure. Report each as a "
-        f"`{severity}`-severity optional suggestion."
+        "Also run a code-simplification pass, but in a dedicated sub-agent rather than on your main "
+        "review thread — spawn it and keep doing your per-file core review while it works. That "
+        "sub-agent applies your `code-simplify` skill to the diff and returns its findings to you (it "
+        "reviews only: it does not post, edit, or spawn further agents), flagging changed code that "
+        "could be simpler — less duplication, less indirection, clearer structure. Emit each as a "
+        f"`{severity}`-severity optional suggestion when the sub-agent returns."
     )
 
 

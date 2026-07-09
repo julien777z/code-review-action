@@ -49,14 +49,14 @@ class TestReviewInstructions:
         assert "Calibrate severity by how likely the trigger is" in text
 
     def test_streams_findings_incrementally_as_single_agent(self) -> None:
-        """Test that the contract asks for single-agent, file-by-file incremental emission without rushing."""
+        """Test that the core review runs single-thread file-by-file, streaming without rushing."""
 
         text = review_instructions()
 
         assert "most-important-first" not in text
         assert "the moment you validate it" in text
-        assert "single agent, file by file" in text
-        assert "do **not** fan out to sub-agents" in text
+        assert "file by file" in text
+        assert "do **not** fan them out to sub-agents" in text
         assert "Hard time budget" not in text
         assert "Work with urgency" not in text
 
@@ -116,6 +116,7 @@ class TestReviewInstructions:
         assert "code-simplify" in text
         assert "Code Simplify Review" in text
         assert "read-only CI review variant" in text
+        assert "in a dedicated sub-agent" in text
         assert "apply the simplifications you identify directly to the working tree" not in text
         assert "then " + "fix the issues" not in text
         assert "nearby and related code" not in text
