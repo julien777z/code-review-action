@@ -27,6 +27,7 @@ class RoundFindings(BaseModel):
     severity_by_key: dict[tuple[str, str], Severity] = Field(default_factory=dict)
     out_of_bounds: list[Finding] = Field(default_factory=list)
     posted_any: bool = False
+    timed_out: bool = False
 
     @property
     def needs_verdict_review(self) -> bool:

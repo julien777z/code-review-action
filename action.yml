@@ -88,6 +88,9 @@ inputs:
   pr-number:
     description: PR number to review on a workflow_dispatch run.
     default: ""
+  review-timeout-minutes:
+    description: Overall cap on the review agent's runtime in minutes; findings already streamed are kept and the verdict notes the cut-off. Set to 0 to disable.
+    default: "15"
 
 runs:
   using: composite
@@ -128,6 +131,7 @@ runs:
         REVIEW_DRAFTS: ${{ inputs.review-drafts }}
         AUTHOR_ASSOCIATIONS: ${{ inputs.author-associations }}
         PR_NUMBER: ${{ inputs.pr-number }}
+        REVIEW_TIMEOUT_MINUTES: ${{ inputs.review-timeout-minutes }}
       # Keep Python as the step's foreground process so Actions cancellation signals reach the
       # review cleanup handler, which concludes any in-progress Approval Verdict check.
       run: PYTHONPATH="$GITHUB_ACTION_PATH/src" exec python -m code_review

@@ -1,5 +1,6 @@
 import asyncio
 from collections.abc import AsyncIterator
+from datetime import timedelta
 from unittest.mock import AsyncMock
 
 import pytest
@@ -212,3 +213,71 @@ class TestCollectRoundFindings:
 
         assert result.current_keys == {("src/app.py", "Already posted")}
         assert result.severity_by_key[("src/app.py", "Already posted")] is Severity.HIGH
+
+
+class TestCollectRoundFindingsTimeout:
+    """Test that the review time limit finalizes with partial findings and cleans up the backend."""
+
+    def test_timeout_keeps_partial_findings_and_cleans_up(
+        self,
+        mock_config,
+        monkeypatch,
+        override_review_timeout,
+        pull_request_factory,
+        review_inputs_factory,
+        blocking_stream_factory,
+        finding_factory,
+    ) -> None:
+        """Test that hitting the limit marks the round timed out, keeps streamed findings, and runs cleanup."""
+
+        override_review_timeout(timedelta(seconds=0.1))
+        monkeypatch.setattr("code_review.review.findings.post_comment", AsyncMock(return_value=True))
+        finding = finding_factory(path="src/app.py", line=10, title="Streamed")
+        get_findings, state = blocking_stream_factory([finding])
+
+        result = asyncio.run(
+            collect_round_findings(
+                pull_request_factory(),
+                "marker",
+                get_findings,
+                review_inputs_factory(),
+                {"src/app.py": ({10}, set())},
+                set(),
+                set(),
+            )
+        )
+
+        assert result.timed_out is True
+        assert result.current_keys == {("src/app.py", "Streamed")}
+        assert state["cleaned_up"] is True
+
+    def test_disabled_timeout_drains_stream(
+        self,
+        mock_config,
+        monkeypatch,
+        override_review_timeout,
+        pull_request_factory,
+        review_inputs_factory,
+        stream_findings_factory,
+        finding_factory,
+    ) -> None:
+        """Test that a disabled timeout leaves the round un-flagged and drains the whole stream."""
+
+        override_review_timeout(None)
+        monkeypatch.setattr("code_review.review.findings.post_comment", AsyncMock(return_value=True))
+        finding = finding_factory(path="src/app.py", line=10, title="Streamed")
+
+        result = asyncio.run(
+            collect_round_findings(
+                pull_request_factory(),
+                "marker",
+                stream_findings_factory([finding]),
+                review_inputs_factory(),
+                {"src/app.py": ({10}, set())},
+                set(),
+                set(),
+            )
+        )
+
+        assert result.timed_out is False
+        assert result.current_keys == {("src/app.py", "Streamed")}

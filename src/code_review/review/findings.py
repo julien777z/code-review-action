@@ -136,38 +136,49 @@ async def collect_round_findings(
     low_count = 0
     total_count = 0
 
-    async for finding in stream_findings_with_retry(get_findings, inputs):
-        if not finding_kept(finding):
-            continue
+    review_timeout = SETTINGS.review_timeout
+    deadline_seconds = review_timeout.total_seconds() if review_timeout is not None else None
 
-        anchor_key = finding_anchor_key(finding)
-        if anchor_key in seen_anchor_keys:
-            continue
+    try:
+        async with asyncio.timeout(deadline_seconds) as review_deadline:
+            async for finding in stream_findings_with_retry(get_findings, inputs):
+                if not finding_kept(finding):
+                    continue
 
-        seen_anchor_keys.add(anchor_key)
-        title_key = finding_title_key(finding)
+                anchor_key = finding_anchor_key(finding)
+                if anchor_key in seen_anchor_keys:
+                    continue
 
-        if not is_postable(finding, anchors, unpatched):
-            continue
+                seen_anchor_keys.add(anchor_key)
+                title_key = finding_title_key(finding)
 
-        if title_key in posted_keys:
-            findings.track_current(title_key, finding)
+                if not is_postable(finding, anchors, unpatched):
+                    continue
 
-            continue
+                if title_key in posted_keys:
+                    findings.track_current(title_key, finding)
 
-        if title_key in seen_new_keys:
-            continue
+                    continue
 
-        if not cap_decision(finding, low_count, total_count):
-            continue
+                if title_key in seen_new_keys:
+                    continue
 
-        publication = await publish_finding(pr, marker, finding, anchors)
-        findings.track_current(title_key, finding)
-        findings.track_publication(finding, publication)
-        seen_new_keys.add(title_key)
+                if not cap_decision(finding, low_count, total_count):
+                    continue
 
-        total_count += 1
-        if finding.severity is Severity.LOW:
-            low_count += 1
+                publication = await publish_finding(pr, marker, finding, anchors)
+                findings.track_current(title_key, finding)
+                findings.track_publication(finding, publication)
+                seen_new_keys.add(title_key)
+
+                total_count += 1
+                if finding.severity is Severity.LOW:
+                    low_count += 1
+    except TimeoutError:
+        if not review_deadline.expired():
+            raise
+
+        logger.warning("Review hit the %s time limit; finalizing with %d finding(s) so far.", review_timeout, total_count)
+        findings.timed_out = True
 
     return findings

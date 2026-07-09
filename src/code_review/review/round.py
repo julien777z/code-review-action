@@ -122,10 +122,17 @@ async def run_review_round(
         previous_count = len(open_existing)
         if SETTINGS.approval_disable:
             event, conclusion, title = "COMMENT", "neutral", ""
+        elif findings.timed_out and not open_blocking:
+            event, conclusion, title = "COMMENT", "neutral", "Review timed out"
         else:
             event, conclusion, title = compute_verdict(open_count, open_blocking)
 
         summary = verdict_summary(event, open_count, previous_count)
+        if findings.timed_out:
+            summary = (
+                f"{summary}\n\nThe review reached its {SETTINGS.review_timeout_minutes}-minute time limit and may be "
+                "incomplete; the findings shown reflect only what was reviewed before the limit."
+            )
 
         if (findings.needs_verdict_review or SETTINGS.approval_disable) and not await already_reviewed(
             pr.repo, pr.number, pr.head_sha, marker
@@ -133,8 +140,9 @@ async def run_review_round(
             payload = build_verdict_review(pr.head_sha, findings.out_of_bounds, event, summary, marker)
             await post_review_or_warn(pr.repo, pr.number, payload, event)
 
-        logger.info("Resolving %d stale thread(s); %d open issue(s) remain.", len(stale_ids), open_count)
-        await resolve_threads(pr.repo, stale_ids)
+        stale_to_resolve = [] if findings.timed_out else stale_ids
+        logger.info("Resolving %d stale thread(s); %d open issue(s) remain.", len(stale_to_resolve), open_count)
+        await resolve_threads(pr.repo, stale_to_resolve)
 
         await complete_check_run(pr.repo, check_id, conclusion, title, summary)
         concluded = True

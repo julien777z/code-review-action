@@ -1,17 +1,18 @@
+import asyncio
 from collections.abc import AsyncIterator, Callable
 from datetime import timedelta
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from code_review.config import CONFIG
+from code_review.config import CONFIG, Settings
 from code_review.errors import ReviewBackendError
 from code_review.models.backend import Backend, BackendHandlers, GetBackendFindings
 from code_review.models.config import ReviewModel
 from code_review.models.findings import Finding, FindingCategory
 from code_review.models.github_event import GithubEvent
 from code_review.models.pull_request import PullRequestContext, ReviewInputs
-from code_review.models.review import ReviewRoundResult
+from code_review.models.review import ReviewRoundResult, RoundFindings
 from code_review.models.severity import DiffSide, Severity
 from code_review.models.threads import ReviewThread, ThreadCommentAuthor, ThreadCommentNode, ThreadComments
 from code_review.review_backends import cursor
@@ -49,6 +50,7 @@ def mock_config(monkeypatch) -> Callable[..., None]:
             "review_drafts": True,
             "author_associations": (),
             "pr_number": None,
+            "review_timeout_minutes": 15,
         }
         for key, value in {**defaults, **overrides}.items():
             monkeypatch.setattr(f"code_review.config.SETTINGS.{key}", value)
@@ -56,6 +58,28 @@ def mock_config(monkeypatch) -> Callable[..., None]:
     _mock_config()
 
     return _mock_config
+
+
+@pytest.fixture
+def override_review_timeout(monkeypatch) -> Callable[[timedelta | None], None]:
+    """Override the computed review timeout with an explicit duration for tests."""
+
+    def _override(duration: timedelta | None) -> None:
+        monkeypatch.setattr(Settings, "review_timeout", property(lambda self: duration))
+
+    return _override
+
+
+@pytest.fixture
+def round_findings_factory() -> Callable[..., RoundFindings]:
+    """Build RoundFindings instances with sensible defaults."""
+
+    def _build(**overrides) -> RoundFindings:
+        defaults = {"posted_any": False, "timed_out": False}
+
+        return RoundFindings(**{**defaults, **overrides})
+
+    return _build
 
 
 @pytest.fixture
@@ -132,6 +156,27 @@ def stream_findings_factory() -> Callable[[list[Finding]], GetBackendFindings]:
                 yield finding
 
         return _get_findings
+
+    return _build
+
+
+@pytest.fixture
+def blocking_stream_factory() -> Callable[[list[Finding]], tuple[GetBackendFindings, dict[str, bool]]]:
+    """Build a get_findings double that yields findings then blocks until cancelled, recording its cleanup."""
+
+    def _build(findings: list[Finding]) -> tuple[GetBackendFindings, dict[str, bool]]:
+        state = {"cleaned_up": False}
+
+        async def _get_findings(inputs: ReviewInputs) -> AsyncIterator[Finding]:
+            try:
+                for finding in findings:
+                    yield finding
+
+                await asyncio.Event().wait()
+            finally:
+                state["cleaned_up"] = True
+
+        return _get_findings, state
 
     return _build
 

@@ -69,6 +69,18 @@ class TestStringInputs:
         assert review_step(action)["env"][env_name] == "${{ inputs.%s }}" % input_name
 
 
+class TestReviewTimeoutInput:
+    """Test that the review-timeout-minutes input carries its default and is wired to the environment."""
+
+    def test_input_default_and_env_wired(self) -> None:
+        """Test that the input defaults to 15 minutes and passes through as its env var."""
+
+        action = load_action()
+
+        assert action["inputs"]["review-timeout-minutes"]["default"] == "15"
+        assert review_step(action)["env"]["REVIEW_TIMEOUT_MINUTES"] == "${{ inputs.review-timeout-minutes }}"
+
+
 class TestClaudeInputDescriptions:
     """Test that Claude input descriptions match the current Managed Agents backend."""
 

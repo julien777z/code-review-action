@@ -1,5 +1,6 @@
 import asyncio
 from collections.abc import AsyncIterator
+from datetime import timedelta
 
 import pytest
 
@@ -86,3 +87,40 @@ class TestReviewText:
 
         assert chunks == [CONFIG["no_findings_marker"]]
         assert recorded["load_project_rules"] is loads_rules
+
+
+class TestBridgeClientTimeout:
+    """Test that the bridge read timeout tracks the configured review budget."""
+
+    def test_caps_read_timeout_past_review_budget(self, mock_config) -> None:
+        """Test that the bridge read timeout sits one minute past the review budget."""
+
+        mock_config(review_timeout_minutes=15)
+        timeout = cursor.bridge_client_timeout()
+
+        assert timeout is not None
+        assert timeout.read == pytest.approx(timedelta(minutes=16).total_seconds())
+        assert timeout.connect == pytest.approx(timedelta(seconds=30).total_seconds())
+
+    def test_disabled_review_timeout_removes_read_cap(self, mock_config) -> None:
+        """Test that disabling the review timeout leaves the bridge without a read cap."""
+
+        mock_config(review_timeout_minutes=None)
+
+        assert cursor.bridge_client_timeout() is None
+
+    def test_launch_passes_computed_client_timeout(self, monkeypatch, mock_config) -> None:
+        """Test that the bridge launch receives the computed client timeout."""
+
+        mock_config(review_timeout_minutes=15)
+        recorded: dict[str, object] = {}
+
+        async def _launch(**kwargs: object) -> object:
+            recorded.update(kwargs)
+
+            return object()
+
+        monkeypatch.setattr(cursor.AsyncClient, "launch_bridge", _launch)
+        asyncio.run(cursor.launch_bridge_with_retry())
+
+        assert recorded["client_timeout"].read == pytest.approx(timedelta(minutes=16).total_seconds())

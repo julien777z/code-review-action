@@ -1,4 +1,5 @@
 import re
+from datetime import timedelta
 from typing import Annotated, Final
 
 from pydantic import field_validator, model_validator
@@ -69,6 +70,16 @@ class Settings(BaseSettings):
     review_drafts: bool = True
     author_associations: Annotated[tuple[str, ...], NoDecode] = ()
     pr_number: int | None = None
+    review_timeout_minutes: int | None = 15
+
+    @property
+    def review_timeout(self) -> timedelta | None:
+        """Return the review runtime cap as a duration, or None when disabled."""
+
+        if self.review_timeout_minutes is None:
+            return None
+
+        return timedelta(minutes=self.review_timeout_minutes)
 
     @model_validator(mode="before")
     @classmethod
@@ -129,6 +140,18 @@ class Settings(BaseSettings):
         """Split and upper-case the author-association allowlist."""
 
         return tuple(item.upper() for item in split_list(value)) if isinstance(value, str) else value
+
+    @field_validator("review_timeout_minutes", mode="before")
+    @classmethod
+    def normalize_timeout(cls, value: str | int | None) -> int | None:
+        """Parse the review timeout in minutes, treating a non-positive value as disabled."""
+
+        if value is None:
+            return None
+
+        minutes = int(value)
+
+        return minutes if minutes > 0 else None
 
 
 SETTINGS: Final[Settings] = Settings()
