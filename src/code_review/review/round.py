@@ -39,10 +39,12 @@ def resolve_round_verdict(
 ) -> tuple[str, str, str, str]:
     """Return the review event, check conclusion, title, and summary for this round."""
 
-    if SETTINGS.approval_disable:
+    if timed_out:
+        # An incomplete run must not read as reviewed: "timed_out" is one of the conclusions
+        # head_check_concluded excludes, so a re-trigger on the same commit still runs.
+        event, conclusion, title = "COMMENT", "timed_out", "Review timed out"
+    elif SETTINGS.approval_disable:
         event, conclusion, title = "COMMENT", "neutral", ""
-    elif timed_out and not open_blocking:
-        event, conclusion, title = "COMMENT", "neutral", "Review timed out"
     else:
         event, conclusion, title = compute_verdict(open_count, open_blocking)
 
@@ -50,7 +52,7 @@ def resolve_round_verdict(
     if timed_out:
         summary = (
             f"{summary}\n\nThe review reached its {SETTINGS.review_timeout_minutes}-minute time limit and may be "
-            "incomplete; the findings shown reflect only what was reviewed before the limit."
+            "incomplete; re-run the review to finish the pass."
         )
 
     return event, conclusion, title, summary

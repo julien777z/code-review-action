@@ -159,6 +159,8 @@ async def already_reviewed(repo: str, pr_number: int, head_sha: str, marker: str
 async def head_check_concluded(repo: str, head_sha: str) -> bool:
     """Return True if a completed review check run already exists for this head commit."""
 
+    # Only terminal verdicts count as reviewed. Incomplete runs (cancelled, timed_out,
+    # action_required) are intentionally excluded so a re-trigger on the same commit still runs.
     raw = await run_gh(
         [
             "api",

@@ -203,7 +203,7 @@ class TestRunReviewRound:
 class TestRunReviewRoundTimeout:
     """Test that a timed-out round records the cut-off without approving or resolving stale threads."""
 
-    def test_timeout_without_findings_concludes_neutral(
+    def test_timeout_without_findings_concludes_timed_out(
         self,
         mock_config,
         monkeypatch,
@@ -212,7 +212,7 @@ class TestRunReviewRoundTimeout:
         pull_request_factory,
         round_findings_factory,
     ) -> None:
-        """Test that a timed-out round with no findings concludes neutral instead of approving."""
+        """Test that a timed-out round with no findings concludes timed_out, so a re-trigger is not skipped."""
 
         monkeypatch.setattr(
             "code_review.review.round.collect_round_findings",
@@ -223,7 +223,7 @@ class TestRunReviewRoundTimeout:
 
         assert result.exit_code == 0
         assert review_github_mocks["post_review"].await_count == 0
-        assert review_github_mocks["complete_check_run"].await_args.args[2] == "neutral"
+        assert review_github_mocks["complete_check_run"].await_args.args[2] == "timed_out"
         assert review_github_mocks["complete_check_run"].await_args.args[3] == "Review timed out"
         assert "time limit" in review_github_mocks["complete_check_run"].await_args.args[4]
         assert review_github_mocks["resolve_threads"].await_args.args[1] == []
@@ -256,10 +256,10 @@ class TestRunReviewRoundTimeout:
 
         assert result.exit_code == 0
         assert review_github_mocks["post_review"].await_count == 1
-        assert review_github_mocks["complete_check_run"].await_args.args[2] == "neutral"
+        assert review_github_mocks["complete_check_run"].await_args.args[2] == "timed_out"
         assert "time limit" in review_github_mocks["post_review"].await_args.args[2].body
 
-    def test_timeout_with_blocking_finding_requests_changes(
+    def test_timeout_with_blocking_finding_stays_retriggerable(
         self,
         mock_config,
         monkeypatch,
@@ -268,7 +268,7 @@ class TestRunReviewRoundTimeout:
         pull_request_factory,
         round_findings_factory,
     ) -> None:
-        """Test that a blocking finding found before the limit still requests changes."""
+        """Test that a blocking finding found before the limit still concludes timed_out, not a re-review-blocking verdict."""
 
         key = ("src/app.py", "Crash")
         monkeypatch.setattr(
@@ -285,7 +285,7 @@ class TestRunReviewRoundTimeout:
 
         asyncio.run(run_review_round(pull_request_factory(), MARKER, stream_findings_factory([])))
 
-        assert review_github_mocks["complete_check_run"].await_args.args[2] == "failure"
+        assert review_github_mocks["complete_check_run"].await_args.args[2] == "timed_out"
         assert review_github_mocks["resolve_threads"].await_args.args[1] == []
 
     def test_external_cancellation_concludes_superseded(
