@@ -7,7 +7,7 @@ description: Review a GitHub pull request with parallel specialized agents and p
 
 Review a GitHub pull request with parallel specialized agents and post the findings as **inline review comments**, each rated by severity. Surface real issues, not nitpicks — do not fix anything.
 
-**Scope — review only what this PR changes.** Limit the review to the lines this PR adds or modifies. Every finding must anchor to a line in the diff; do not go hunting for pre-existing problems in untouched code. If a real issue sits on a line the PR did not touch — even in a file the PR edited — leave it out.
+**Scope and criteria — see [`RUBRIC.md`](RUBRIC.md) in this skill directory.** It is the single source of truth for the review scope (review only what this PR changes; every finding anchors to a changed line), the severity rubric and calibration, the selectivity bar, and the false positives to ignore. Apply it throughout the steps below.
 
 ## GitHub tools — pick by runner
 
@@ -41,23 +41,7 @@ Launch the following review agents in parallel (or sequentially in this thread i
 
 ## Step 4 — Validate, dedup, severity
 
-First **deduplicate**: merge findings that report the same issue at the same file and line — or on adjacent lines — into one (keep the clearest wording). Then **drop any finding already raised on this PR**: fetch a **bounded, recent page** of the PR's existing inline review comments (about the 100 most recent, newest first — do not page through the entire history) and read **only each comment's file path and title line**, not full bodies, so prior reviews never overload your context. Skip a finding whose file path and short title match one already posted — **even if its line number has shifted because the code moved between commits** — so a new push never reposts the same concern you already flagged on an earlier commit. Match on the issue's substance (path plus title), not its current line. Then drop **clear false positives** (see the **False Positives to Ignore** section near the end). Assign each remaining finding a severity. **Post every Critical, High, and Medium finding. Cap Low findings at the three most important per review and drop the rest** — Low is for genuinely minor issues, and a long tail of nitpicks reads as noise. When you are unsure whether something is a Low or not worth posting at all, drop it.
-
-- **Critical** — data loss, security/auth bypass, a crash, or clearly broken core behavior.
-- **High** — a real bug likely hit in normal use, or a clear violation of a project rule that matters in practice.
-- **Medium** — a real issue with limited, conditional, or non-obvious impact.
-- **Low** — valid but minor: a nitpick the change genuinely got wrong, a rare edge case, or a small correctness/UX deviation.
-
-**Calibrate severity by how likely the trigger is, not by how severe the worst case sounds.** An issue that only manifests under unlikely timing, a race, or concurrent runs — or whose impact is narrowly scoped (e.g. only one runner's own data) or self-corrects on the next run — is **at most Medium**, and Low when the effect is trivial or cosmetic. Reserve **High** for a bug whose trigger is common in normal use. Do not rate a rare, scoped, or recoverable edge case High just because its failure mode reads as serious.
-
-**Be selective — a short, high-signal review beats an exhaustive one.** Post a finding only when you are highly confident it is a real defect a maintainer would act on, with a concrete trigger that is realistically hit. A review carrying many findings is itself a signal you are over-flagging: keep the few that clearly matter and drop the rest. In particular, **do not post**:
-- **Deliberate configuration or design choices** — a coverage-ignore entry, a chosen permission scope, an intentional dedup or tier-scoping rule — unless you can point to a concrete, demonstrable failure they cause.
-- **Transitional or migration states** that self-resolve over time, such as pre-existing data or comments that lack a newly-added field or marker.
-- **Speculative compound failures** that only bite if some unrelated thing also breaks ("if X also fails, then…") without evidence that it does.
-
-When you cannot tie a finding to a concrete, likely-hit failure, drop it.
-
-For rule-compliance findings, confirm the rule file actually calls out that specific issue before rating it above Low. **Before flagging a convention as required, also confirm the codebase itself follows it** — read the surrounding/sibling code. If the project consistently does the opposite (for example, a rule mentions async patterns but the code and its tests are entirely synchronous), the convention does not apply here: **drop the finding** rather than asserting a rule the repository does not keep. Never turn a general style preference into a stated rule the codebase contradicts.
+First **deduplicate**: merge findings that report the same issue at the same file and line — or on adjacent lines — into one (keep the clearest wording). Then **drop any finding already raised on this PR**: fetch a **bounded, recent page** of the PR's existing inline review comments (about the 100 most recent, newest first — do not page through the entire history) and read **only each comment's file path and title line**, not full bodies, so prior reviews never overload your context. Skip a finding whose file path and short title match one already posted — **even if its line number has shifted because the code moved between commits** — so a new push never reposts the same concern you already flagged on an earlier commit. Match on the issue's substance (path plus title), not its current line. Then drop **clear false positives** and assign each remaining finding a severity, both **per the severity rubric, calibration, selectivity bar, and false-positive list in [`RUBRIC.md`](RUBRIC.md)**. **Post every Critical, High, and Medium finding. Cap Low findings at the three most important per review and drop the rest** — Low is for genuinely minor issues, and a long tail of nitpicks reads as noise. When you are unsure whether something is a Low or not worth posting at all, drop it.
 
 ## Step 5 — Re-gate before posting
 
@@ -84,15 +68,6 @@ Repeat the eligibility check from Step 1, and re-fetch the head SHA. If it diffe
 
 <!-- code-review -->
 ```
-
-## False Positives to Ignore
-
-- Something that looks like a bug but is not
-- Pedantic nitpicks a senior engineer would never call out
-- Issues a linter, typechecker, or CI step would catch (assume CI runs separately)
-- General code quality (test coverage, documentation) unless the project rules require it
-- Issues called out in the project rules but explicitly silenced in the code (e.g. a lint-ignore comment)
-- Likely intentional behavior changes related to the broader PR goal
 
 ## Notes
 

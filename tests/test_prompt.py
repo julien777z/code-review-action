@@ -42,6 +42,15 @@ class TestReviewInstructions:
         assert "Step 1 — Eligibility" not in text
         assert "Post one inline review" not in text
 
+    def test_embeds_shared_review_criteria(self) -> None:
+        """Test that the single-source severity rubric and false positives are embedded alongside the CI variant."""
+
+        text = review_instructions()
+
+        assert "False Positives to Ignore" in text
+        assert "Pedantic nitpicks" in text
+        assert "Calibrate severity by how likely the trigger is" in text
+
     def test_streams_findings_incrementally(self) -> None:
         """Test that the contract asks for incremental emission and drops global ordering."""
 
