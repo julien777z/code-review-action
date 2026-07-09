@@ -211,14 +211,14 @@ tied to your account and expires, so the App scales better.
 | `simplify-suggest-severity` | — | Severity for simplification suggestions; empty defaults to low |
 | `simplify-nearby-code` | `false` | Extend simplification suggestions to weigh nearby/related code |
 | `min-severity` | `low` | Lowest severity worth posting |
-| `low-findings-cap` | `3` | Max low-severity findings per review |
+| `low-findings-cap` | `3` | Max low-severity findings per review; the runner selects the most important lows once the review stream ends |
 | `max-findings` | — | Overall inline-comment cap (empty = uncapped) |
 | `include-paths` | — | Globs to restrict the review to |
 | `exclude-paths` | — | Globs to skip |
 | `trigger-phrase` | `agent review` | Comment phrase for a manual review |
 | `review-drafts` | `true` | Review draft PRs |
 | `pr-number` | — | PR number for `workflow_dispatch` runs |
-| `review-timeout-minutes` | `15` | Cap on the review agent's runtime; keeps findings streamed so far and notes the cut-off. `0` disables |
+| `review-timeout-minutes` | `15` | Cap on the review agent's runtime; the agent streams findings incrementally, so a cut-off keeps the findings emitted so far and notes it. `0` disables |
 
 ## Versioning
 

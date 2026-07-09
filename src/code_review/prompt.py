@@ -8,6 +8,7 @@ from code_review.config import CONFIG, SETTINGS
 from code_review.models.pull_request import PullRequestContext, ReviewInputs
 from code_review.models.severity import Severity
 
+CI_REVIEW_SKILL_RELATIVE: Final[str] = ".agents/skills/ci-review/SKILL.md"
 CODE_REVIEW_SKILL_RELATIVE: Final[str] = ".agents/skills/code-review/SKILL.md"
 CODE_SIMPLIFY_REVIEW_SKILL_RELATIVE: Final[str] = ".agents/skills/code-simplify/REVIEW_ONLY.md"
 
@@ -60,14 +61,17 @@ def project_rules_instruction() -> str:
 
 
 def simplification_instruction() -> str:
-    """Compose the simplification-suggestion instruction at the configured severity (default low)."""
+    """Compose the simplification-suggestion instruction, delegated to a dedicated sub-agent."""
 
     severity = (SETTINGS.simplify_suggest_severity or Severity.LOW).value
 
     return (
-        "Also suggest code simplifications using your `code-simplify` skill: flag changed code that "
-        "could be simpler — less duplication, less indirection, clearer structure. Report each as a "
-        f"`{severity}`-severity optional suggestion."
+        "Also run a code-simplification pass, but in a dedicated sub-agent rather than on your main "
+        "review thread — spawn it and keep doing your per-file core review while it works. That "
+        "sub-agent applies your `code-simplify` skill to the diff and returns its findings to you (it "
+        "reviews only: it does not post, edit, or spawn further agents), flagging changed code that "
+        "could be simpler — less duplication, less indirection, clearer structure. Emit each as a "
+        f"`{severity}`-severity optional suggestion when the sub-agent returns."
     )
 
 
@@ -92,12 +96,10 @@ def output_contract() -> str:
     """Describe the JSONL findings contract, category labels, and severity bar for this round."""
 
     return (
-        "You are a single agent running in CI: you have no sub-agents and no GitHub posting tools, "
-        "so ignore any skill steps about launching parallel agents or posting via tools — the runner "
-        "posts the review. Apply the skill's review lenses and severity bar to the diff yourself and "
-        "stream findings as JSONL: emit exactly one finding per line as a compact JSON object, with "
-        "no enclosing array, no wrapper object, no markdown fences, and no prose before, between, or "
-        "after the lines. Each line has the form:\n"
+        "The runner posts the review. Apply the skill's review lenses and severity bar to the diff "
+        "and stream findings as JSONL: emit exactly one finding per line as a compact JSON object, "
+        "with no enclosing array, no wrapper object, no markdown fences, and no prose before, "
+        "between, or after the lines. Each line has the form:\n"
         '{"path": "<repo-relative>", "line": <int>, "side": "RIGHT|LEFT", '
         '"category": "bug|code_simplification|security|performance|testing|documentation|project_rule|other", '
         '"severity": "critical|high|medium|low", "title": "<short>", "body": "<1-3 sentences>"}\n'
@@ -110,9 +112,13 @@ def output_contract() -> str:
         "so a finding is never split across lines. Use RIGHT with new-file line numbers for "
         "added/current lines and LEFT with base-file line numbers for removed lines. Only report "
         "findings on the diff's changed lines. Severities are lowercase. Report no finding below "
-        f"`{SETTINGS.min_severity.value}` severity. Post every finding at or above that bar, but at "
-        f"most the {SETTINGS.low_findings_cap} most important `low` findings. Emit findings "
-        f"most-important-first. When there are no findings to report, output exactly `{CONFIG['no_findings_marker']}` on its own line and nothing else.\n"
+        f"`{SETTINGS.min_severity.value}` severity. Emit every finding at or above that bar. Be "
+        f"sparing with `low` findings; the runner keeps at most the {SETTINGS.low_findings_cap} most "
+        "important ones, so you need not ration or pre-rank them yourself. Emit each finding the "
+        "moment you validate it — as a lens or file completes — and never buffer findings to sort, "
+        "rank, or globally deduplicate before emitting; do not wait for the review to finish before "
+        f"emitting the first finding. When there are no findings to report, output exactly "
+        f"`{CONFIG['no_findings_marker']}` on its own line and nothing else.\n"
         "Report every issue that still applies to the diff at the location where it occurs — include "
         "a finding even when a similar review comment already exists, and never skip a still-valid "
         "finding. The runner reconciles your full set against the existing threads, so omitting a "
@@ -124,8 +130,10 @@ def review_instructions() -> str:
     """Compose the stable review instructions (skill + contract + rules + extra context) for the system turn."""
 
     sections = [
-        "Follow your `code-review` skill to review the pull request below.",
+        "Review the pull request below using your `ci-review` skill, which adapts the `code-review` "
+        "skill that follows it for this CI runner.",
         PROMPT_SAFETY,
+        load_skill(CI_REVIEW_SKILL_RELATIVE),
         load_skill(CODE_REVIEW_SKILL_RELATIVE),
         output_contract(),
     ]

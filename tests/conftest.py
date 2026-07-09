@@ -70,6 +70,16 @@ def override_review_timeout(monkeypatch) -> Callable[[timedelta | None], None]:
 
 
 @pytest.fixture
+def post_comment_mock(monkeypatch) -> AsyncMock:
+    """Patch the inline-comment poster in the findings module and return the mock."""
+
+    mock = AsyncMock(return_value=True)
+    monkeypatch.setattr("code_review.review.findings.post_comment", mock)
+
+    return mock
+
+
+@pytest.fixture
 def round_findings_factory() -> Callable[..., RoundFindings]:
     """Build RoundFindings instances with sensible defaults."""
 
