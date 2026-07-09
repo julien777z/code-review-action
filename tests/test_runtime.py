@@ -15,7 +15,6 @@ from code_review.review_backends import claude, cursor
 from code_review.summary import SummaryGenerationError
 from code_review.runtime import (
     BACKENDS,
-    association_allowed,
     is_eligible,
     is_first_review_event,
     main,
@@ -30,25 +29,6 @@ async def collect_findings(findings: AsyncIterator[Finding]) -> list[Finding]:
     """Drain an async finding stream into a list."""
 
     return [finding async for finding in findings]
-
-
-class TestAssociationAllowed:
-    """Test that the author-association allowlist gates triggering."""
-
-    def test_empty_allows_all(self, mock_config) -> None:
-        """Test that an empty allowlist permits any association."""
-
-        mock_config(author_associations=())
-
-        assert association_allowed("NONE") is True
-
-    @pytest.mark.parametrize(("association", "expected"), [("MEMBER", True), ("NONE", False)], ids=["member", "outsider"])
-    def test_enforces_allowlist(self, mock_config, association: str, expected: bool) -> None:
-        """Test that a non-empty allowlist permits only listed associations."""
-
-        mock_config(author_associations=("MEMBER", "OWNER"))
-
-        assert association_allowed(association) is expected
 
 
 class TestIsFirstReviewEvent:
@@ -109,7 +89,7 @@ class TestResolvePrNumber:
 
 
 class TestIsEligible:
-    """Test that fork, bot-comment, association, and trigger gates decide eligibility."""
+    """Test that fork, bot-comment, and trigger gates decide eligibility."""
 
     def test_pull_request_member(self, mock_config, pull_request_event_factory) -> None:
         """Test that a member's same-repo PR is eligible."""
@@ -138,13 +118,6 @@ class TestIsEligible:
         mock_config()
 
         assert is_eligible("pull_request", pull_request_event_factory(action="closed")) is False
-
-    def test_association_allowlist(self, mock_config, pull_request_event_factory) -> None:
-        """Test that an outsider is rejected when an allowlist is set."""
-
-        mock_config(author_associations=("OWNER",))
-
-        assert is_eligible("pull_request", pull_request_event_factory(author_association="NONE")) is False
 
     def test_comment_trigger(self, mock_config, issue_comment_event_factory) -> None:
         """Test that a PR comment starting with the trigger phrase is eligible."""

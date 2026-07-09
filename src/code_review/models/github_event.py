@@ -26,7 +26,6 @@ class EventPullRequest(BaseModel):
 
     number: int | None = None
     head: EventPullRequestHead | None = None
-    author_association: str | None = None
     draft: bool = False
 
 
@@ -37,7 +36,6 @@ class EventComment(BaseModel):
 
     id: int | None = None
     body: str = ""
-    author_association: str | None = None
 
 
 class IssuePullRequestRef(BaseModel):

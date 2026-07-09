@@ -82,9 +82,6 @@ inputs:
   review-drafts:
     description: Review draft pull requests.
     default: "true"
-  author-associations:
-    description: Comma-separated allowlist of author associations allowed to trigger; empty allows all.
-    default: ""
   pr-number:
     description: PR number to review on a workflow_dispatch run.
     default: ""
@@ -129,7 +126,6 @@ runs:
         EXCLUDE_PATHS: ${{ inputs.exclude-paths }}
         TRIGGER_PHRASE: ${{ inputs.trigger-phrase }}
         REVIEW_DRAFTS: ${{ inputs.review-drafts }}
-        AUTHOR_ASSOCIATIONS: ${{ inputs.author-associations }}
         PR_NUMBER: ${{ inputs.pr-number }}
         REVIEW_TIMEOUT_MINUTES: ${{ inputs.review-timeout-minutes }}
       # Keep Python as the step's foreground process so Actions cancellation signals reach the
