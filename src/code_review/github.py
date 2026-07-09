@@ -9,6 +9,7 @@ from typing import Final
 from code_review.config import CONFIG, SETTINGS
 from code_review.models.findings import ReviewCommentRequest, ReviewPayload
 from code_review.models.pull_request import PullRequestBodyUpdate, PullRequestContext
+from code_review.models.review import REVIEWED_CONCLUSIONS, CheckConclusion
 from code_review.models.threads import ReviewThread
 
 logger = logging.getLogger("code_review.github")
@@ -157,8 +158,9 @@ async def already_reviewed(repo: str, pr_number: int, head_sha: str, marker: str
 
 
 async def head_check_concluded(repo: str, head_sha: str) -> bool:
-    """Return True if a completed review check run already exists for this head commit."""
+    """Return True if a terminal review verdict already exists for this head commit."""
 
+    reviewed = " or ".join(f'.conclusion == "{conclusion.value}"' for conclusion in sorted(REVIEWED_CONCLUSIONS))
     raw = await run_gh(
         [
             "api",
@@ -166,8 +168,7 @@ async def head_check_concluded(repo: str, head_sha: str) -> bool:
             f"repos/{repo}/commits/{head_sha}/check-runs",
             "--jq",
             f'.check_runs[] | select(.name == "{CONFIG["status_check_name"]}" '
-            'and .status == "completed" and (.conclusion == "success" '
-            'or .conclusion == "neutral" or .conclusion == "failure")) | .id',
+            f'and .status == "completed" and ({reviewed})) | .id',
         ]
     )
 
@@ -205,7 +206,7 @@ async def start_check_run(repo: str, head_sha: str) -> str | None:
 
 
 async def complete_check_run(
-    repo: str, check_id: str | None, conclusion: str, title: str, summary: str
+    repo: str, check_id: str | None, conclusion: CheckConclusion, title: str, summary: str
 ) -> bool:
     """Conclude the review check run with the round's verdict; return whether it is no longer pending."""
 

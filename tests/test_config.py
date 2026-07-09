@@ -1,3 +1,5 @@
+from datetime import timedelta
+
 import pytest
 
 from code_review.config import Settings, parse_bool, split_list
@@ -106,6 +108,37 @@ class TestProjectRulesSeverity:
         monkeypatch.setenv("PROJECT_RULES_SEVERITY", raw)
 
         assert Settings().project_rules_severity is expected
+
+
+class TestReviewTimeout:
+    """Test that the review timeout input parses minutes and disables on a non-positive value."""
+
+    @pytest.mark.parametrize(
+        ("raw", "expected_minutes"),
+        [(None, 15), ("30", 30), ("0", None), ("-5", None)],
+        ids=["default", "explicit", "zero-disables", "negative-disables"],
+    )
+    def test_parses_minutes(self, monkeypatch, raw: str | None, expected_minutes: int | None) -> None:
+        """Test that the input parses to minutes, with a non-positive value disabling the cap."""
+
+        if raw is None:
+            monkeypatch.delenv("REVIEW_TIMEOUT_MINUTES", raising=False)
+        else:
+            monkeypatch.setenv("REVIEW_TIMEOUT_MINUTES", raw)
+
+        assert Settings().review_timeout_minutes == expected_minutes
+
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [("15", timedelta(minutes=15)), ("0", None)],
+        ids=["enabled", "disabled"],
+    )
+    def test_review_timeout_duration(self, monkeypatch, raw: str, expected: timedelta | None) -> None:
+        """Test that the review_timeout property returns the matching duration or None when disabled."""
+
+        monkeypatch.setenv("REVIEW_TIMEOUT_MINUTES", raw)
+
+        assert Settings().review_timeout == expected
 
 
 class TestSeverity:

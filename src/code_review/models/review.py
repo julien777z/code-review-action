@@ -1,9 +1,26 @@
 from enum import StrEnum
+from typing import Final
 
 from pydantic import BaseModel, Field
 
 from code_review.models.findings import Finding
 from code_review.models.severity import Severity
+
+
+class CheckConclusion(StrEnum):
+    """GitHub check-run conclusion for the review verdict."""
+
+    SUCCESS = "success"
+    NEUTRAL = "neutral"
+    FAILURE = "failure"
+    CANCELLED = "cancelled"
+    TIMED_OUT = "timed_out"
+    ACTION_REQUIRED = "action_required"
+
+
+REVIEWED_CONCLUSIONS: Final[frozenset[CheckConclusion]] = frozenset(
+    {CheckConclusion.SUCCESS, CheckConclusion.NEUTRAL, CheckConclusion.FAILURE}
+)
 
 
 class ReviewRoundResult(BaseModel):
@@ -27,6 +44,7 @@ class RoundFindings(BaseModel):
     severity_by_key: dict[tuple[str, str], Severity] = Field(default_factory=dict)
     out_of_bounds: list[Finding] = Field(default_factory=list)
     posted_any: bool = False
+    timed_out: bool = False
 
     @property
     def needs_verdict_review(self) -> bool:

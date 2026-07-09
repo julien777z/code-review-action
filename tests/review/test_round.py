@@ -1,15 +1,31 @@
 import asyncio
 import subprocess
+from unittest.mock import AsyncMock
 
 import pytest
 
 from code_review.config import CONFIG
 from code_review.errors import ReviewBackendError
+from code_review.models.review import REVIEWED_CONCLUSIONS, CheckConclusion
 from code_review.models.severity import Severity
 from code_review.review.findings import REVIEW_BACKEND_ATTEMPTS
 from code_review.review.round import run_review_round
 
 MARKER = CONFIG["review_marker"]
+
+
+class TestIncompleteRunsAllowRetrigger:
+    """Test that an incomplete run's conclusion is not counted as a completed review."""
+
+    @pytest.mark.parametrize(
+        "conclusion",
+        [CheckConclusion.CANCELLED, CheckConclusion.TIMED_OUT, CheckConclusion.ACTION_REQUIRED],
+        ids=["superseded", "timed-out", "failed"],
+    )
+    def test_incomplete_conclusion_is_not_reviewed(self, conclusion: CheckConclusion) -> None:
+        """Test that head_check_concluded's reviewed set excludes incomplete conclusions, so a re-trigger runs."""
+
+        assert conclusion not in REVIEWED_CONCLUSIONS
 
 
 class TestRunReviewRound:
@@ -197,3 +213,108 @@ class TestRunReviewRound:
         asyncio.run(run_review_round(pull_request_factory(), MARKER, stream_findings_factory([])))
 
         assert review_github_mocks["post_review"].await_count == 1
+
+
+class TestRunReviewRoundTimeout:
+    """Test that a timed-out round records the cut-off without approving or resolving stale threads."""
+
+    def test_timeout_without_findings_concludes_timed_out(
+        self,
+        mock_config,
+        monkeypatch,
+        review_github_mocks,
+        stream_findings_factory,
+        pull_request_factory,
+        round_findings_factory,
+    ) -> None:
+        """Test that a timed-out round with no findings concludes timed_out, so a re-trigger is not skipped."""
+
+        monkeypatch.setattr(
+            "code_review.review.round.collect_round_findings",
+            AsyncMock(return_value=round_findings_factory(timed_out=True)),
+        )
+
+        result = asyncio.run(run_review_round(pull_request_factory(), MARKER, stream_findings_factory([])))
+
+        assert result.exit_code == 0
+        assert review_github_mocks["post_review"].await_count == 0
+        assert review_github_mocks["complete_check_run"].await_args.args[2] == "timed_out"
+        assert review_github_mocks["complete_check_run"].await_args.args[3] == "Review timed out"
+        assert "time limit" in review_github_mocks["complete_check_run"].await_args.args[4]
+        assert review_github_mocks["resolve_threads"].await_args.args[1] == []
+
+    def test_timeout_with_findings_notes_cutoff_in_verdict(
+        self,
+        mock_config,
+        monkeypatch,
+        review_github_mocks,
+        stream_findings_factory,
+        pull_request_factory,
+        round_findings_factory,
+    ) -> None:
+        """Test that a timed-out round with open non-blocking findings still comments and notes the cut-off."""
+
+        key = ("src/app.py", "Bug")
+        monkeypatch.setattr(
+            "code_review.review.round.collect_round_findings",
+            AsyncMock(
+                return_value=round_findings_factory(
+                    current_keys={key},
+                    severity_by_key={key: Severity.HIGH},
+                    posted_any=True,
+                    timed_out=True,
+                )
+            ),
+        )
+
+        result = asyncio.run(run_review_round(pull_request_factory(), MARKER, stream_findings_factory([])))
+
+        assert result.exit_code == 0
+        assert review_github_mocks["post_review"].await_count == 1
+        assert review_github_mocks["complete_check_run"].await_args.args[2] == "timed_out"
+        assert "time limit" in review_github_mocks["post_review"].await_args.args[2].body
+
+    def test_timeout_with_blocking_finding_stays_retriggerable(
+        self,
+        mock_config,
+        monkeypatch,
+        review_github_mocks,
+        stream_findings_factory,
+        pull_request_factory,
+        round_findings_factory,
+    ) -> None:
+        """Test that a blocking finding found before the limit still concludes timed_out, not a re-review-blocking verdict."""
+
+        key = ("src/app.py", "Crash")
+        monkeypatch.setattr(
+            "code_review.review.round.collect_round_findings",
+            AsyncMock(
+                return_value=round_findings_factory(
+                    current_keys={key},
+                    severity_by_key={key: Severity.CRITICAL},
+                    posted_any=True,
+                    timed_out=True,
+                )
+            ),
+        )
+
+        asyncio.run(run_review_round(pull_request_factory(), MARKER, stream_findings_factory([])))
+
+        assert review_github_mocks["complete_check_run"].await_args.args[2] == "timed_out"
+        assert review_github_mocks["resolve_threads"].await_args.args[1] == []
+
+    def test_external_cancellation_concludes_superseded(
+        self, mock_config, monkeypatch, review_github_mocks, stream_findings_factory, pull_request_factory
+    ) -> None:
+        """Test that a signal-driven cancellation still concludes the check as superseded, not timed out."""
+
+        monkeypatch.setattr(
+            "code_review.review.round.collect_round_findings",
+            AsyncMock(side_effect=asyncio.CancelledError()),
+        )
+
+        result = asyncio.run(run_review_round(pull_request_factory(), MARKER, stream_findings_factory([])))
+
+        assert result.exit_code == 1
+        assert review_github_mocks["complete_check_run"].await_args.args[2] == "cancelled"
+        assert review_github_mocks["complete_check_run"].await_args.args[3] == "Superseded"

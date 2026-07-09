@@ -19,7 +19,7 @@ from code_review.github import (
 from code_review.models.backend import GetBackendFindings
 from code_review.models.findings import ReviewPayload
 from code_review.models.pull_request import PullRequestContext, ReviewInputs
-from code_review.models.review import ReviewRoundResult
+from code_review.models.review import CheckConclusion, ReviewRoundResult
 from code_review.review.comments import build_verdict_review, compute_verdict, verdict_summary
 from code_review.review.findings import collect_round_findings
 from code_review.review.threads import classify_threads, existing_finding_titles, extract_posted_keys
@@ -34,6 +34,28 @@ async def post_review_or_warn(repo: str, pr_number: int, payload: ReviewPayload,
         logger.warning("Could not post the %s review; the check run still records the verdict.", event)
 
 
+def resolve_round_verdict(
+    open_count: int, open_blocking: bool, previous_count: int, timed_out: bool
+) -> tuple[str, CheckConclusion, str, str]:
+    """Return the review event, check conclusion, title, and summary for this round."""
+
+    if timed_out:
+        event, conclusion, title = "COMMENT", CheckConclusion.TIMED_OUT, "Review timed out"
+    elif SETTINGS.approval_disable:
+        event, conclusion, title = "COMMENT", CheckConclusion.NEUTRAL, ""
+    else:
+        event, conclusion, title = compute_verdict(open_count, open_blocking)
+
+    summary = verdict_summary(event, open_count, previous_count)
+    if timed_out:
+        summary = (
+            f"{summary}\n\nThe review reached its {SETTINGS.review_timeout_minutes}-minute time limit and may be "
+            "incomplete; re-run the review to finish the pass."
+        )
+
+    return event, conclusion, title, summary
+
+
 async def note_diff_too_large(pr: PullRequestContext, marker: str) -> ReviewRoundResult:
     """Post a note that the diff is too large to auto-review."""
 
@@ -41,7 +63,9 @@ async def note_diff_too_large(pr: PullRequestContext, marker: str) -> ReviewRoun
     check_id = None if SETTINGS.approval_disable else await start_check_run(pr.repo, pr.head_sha)
 
     await post_review(pr.repo, pr.number, ReviewPayload(commit_id=pr.head_sha, event="COMMENT", body=body, comments=[]))
-    await complete_check_run(pr.repo, check_id, "neutral", "Diff too large", "The diff is too large to auto-review.")
+    await complete_check_run(
+        pr.repo, check_id, CheckConclusion.NEUTRAL, "Diff too large", "The diff is too large to auto-review."
+    )
 
     return ReviewRoundResult(exit_code=0)
 
@@ -88,7 +112,9 @@ async def run_review_round(
     try:
         if await current_head_sha(pr.repo, pr.number) != pr.head_sha:
             logger.info("Head moved before review; skipping (the new commit reviews next).")
-            await complete_check_run(pr.repo, check_id, "cancelled", "Superseded", "The head moved before review.")
+            await complete_check_run(
+                pr.repo, check_id, CheckConclusion.CANCELLED, "Superseded", "The head moved before review."
+            )
             concluded = True
 
             return ReviewRoundResult(exit_code=0)
@@ -103,7 +129,7 @@ async def run_review_round(
             )
         except ReviewBackendError as exc:
             logger.error("Review backend failed: %s", exc)
-            await complete_check_run(pr.repo, check_id, "action_required", "Review failed", str(exc))
+            await complete_check_run(pr.repo, check_id, CheckConclusion.ACTION_REQUIRED, "Review failed", str(exc))
             concluded = True
 
             return ReviewRoundResult(exit_code=1, diff=diff)
@@ -120,12 +146,9 @@ async def run_review_round(
         )
 
         previous_count = len(open_existing)
-        if SETTINGS.approval_disable:
-            event, conclusion, title = "COMMENT", "neutral", ""
-        else:
-            event, conclusion, title = compute_verdict(open_count, open_blocking)
-
-        summary = verdict_summary(event, open_count, previous_count)
+        event, conclusion, title, summary = resolve_round_verdict(
+            open_count, open_blocking, previous_count, findings.timed_out
+        )
 
         if (findings.needs_verdict_review or SETTINGS.approval_disable) and not await already_reviewed(
             pr.repo, pr.number, pr.head_sha, marker
@@ -133,15 +156,18 @@ async def run_review_round(
             payload = build_verdict_review(pr.head_sha, findings.out_of_bounds, event, summary, marker)
             await post_review_or_warn(pr.repo, pr.number, payload, event)
 
-        logger.info("Resolving %d stale thread(s); %d open issue(s) remain.", len(stale_ids), open_count)
-        await resolve_threads(pr.repo, stale_ids)
+        stale_to_resolve = [] if findings.timed_out else stale_ids
+        logger.info("Resolving %d stale thread(s); %d open issue(s) remain.", len(stale_to_resolve), open_count)
+        await resolve_threads(pr.repo, stale_to_resolve)
 
         await complete_check_run(pr.repo, check_id, conclusion, title, summary)
         concluded = True
 
         return ReviewRoundResult(exit_code=0, diff=diff)
     except asyncio.CancelledError:
-        await complete_check_run(pr.repo, check_id, "cancelled", "Superseded", "The review job was cancelled.")
+        await complete_check_run(
+            pr.repo, check_id, CheckConclusion.CANCELLED, "Superseded", "The review job was cancelled."
+        )
         concluded = True
 
         return ReviewRoundResult(exit_code=1)
@@ -151,5 +177,5 @@ async def run_review_round(
 
         if not concluded:
             await complete_check_run(
-                pr.repo, check_id, "action_required", "Review failed", "The review run did not complete."
+                pr.repo, check_id, CheckConclusion.ACTION_REQUIRED, "Review failed", "The review run did not complete."
             )

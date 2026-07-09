@@ -1,8 +1,10 @@
 import logging
 from collections.abc import AsyncIterator
+from datetime import timedelta
 from io import StringIO
 from typing import Final
 
+import httpx
 from cursor_sdk import AsyncAgent, AsyncClient, CursorAgentError, LocalAgentOptions, ModelSelection
 
 from code_review.config import SETTINGS
@@ -12,18 +14,34 @@ from code_review.prompt import cursor_prompt
 logger = logging.getLogger("code_review.cursor")
 
 BRIDGE_LAUNCH_ATTEMPTS: Final[int] = 3
+BRIDGE_READ_TIMEOUT_MARGIN: Final[timedelta] = timedelta(minutes=1)
+BRIDGE_CONNECT_TIMEOUT: Final[timedelta] = timedelta(seconds=30)
+
+
+def bridge_client_timeout() -> httpx.Timeout | None:
+    """Cap the bridge read timeout just past the review budget so a silent agent never trips the SDK default."""
+
+    review_timeout = SETTINGS.review_timeout
+    if review_timeout is None:
+        return None
+
+    read_seconds = (review_timeout + BRIDGE_READ_TIMEOUT_MARGIN).total_seconds()
+
+    return httpx.Timeout(read_seconds, connect=BRIDGE_CONNECT_TIMEOUT.total_seconds())
 
 
 async def launch_bridge_with_retry() -> AsyncClient:
     """Launch the Cursor bridge, retrying the rare startup failure from a dash-leading callback token."""
 
+    client_timeout = bridge_client_timeout()
+
     for _ in range(BRIDGE_LAUNCH_ATTEMPTS - 1):
         try:
-            return await AsyncClient.launch_bridge()
+            return await AsyncClient.launch_bridge(client_timeout=client_timeout)
         except CursorAgentError as exc:
             logger.warning("Cursor bridge launch failed; retrying: %s", exc)
 
-    return await AsyncClient.launch_bridge()
+    return await AsyncClient.launch_bridge(client_timeout=client_timeout)
 
 
 async def run_agent(prompt: str, *, load_project_rules: bool = False) -> AsyncIterator[str]:

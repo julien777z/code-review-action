@@ -119,7 +119,7 @@ async def publish_finding(
     return FindingPublication.VERDICT
 
 
-async def collect_round_findings(
+async def publish_round_findings(
     pr: PullRequestContext,
     marker: str,
     get_findings: GetBackendFindings,
@@ -127,10 +127,10 @@ async def collect_round_findings(
     anchors: dict[str, tuple[set[int], set[int]]],
     unpatched: set[str],
     posted_keys: set[tuple[str, str]],
-) -> RoundFindings:
-    """Stream, deduplicate, cap, and publish findings for this review round."""
+    findings: RoundFindings,
+) -> None:
+    """Stream, deduplicate, cap, and publish findings into the round accumulator."""
 
-    findings = RoundFindings()
     seen_anchor_keys: set[tuple[str, int, DiffSide, str]] = set()
     seen_new_keys: set[tuple[str, str]] = set()
     low_count = 0
@@ -169,5 +169,31 @@ async def collect_round_findings(
         total_count += 1
         if finding.severity is Severity.LOW:
             low_count += 1
+
+
+async def collect_round_findings(
+    pr: PullRequestContext,
+    marker: str,
+    get_findings: GetBackendFindings,
+    inputs: ReviewInputs,
+    anchors: dict[str, tuple[set[int], set[int]]],
+    unpatched: set[str],
+    posted_keys: set[tuple[str, str]],
+) -> RoundFindings:
+    """Stream and publish findings for this review round, bounded by the review deadline."""
+
+    review_timeout = SETTINGS.review_timeout
+    deadline_seconds = review_timeout.total_seconds() if review_timeout is not None else None
+    findings = RoundFindings()
+
+    try:
+        async with asyncio.timeout(deadline_seconds) as review_deadline:
+            await publish_round_findings(pr, marker, get_findings, inputs, anchors, unpatched, posted_keys, findings)
+    except TimeoutError:
+        if not review_deadline.expired():
+            raise
+
+        logger.warning("Review hit the %s time limit; finalizing with the findings collected so far.", review_timeout)
+        findings.timed_out = True
 
     return findings
