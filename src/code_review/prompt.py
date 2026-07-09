@@ -123,19 +123,6 @@ def output_contract() -> str:
     )
 
 
-def time_budget_instruction() -> str:
-    """Warn the agent that the runner caps the review and keeps only findings already emitted."""
-
-    minutes = SETTINGS.review_timeout_minutes
-
-    return (
-        f"Hard time budget: the runner cuts the review off after about {minutes} minutes and keeps "
-        "only the findings you have already emitted. Work with urgency — prefer breadth across all "
-        "changed files over exhaustive depth on any one, do not re-read files you have finished, and "
-        "if time runs short, cover the remaining files with the bug and security lenses only."
-    )
-
-
 def review_instructions() -> str:
     """Compose the stable review instructions (skill + contract + rules + extra context) for the system turn."""
 
@@ -147,9 +134,6 @@ def review_instructions() -> str:
         load_skill(CODE_REVIEW_SKILL_RELATIVE),
         output_contract(),
     ]
-
-    if SETTINGS.review_timeout is not None:
-        sections.append(time_budget_instruction())
 
     if SETTINGS.enforce_project_rules:
         sections.append(project_rules_instruction())

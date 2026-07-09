@@ -1,7 +1,5 @@
 import re
 
-import pytest
-
 from code_review.models.pull_request import PostedFinding, ReviewInputs
 from code_review.models.severity import Severity
 from code_review.prompt import (
@@ -11,7 +9,6 @@ from code_review.prompt import (
     review_instructions,
     summary_instructions,
     summary_prompt,
-    time_budget_instruction,
 )
 
 
@@ -51,14 +48,17 @@ class TestReviewInstructions:
         assert "Pedantic nitpicks" in text
         assert "Calibrate severity by how likely the trigger is" in text
 
-    def test_streams_findings_incrementally(self) -> None:
-        """Test that the contract asks for incremental emission and drops global ordering."""
+    def test_streams_findings_incrementally_as_single_agent(self) -> None:
+        """Test that the contract asks for single-agent, file-by-file incremental emission without rushing."""
 
         text = review_instructions()
 
         assert "most-important-first" not in text
         assert "the moment you validate it" in text
-        assert "sub-agents" in text
+        assert "single agent, file by file" in text
+        assert "do **not** fan out to sub-agents" in text
+        assert "Hard time budget" not in text
+        assert "Work with urgency" not in text
 
     def test_includes_prompt_injection_safety(self) -> None:
         """Test that the instructions warn that pull request content is untrusted data."""
@@ -153,31 +153,6 @@ class TestReviewInstructions:
 
         assert "`medium`-severity optional suggestion" in text
         assert "`low`-severity optional suggestion" not in text
-
-
-class TestTimeBudgetInstruction:
-    """Test that the review is told its time budget only when a timeout is configured."""
-
-    def test_states_the_configured_minutes(self, mock_config) -> None:
-        """Test that the budget instruction names the configured minute limit."""
-
-        mock_config(review_timeout_minutes=15)
-        text = time_budget_instruction()
-
-        assert "Hard time budget" in text
-        assert "15 minutes" in text
-
-    @pytest.mark.parametrize(
-        ("minutes", "present"),
-        [(15, True), (None, False)],
-        ids=["enabled", "disabled"],
-    )
-    def test_appended_only_when_timeout_enabled(self, mock_config, minutes, present) -> None:
-        """Test that review_instructions carries the budget only when the timeout is set."""
-
-        mock_config(review_timeout_minutes=minutes)
-
-        assert ("Hard time budget" in review_instructions()) is present
 
 
 class TestExistingFindingsBlock:

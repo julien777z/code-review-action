@@ -245,7 +245,7 @@ with:
 | `review-drafts` | `true` | Review draft PRs |
 | `author-associations` | — | Allowlist of who may trigger; empty allows all |
 | `pr-number` | — | PR number for `workflow_dispatch` runs |
-| `review-timeout-minutes` | `15` | Cap on the review agent's runtime; the agent is told its budget and streams findings incrementally, so a cut-off keeps the findings emitted so far and notes it. `0` disables |
+| `review-timeout-minutes` | `15` | Cap on the review agent's runtime; the agent streams findings incrementally, so a cut-off keeps the findings emitted so far and notes it. `0` disables |
 
 ## Versioning
 

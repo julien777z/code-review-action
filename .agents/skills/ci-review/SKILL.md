@@ -17,12 +17,12 @@ The CI runner has already verified eligibility, fetched the diff (embedded in yo
 - In Step 3, **drop the prior-PRs lens** — it needs GitHub history you should not fetch. Keep the rules, bugs, history, and comments lenses.
 - In Step 4, **do not fetch existing comments** — the prompt already lists prior findings, so re-report any that still apply with the same path and title. **Do not cap or drop low findings yourself** — emit every finding that clears the severity bar and let the runner apply the low-findings cap.
 
+## Review as a single agent, file by file
+
+Do the review yourself as one agent — do **not** fan out to sub-agents. Take code-review's single-thread path: work through the changed files one at a time and apply the review lenses to each file in that one thread. Sub-agents each re-read the diff and rules, which multiplies the work and delays your first finding while you wait for them to return.
+
 ## Emit findings incrementally as JSONL
 
 The runner posts the review from the JSONL you stream (the exact line format follows this skill), not from inline comments. So, replacing code-review's single validate-then-post pass:
 
-- Emit each finding the moment you validate it — as a lens or a file completes, emit its findings on their own lines and move on. **Never** hold findings for a global ranking, sort, or dedup pass, and never wait until the review is complete to emit the first one. The runner deduplicates, orders, and caps, so partial progress is never wasted — if the run is cut off, every finding you already emitted is kept.
-
-## Parallel sub-agents
-
-If your runtime can launch sub-agents (a Cursor Agent tool, a Claude Task tool, or equivalent), fan the Step 3 lenses out as parallel sub-agents to cover a large PR quickly. Sub-agents **return** their findings to you; only you, the top-level agent, emit JSONL, and you emit each batch as soon as it returns. If sub-agents are unavailable, work file by file — apply the lenses to a file, emit its findings, then move to the next file.
+- Emit each finding the moment you validate it — as you finish each file, emit its findings on their own lines and move to the next file. **Never** hold findings for a global ranking, sort, or dedup pass, and never wait until the review is complete to emit the first one. The runner deduplicates, orders, and caps, so partial progress is never wasted — if the run is cut off, every finding you already emitted is kept.
