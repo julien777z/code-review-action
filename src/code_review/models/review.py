@@ -44,6 +44,7 @@ class RoundFindings(BaseModel):
     severity_by_key: dict[tuple[str, str], Severity] = Field(default_factory=dict)
     out_of_bounds: list[Finding] = Field(default_factory=list)
     posted_any: bool = False
+    published_count: int = 0
     timed_out: bool = False
 
     @property
@@ -61,7 +62,9 @@ class RoundFindings(BaseModel):
     def track_publication(
         self, finding: Finding, publication: FindingPublication
     ) -> None:
-        """Record where a finding was published."""
+        """Record where a finding was published and count it against the total cap."""
+
+        self.published_count += 1
 
         match publication:
             case FindingPublication.INLINE:

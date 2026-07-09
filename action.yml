@@ -65,7 +65,7 @@ inputs:
     description: Lowest severity worth posting and counting — critical, high, medium, or low.
     default: low
   low-findings-cap:
-    description: Maximum number of low-severity findings to post per review.
+    description: Maximum number of low-severity findings to post per review; the runner selects the most important lows once the review stream ends.
     default: "3"
   max-findings:
     description: Overall cap on inline comments per review (empty = uncapped).
@@ -89,7 +89,7 @@ inputs:
     description: PR number to review on a workflow_dispatch run.
     default: ""
   review-timeout-minutes:
-    description: Overall cap on the review agent's runtime in minutes; findings already streamed are kept and the verdict notes the cut-off. Set to 0 to disable.
+    description: Overall cap on the review agent's runtime in minutes; the agent is told its budget and streams findings incrementally, so a cut-off keeps the findings emitted so far and the verdict notes it. Set to 0 to disable.
     default: "15"
 
 runs:

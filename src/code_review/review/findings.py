@@ -9,7 +9,7 @@ from code_review.config import SETTINGS
 from code_review.errors import ReviewBackendError
 from code_review.github import post_comment
 from code_review.models.backend import GetBackendFindings
-from code_review.models.findings import Finding
+from code_review.models.findings import Finding, FindingCategory
 from code_review.models.pull_request import PullRequestContext, ReviewInputs
 from code_review.models.review import FindingPublication, RoundFindings
 from code_review.models.severity import DiffSide, Severity
@@ -19,6 +19,17 @@ logger = logging.getLogger("code_review.review.findings")
 
 REVIEW_BACKEND_ATTEMPTS: Final[int] = 3
 REVIEW_RETRY_BACKOFF: Final[timedelta] = timedelta(seconds=2)
+
+LOW_CATEGORY_PRIORITY: Final[dict[FindingCategory, int]] = {
+    FindingCategory.SECURITY: 0,
+    FindingCategory.BUG: 1,
+    FindingCategory.PERFORMANCE: 2,
+    FindingCategory.PROJECT_RULE: 3,
+    FindingCategory.TESTING: 4,
+    FindingCategory.DOCUMENTATION: 5,
+    FindingCategory.CODE_SIMPLIFICATION: 6,
+    FindingCategory.OTHER: 7,
+}
 
 
 async def stream_findings_with_retry(
@@ -59,16 +70,16 @@ def finding_kept(finding: Finding) -> bool:
     return finding.severity.meets(SETTINGS.min_severity) and path_allowed(finding.path)
 
 
-def cap_decision(finding: Finding, low_count: int, total_count: int) -> bool:
-    """Return whether to post a finding under the running caps."""
+def total_cap_reached(published_count: int) -> bool:
+    """Return whether the total-findings cap is already met."""
 
-    if SETTINGS.max_findings is not None and total_count >= SETTINGS.max_findings:
-        return False
+    return SETTINGS.max_findings is not None and published_count >= SETTINGS.max_findings
 
-    if finding.severity is Severity.LOW and low_count >= SETTINGS.low_findings_cap:
-        return False
 
-    return True
+def low_finding_rank(finding: Finding, arrival_index: int) -> tuple[int, int]:
+    """Rank a buffered low by category importance, then by arrival order."""
+
+    return LOW_CATEGORY_PRIORITY.get(finding.category, len(LOW_CATEGORY_PRIORITY)), arrival_index
 
 
 def finding_anchors(finding: Finding, anchors: dict[str, tuple[set[int], set[int]]]) -> bool:
@@ -128,13 +139,12 @@ async def publish_round_findings(
     unpatched: set[str],
     posted_keys: set[tuple[str, str]],
     findings: RoundFindings,
+    deferred_lows: list[Finding],
 ) -> None:
-    """Stream, deduplicate, cap, and publish findings into the round accumulator."""
+    """Stream and deduplicate findings, publishing non-lows immediately and buffering lows for the flush."""
 
     seen_anchor_keys: set[tuple[str, int, DiffSide, str]] = set()
     seen_new_keys: set[tuple[str, str]] = set()
-    low_count = 0
-    total_count = 0
 
     async for finding in stream_findings_with_retry(get_findings, inputs):
         if not finding_kept(finding):
@@ -158,17 +168,40 @@ async def publish_round_findings(
         if title_key in seen_new_keys:
             continue
 
-        if not cap_decision(finding, low_count, total_count):
+        seen_new_keys.add(title_key)
+
+        if finding.severity is Severity.LOW:
+            deferred_lows.append(finding)
+
+            continue
+
+        if total_cap_reached(findings.published_count):
             continue
 
         publication = await publish_finding(pr, marker, finding, anchors)
         findings.track_current(title_key, finding)
         findings.track_publication(finding, publication)
-        seen_new_keys.add(title_key)
 
-        total_count += 1
-        if finding.severity is Severity.LOW:
-            low_count += 1
+
+async def publish_deferred_lows(
+    pr: PullRequestContext,
+    marker: str,
+    deferred_lows: list[Finding],
+    anchors: dict[str, tuple[set[int], set[int]]],
+    findings: RoundFindings,
+) -> None:
+    """Publish the most important buffered low findings within the low and total caps."""
+
+    low_slots = SETTINGS.low_findings_cap
+    if SETTINGS.max_findings is not None:
+        low_slots = min(low_slots, max(0, SETTINGS.max_findings - findings.published_count))
+
+    ranked = sorted(enumerate(deferred_lows), key=lambda item: low_finding_rank(item[1], item[0]))
+
+    for _, finding in ranked[:low_slots]:
+        publication = await publish_finding(pr, marker, finding, anchors)
+        findings.track_current(finding_title_key(finding), finding)
+        findings.track_publication(finding, publication)
 
 
 async def collect_round_findings(
@@ -185,15 +218,20 @@ async def collect_round_findings(
     review_timeout = SETTINGS.review_timeout
     deadline_seconds = review_timeout.total_seconds() if review_timeout is not None else None
     findings = RoundFindings()
+    deferred_lows: list[Finding] = []
 
     try:
         async with asyncio.timeout(deadline_seconds) as review_deadline:
-            await publish_round_findings(pr, marker, get_findings, inputs, anchors, unpatched, posted_keys, findings)
+            await publish_round_findings(
+                pr, marker, get_findings, inputs, anchors, unpatched, posted_keys, findings, deferred_lows
+            )
     except TimeoutError:
         if not review_deadline.expired():
             raise
 
         logger.warning("Review hit the %s time limit; finalizing with the findings collected so far.", review_timeout)
         findings.timed_out = True
+
+    await publish_deferred_lows(pr, marker, deferred_lows, anchors, findings)
 
     return findings
