@@ -34,6 +34,28 @@ async def post_review_or_warn(repo: str, pr_number: int, payload: ReviewPayload,
         logger.warning("Could not post the %s review; the check run still records the verdict.", event)
 
 
+def resolve_round_verdict(
+    open_count: int, open_blocking: bool, previous_count: int, timed_out: bool
+) -> tuple[str, str, str, str]:
+    """Return the review event, check conclusion, title, and summary for this round."""
+
+    if SETTINGS.approval_disable:
+        event, conclusion, title = "COMMENT", "neutral", ""
+    elif timed_out and not open_blocking:
+        event, conclusion, title = "COMMENT", "neutral", "Review timed out"
+    else:
+        event, conclusion, title = compute_verdict(open_count, open_blocking)
+
+    summary = verdict_summary(event, open_count, previous_count)
+    if timed_out:
+        summary = (
+            f"{summary}\n\nThe review reached its {SETTINGS.review_timeout_minutes}-minute time limit and may be "
+            "incomplete; the findings shown reflect only what was reviewed before the limit."
+        )
+
+    return event, conclusion, title, summary
+
+
 async def note_diff_too_large(pr: PullRequestContext, marker: str) -> ReviewRoundResult:
     """Post a note that the diff is too large to auto-review."""
 
@@ -120,19 +142,9 @@ async def run_review_round(
         )
 
         previous_count = len(open_existing)
-        if SETTINGS.approval_disable:
-            event, conclusion, title = "COMMENT", "neutral", ""
-        elif findings.timed_out and not open_blocking:
-            event, conclusion, title = "COMMENT", "neutral", "Review timed out"
-        else:
-            event, conclusion, title = compute_verdict(open_count, open_blocking)
-
-        summary = verdict_summary(event, open_count, previous_count)
-        if findings.timed_out:
-            summary = (
-                f"{summary}\n\nThe review reached its {SETTINGS.review_timeout_minutes}-minute time limit and may be "
-                "incomplete; the findings shown reflect only what was reviewed before the limit."
-            )
+        event, conclusion, title, summary = resolve_round_verdict(
+            open_count, open_blocking, previous_count, findings.timed_out
+        )
 
         if (findings.needs_verdict_review or SETTINGS.approval_disable) and not await already_reviewed(
             pr.repo, pr.number, pr.head_sha, marker

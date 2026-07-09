@@ -119,6 +119,58 @@ async def publish_finding(
     return FindingPublication.VERDICT
 
 
+async def publish_round_findings(
+    pr: PullRequestContext,
+    marker: str,
+    get_findings: GetBackendFindings,
+    inputs: ReviewInputs,
+    anchors: dict[str, tuple[set[int], set[int]]],
+    unpatched: set[str],
+    posted_keys: set[tuple[str, str]],
+    findings: RoundFindings,
+) -> None:
+    """Stream, deduplicate, cap, and publish findings into the round accumulator."""
+
+    seen_anchor_keys: set[tuple[str, int, DiffSide, str]] = set()
+    seen_new_keys: set[tuple[str, str]] = set()
+    low_count = 0
+    total_count = 0
+
+    async for finding in stream_findings_with_retry(get_findings, inputs):
+        if not finding_kept(finding):
+            continue
+
+        anchor_key = finding_anchor_key(finding)
+        if anchor_key in seen_anchor_keys:
+            continue
+
+        seen_anchor_keys.add(anchor_key)
+        title_key = finding_title_key(finding)
+
+        if not is_postable(finding, anchors, unpatched):
+            continue
+
+        if title_key in posted_keys:
+            findings.track_current(title_key, finding)
+
+            continue
+
+        if title_key in seen_new_keys:
+            continue
+
+        if not cap_decision(finding, low_count, total_count):
+            continue
+
+        publication = await publish_finding(pr, marker, finding, anchors)
+        findings.track_current(title_key, finding)
+        findings.track_publication(finding, publication)
+        seen_new_keys.add(title_key)
+
+        total_count += 1
+        if finding.severity is Severity.LOW:
+            low_count += 1
+
+
 async def collect_round_findings(
     pr: PullRequestContext,
     marker: str,
@@ -128,57 +180,23 @@ async def collect_round_findings(
     unpatched: set[str],
     posted_keys: set[tuple[str, str]],
 ) -> RoundFindings:
-    """Stream, deduplicate, cap, and publish findings for this review round."""
-
-    findings = RoundFindings()
-    seen_anchor_keys: set[tuple[str, int, DiffSide, str]] = set()
-    seen_new_keys: set[tuple[str, str]] = set()
-    low_count = 0
-    total_count = 0
+    """Stream and publish findings for this review round, bounded by the review deadline."""
 
     review_timeout = SETTINGS.review_timeout
     deadline_seconds = review_timeout.total_seconds() if review_timeout is not None else None
 
+    # The accumulator is owned here, not returned by the loop, so findings already
+    # published survive when the deadline cancels the loop mid-stream.
+    findings = RoundFindings()
+
     try:
         async with asyncio.timeout(deadline_seconds) as review_deadline:
-            async for finding in stream_findings_with_retry(get_findings, inputs):
-                if not finding_kept(finding):
-                    continue
-
-                anchor_key = finding_anchor_key(finding)
-                if anchor_key in seen_anchor_keys:
-                    continue
-
-                seen_anchor_keys.add(anchor_key)
-                title_key = finding_title_key(finding)
-
-                if not is_postable(finding, anchors, unpatched):
-                    continue
-
-                if title_key in posted_keys:
-                    findings.track_current(title_key, finding)
-
-                    continue
-
-                if title_key in seen_new_keys:
-                    continue
-
-                if not cap_decision(finding, low_count, total_count):
-                    continue
-
-                publication = await publish_finding(pr, marker, finding, anchors)
-                findings.track_current(title_key, finding)
-                findings.track_publication(finding, publication)
-                seen_new_keys.add(title_key)
-
-                total_count += 1
-                if finding.severity is Severity.LOW:
-                    low_count += 1
+            await publish_round_findings(pr, marker, get_findings, inputs, anchors, unpatched, posted_keys, findings)
     except TimeoutError:
         if not review_deadline.expired():
             raise
 
-        logger.warning("Review hit the %s time limit; finalizing with %d finding(s) so far.", review_timeout, total_count)
+        logger.warning("Review hit the %s time limit; finalizing with the findings collected so far.", review_timeout)
         findings.timed_out = True
 
     return findings
