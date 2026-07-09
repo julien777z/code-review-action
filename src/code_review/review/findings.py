@@ -130,6 +130,20 @@ async def publish_finding(
     return FindingPublication.VERDICT
 
 
+async def publish_and_track(
+    pr: PullRequestContext,
+    marker: str,
+    finding: Finding,
+    anchors: dict[str, tuple[set[int], set[int]]],
+    findings: RoundFindings,
+) -> None:
+    """Publish a finding and record it as current and published in the round accumulator."""
+
+    publication = await publish_finding(pr, marker, finding, anchors)
+    findings.track_current(finding_title_key(finding), finding)
+    findings.track_publication(finding, publication)
+
+
 async def publish_round_findings(
     pr: PullRequestContext,
     marker: str,
@@ -175,9 +189,7 @@ async def publish_round_findings(
         if total_cap_reached(findings.published_count):
             continue
 
-        publication = await publish_finding(pr, marker, finding, anchors)
-        findings.track_current(title_key, finding)
-        findings.track_publication(finding, publication)
+        await publish_and_track(pr, marker, finding, anchors, findings)
 
 
 async def publish_deferred_lows(
@@ -204,9 +216,7 @@ async def publish_deferred_lows(
         if title_key in findings.current_keys:
             continue
 
-        publication = await publish_finding(pr, marker, finding, anchors)
-        findings.track_current(title_key, finding)
-        findings.track_publication(finding, publication)
+        await publish_and_track(pr, marker, finding, anchors, findings)
         posted += 1
 
 

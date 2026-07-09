@@ -202,7 +202,7 @@ class TestCollectRoundFindings:
     def test_capped_finding_is_not_current(
         self,
         mock_config,
-        monkeypatch,
+        post_comment_mock,
         pull_request_factory,
         review_inputs_factory,
         stream_findings_factory,
@@ -211,7 +211,6 @@ class TestCollectRoundFindings:
         """Test that a capped finding cannot affect thread reconciliation or blocking state."""
 
         mock_config(max_findings=0)
-        monkeypatch.setattr("code_review.review.findings.post_comment", AsyncMock(return_value=True))
         finding = finding_factory(path="src/app.py", line=10, severity=Severity.CRITICAL)
 
         result = asyncio.run(
@@ -261,12 +260,10 @@ class TestDeferredLows:
     """Test that low findings are buffered during the stream and flushed under the caps at the end."""
 
     def test_lows_post_after_non_lows(
-        self, mock_config, monkeypatch, pull_request_factory, review_inputs_factory, stream_findings_factory, finding_factory
+        self, mock_config, post_comment_mock, pull_request_factory, review_inputs_factory, stream_findings_factory, finding_factory
     ) -> None:
         """Test that a low arriving before a medium still posts after it, proving the buffer defers lows."""
 
-        post_comment = AsyncMock(return_value=True)
-        monkeypatch.setattr("code_review.review.findings.post_comment", post_comment)
         low = finding_factory(line=10, severity=Severity.LOW, title="Low first")
         medium = finding_factory(line=20, severity=Severity.MEDIUM, title="Medium second")
 
@@ -282,17 +279,15 @@ class TestDeferredLows:
             )
         )
 
-        assert posted_titles(post_comment) == ["Medium second", "Low first"]
+        assert posted_titles(post_comment_mock) == ["Medium second", "Low first"]
         assert result.current_keys == {("src/app.py", "Low first"), ("src/app.py", "Medium second")}
 
     def test_important_low_beats_earlier_low_under_cap(
-        self, mock_config, monkeypatch, pull_request_factory, review_inputs_factory, stream_findings_factory, finding_factory
+        self, mock_config, post_comment_mock, pull_request_factory, review_inputs_factory, stream_findings_factory, finding_factory
     ) -> None:
         """Test that a later high-priority-category low outranks an earlier one when the low cap is one."""
 
         mock_config(low_findings_cap=1)
-        post_comment = AsyncMock(return_value=True)
-        monkeypatch.setattr("code_review.review.findings.post_comment", post_comment)
         early = finding_factory(line=10, severity=Severity.LOW, category=FindingCategory.CODE_SIMPLIFICATION, title="Simplify")
         late = finding_factory(line=20, severity=Severity.LOW, category=FindingCategory.BUG, title="Bug low")
 
@@ -308,17 +303,15 @@ class TestDeferredLows:
             )
         )
 
-        assert posted_titles(post_comment) == ["Bug low"]
+        assert posted_titles(post_comment_mock) == ["Bug low"]
         assert result.current_keys == {("src/app.py", "Bug low")}
 
     def test_lows_share_the_total_cap_budget(
-        self, mock_config, monkeypatch, pull_request_factory, review_inputs_factory, stream_findings_factory, finding_factory
+        self, mock_config, post_comment_mock, pull_request_factory, review_inputs_factory, stream_findings_factory, finding_factory
     ) -> None:
         """Test that lows are dropped when non-lows already fill the total-findings cap."""
 
         mock_config(max_findings=2)
-        post_comment = AsyncMock(return_value=True)
-        monkeypatch.setattr("code_review.review.findings.post_comment", post_comment)
         findings = [
             finding_factory(line=10, severity=Severity.MEDIUM, title="M1"),
             finding_factory(line=20, severity=Severity.MEDIUM, title="M2"),
@@ -337,16 +330,14 @@ class TestDeferredLows:
             )
         )
 
-        assert posted_titles(post_comment) == ["M1", "M2"]
+        assert posted_titles(post_comment_mock) == ["M1", "M2"]
         assert result.current_keys == {("src/app.py", "M1"), ("src/app.py", "M2")}
 
     def test_low_matching_existing_thread_is_tracked_not_buffered(
-        self, mock_config, monkeypatch, pull_request_factory, review_inputs_factory, stream_findings_factory, finding_factory
+        self, mock_config, post_comment_mock, pull_request_factory, review_inputs_factory, stream_findings_factory, finding_factory
     ) -> None:
         """Test that a low matching an existing thread is tracked current immediately and never posts a new comment."""
 
-        post_comment = AsyncMock(return_value=True)
-        monkeypatch.setattr("code_review.review.findings.post_comment", post_comment)
         low = finding_factory(line=10, severity=Severity.LOW, title="Existing")
 
         result = asyncio.run(
@@ -361,17 +352,15 @@ class TestDeferredLows:
             )
         )
 
-        post_comment.assert_not_awaited()
+        post_comment_mock.assert_not_awaited()
         assert result.current_keys == {("src/app.py", "Existing")}
         assert result.severity_by_key[("src/app.py", "Existing")] is Severity.LOW
 
     def test_later_non_low_supersedes_earlier_same_title_low(
-        self, mock_config, monkeypatch, pull_request_factory, review_inputs_factory, stream_findings_factory, finding_factory
+        self, mock_config, post_comment_mock, pull_request_factory, review_inputs_factory, stream_findings_factory, finding_factory
     ) -> None:
         """Test that a non-low emitted after a same-title buffered low still publishes and wins the title."""
 
-        post_comment = AsyncMock(return_value=True)
-        monkeypatch.setattr("code_review.review.findings.post_comment", post_comment)
         low = finding_factory(line=10, severity=Severity.LOW, category=FindingCategory.CODE_SIMPLIFICATION, title="Shared")
         medium = finding_factory(line=20, severity=Severity.MEDIUM, title="Shared")
 
@@ -387,17 +376,15 @@ class TestDeferredLows:
             )
         )
 
-        assert posted_titles(post_comment) == ["Shared"]
+        assert posted_titles(post_comment_mock) == ["Shared"]
         assert result.severity_by_key[("src/app.py", "Shared")] is Severity.MEDIUM
 
     def test_dropped_finding_does_not_claim_its_title(
-        self, mock_config, monkeypatch, pull_request_factory, review_inputs_factory, stream_findings_factory, finding_factory
+        self, mock_config, post_comment_mock, pull_request_factory, review_inputs_factory, stream_findings_factory, finding_factory
     ) -> None:
         """Test that a finding dropped by the total cap does not block a later distinct finding sharing its title."""
 
         mock_config(max_findings=1)
-        post_comment = AsyncMock(return_value=True)
-        monkeypatch.setattr("code_review.review.findings.post_comment", post_comment)
         first = finding_factory(line=10, severity=Severity.MEDIUM, title="Kept")
         dropped = finding_factory(line=20, severity=Severity.MEDIUM, title="Contested")
 
@@ -413,16 +400,14 @@ class TestDeferredLows:
             )
         )
 
-        assert posted_titles(post_comment) == ["Kept"]
+        assert posted_titles(post_comment_mock) == ["Kept"]
         assert ("src/app.py", "Contested") not in result.current_keys
 
     def test_buffered_lows_dedupe_by_title(
-        self, mock_config, monkeypatch, pull_request_factory, review_inputs_factory, stream_findings_factory, finding_factory
+        self, mock_config, post_comment_mock, pull_request_factory, review_inputs_factory, stream_findings_factory, finding_factory
     ) -> None:
         """Test that two buffered lows sharing a title on different lines post only once."""
 
-        post_comment = AsyncMock(return_value=True)
-        monkeypatch.setattr("code_review.review.findings.post_comment", post_comment)
         first = finding_factory(line=10, severity=Severity.LOW, title="Duplicate")
         second = finding_factory(line=20, severity=Severity.LOW, title="Duplicate")
 
@@ -438,7 +423,7 @@ class TestDeferredLows:
             )
         )
 
-        assert posted_titles(post_comment) == ["Duplicate"]
+        assert posted_titles(post_comment_mock) == ["Duplicate"]
         assert result.current_keys == {("src/app.py", "Duplicate")}
 
 
@@ -448,7 +433,7 @@ class TestCollectRoundFindingsTimeout:
     def test_timeout_keeps_partial_findings_and_cleans_up(
         self,
         mock_config,
-        monkeypatch,
+        post_comment_mock,
         override_review_timeout,
         pull_request_factory,
         review_inputs_factory,
@@ -458,7 +443,6 @@ class TestCollectRoundFindingsTimeout:
         """Test that hitting the limit marks the round timed out, keeps streamed findings, and runs cleanup."""
 
         override_review_timeout(timedelta(seconds=0.1))
-        monkeypatch.setattr("code_review.review.findings.post_comment", AsyncMock(return_value=True))
         finding = finding_factory(path="src/app.py", line=10, title="Streamed")
         get_findings, state = blocking_stream_factory([finding])
 
@@ -481,7 +465,7 @@ class TestCollectRoundFindingsTimeout:
     def test_timeout_flushes_top_low_after_streamed_non_low(
         self,
         mock_config,
-        monkeypatch,
+        post_comment_mock,
         override_review_timeout,
         pull_request_factory,
         review_inputs_factory,
@@ -492,8 +476,6 @@ class TestCollectRoundFindingsTimeout:
 
         mock_config(low_findings_cap=1)
         override_review_timeout(timedelta(seconds=0.1))
-        post_comment = AsyncMock(return_value=True)
-        monkeypatch.setattr("code_review.review.findings.post_comment", post_comment)
         medium = finding_factory(line=10, severity=Severity.MEDIUM, title="Medium")
         low_bug = finding_factory(line=20, severity=Severity.LOW, category=FindingCategory.BUG, title="Bug low")
         low_simplify = finding_factory(
@@ -515,13 +497,13 @@ class TestCollectRoundFindingsTimeout:
 
         assert result.timed_out is True
         assert state["cleaned_up"] is True
-        assert posted_titles(post_comment) == ["Medium", "Bug low"]
+        assert posted_titles(post_comment_mock) == ["Medium", "Bug low"]
         assert result.current_keys == {("src/app.py", "Medium"), ("src/app.py", "Bug low")}
 
     def test_disabled_timeout_drains_stream(
         self,
         mock_config,
-        monkeypatch,
+        post_comment_mock,
         override_review_timeout,
         pull_request_factory,
         review_inputs_factory,
@@ -531,7 +513,6 @@ class TestCollectRoundFindingsTimeout:
         """Test that a disabled timeout leaves the round un-flagged and drains the whole stream."""
 
         override_review_timeout(None)
-        monkeypatch.setattr("code_review.review.findings.post_comment", AsyncMock(return_value=True))
         finding = finding_factory(path="src/app.py", line=10, title="Streamed")
 
         result = asyncio.run(
