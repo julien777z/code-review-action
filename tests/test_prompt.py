@@ -32,18 +32,18 @@ class TestReviewInstructions:
         assert "reliability|maintainability" not in text
         assert '"severity"' in text
 
-    def test_embeds_ci_runner_skill_variant(self) -> None:
-        """Test that the CI runner skill variant is embedded and the interactive-only steps are absent."""
+    def test_embeds_ci_review_adaptation_and_generic_skill(self) -> None:
+        """Test that the ci-review adaptation and the generic code-review skill it calls are both embedded."""
 
         text = review_instructions()
 
-        assert "CI runner context" in text
         assert "read context only" in text
-        assert "Step 1 — Eligibility" not in text
-        assert "Post one inline review" not in text
+        assert "The runner owns the GitHub work" in text
+        assert "Step 1 — Eligibility" in text
+        assert "GitHub tools — pick by runner" in text
 
     def test_embeds_shared_review_criteria(self) -> None:
-        """Test that the single-source severity rubric and false positives are embedded alongside the CI variant."""
+        """Test that the generic skill's severity rubric and false positives reach the CI prompt."""
 
         text = review_instructions()
 

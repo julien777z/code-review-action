@@ -8,8 +8,8 @@ from code_review.config import CONFIG, SETTINGS
 from code_review.models.pull_request import PullRequestContext, ReviewInputs
 from code_review.models.severity import Severity
 
-CODE_REVIEW_SKILL_RELATIVE: Final[str] = ".agents/skills/code-review/CI_REVIEW.md"
-CODE_REVIEW_RUBRIC_RELATIVE: Final[str] = ".agents/skills/code-review/RUBRIC.md"
+CI_REVIEW_SKILL_RELATIVE: Final[str] = ".agents/skills/ci-review/SKILL.md"
+CODE_REVIEW_SKILL_RELATIVE: Final[str] = ".agents/skills/code-review/SKILL.md"
 CODE_SIMPLIFY_REVIEW_SKILL_RELATIVE: Final[str] = ".agents/skills/code-simplify/REVIEW_ONLY.md"
 
 PROMPT_SAFETY: Final[str] = (
@@ -140,10 +140,11 @@ def review_instructions() -> str:
     """Compose the stable review instructions (skill + contract + rules + extra context) for the system turn."""
 
     sections = [
-        "Follow your `code-review` skill to review the pull request below.",
+        "Review the pull request below using your `ci-review` skill, which adapts the `code-review` "
+        "skill that follows it for this CI runner.",
         PROMPT_SAFETY,
+        load_skill(CI_REVIEW_SKILL_RELATIVE),
         load_skill(CODE_REVIEW_SKILL_RELATIVE),
-        load_skill(CODE_REVIEW_RUBRIC_RELATIVE),
         output_contract(),
     ]
 
