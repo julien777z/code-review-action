@@ -11,6 +11,12 @@ from anthropic.types.beta import (
     BetaManagedAgentsGitHubRepositoryResourceParams,
     BetaUnrestrictedNetworkParam,
 )
+from anthropic.types.beta.sessions import (
+    BetaManagedAgentsEventParams,
+    BetaManagedAgentsTextBlockParam,
+    BetaManagedAgentsUserInterruptEventParams,
+    BetaManagedAgentsUserMessageEventParams,
+)
 
 from code_review.config import SETTINGS
 from code_review.errors import ReviewBackendError
@@ -90,8 +96,14 @@ async def session_turn_text(
 ) -> AsyncIterator[str]:
     """Send one user turn into the session, interrupting any in-flight turn when asked, and stream the reply."""
 
-    message_event = {"type": "user.message", "content": [{"type": "text", "text": message}]}
-    events = [{"type": "user.interrupt"}, message_event] if interrupting else [message_event]
+    message_event = BetaManagedAgentsUserMessageEventParams(
+        type="user.message", content=[BetaManagedAgentsTextBlockParam(type="text", text=message)]
+    )
+    events: list[BetaManagedAgentsEventParams] = (
+        [BetaManagedAgentsUserInterruptEventParams(type="user.interrupt"), message_event]
+        if interrupting
+        else [message_event]
+    )
 
     try:
         async with await client.beta.sessions.events.stream(

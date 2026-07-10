@@ -297,10 +297,9 @@ async def collect_round_findings(
             stream_findings_with_retry(open_review_findings, inputs), review_stats
         )
 
+        review_scope = asyncio.timeout(soft_deadline.total_seconds() if soft_deadline is not None else None)
         try:
-            async with asyncio.timeout(
-                soft_deadline.total_seconds() if soft_deadline is not None else None
-            ) as review_scope:
+            async with review_scope:
                 await publish_round_findings(pr, marker, review_stream, state)
         except TimeoutError:
             if not review_scope.expired():
