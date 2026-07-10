@@ -6,9 +6,27 @@ from pydantic import ValidationError
 from code_review.config import CONFIG
 from code_review.errors import ReviewBackendError
 from code_review.models.findings import Finding, FindingCategory, RawFinding
+from code_review.models.review import FlushCompletion
 from code_review.models.severity import DiffSide, Severity
 
 UNPARSEABLE_SNIPPET_CHARS: Final[int] = 500
+
+
+async def capture_flush_marker(chunks: AsyncIterator[str], completion: FlushCompletion) -> AsyncIterator[str]:
+    """Pass text chunks through while recording whether a completion-marker line appears."""
+
+    buffer = ""
+
+    async for chunk in chunks:
+        buffer += chunk
+        *lines, buffer = buffer.split("\n")
+        if any(line.strip() == CONFIG["flush_complete_marker"] for line in lines):
+            completion.complete = True
+
+        yield chunk
+
+    if buffer.strip() == CONFIG["flush_complete_marker"]:
+        completion.complete = True
 
 
 def normalize_raw(raw: RawFinding) -> Finding | None:
@@ -82,7 +100,12 @@ async def iter_findings(chunks: AsyncIterator[str]) -> AsyncIterator[Finding]:
 
     stripped = [line.strip() for line in full.splitlines()]
     has_finding_shaped_line = any(line.startswith(("{", "[")) for line in stripped)
-    if CONFIG["no_findings_marker"] in stripped and not has_finding_shaped_line:
+    no_findings_markers = (
+        CONFIG["no_findings_marker"],
+        CONFIG["flush_complete_marker"],
+        CONFIG["flush_partial_marker"],
+    )
+    if any(marker in stripped for marker in no_findings_markers) and not has_finding_shaped_line:
         return
 
     if full.strip():

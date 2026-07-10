@@ -126,6 +126,22 @@ def output_contract() -> str:
     )
 
 
+def flush_prompt() -> str:
+    """Compose the wrap-up turn that makes the agent emit its unemitted findings immediately."""
+
+    return (
+        "Time is up. Stop reviewing immediately — no further investigation, no tool calls, no "
+        "commentary. Emit now, as JSONL lines only (one finding per physical line, exactly the "
+        "schema already given), every finding you have already identified but not yet emitted. "
+        f"If you have none, output exactly `{CONFIG['no_findings_marker']}` on its own line. "
+        f"After the findings (or the `{CONFIG['no_findings_marker']}` line), output exactly one "
+        f"final line: `{CONFIG['flush_complete_marker']}` if you had already finished reviewing "
+        "every changed file in the diff before this message, otherwise "
+        f"`{CONFIG['flush_partial_marker']}`. Output `{CONFIG['flush_complete_marker']}` only when "
+        "that is strictly true."
+    )
+
+
 def review_instructions() -> str:
     """Compose the stable review instructions (skill + contract + rules + extra context) for the system turn."""
 

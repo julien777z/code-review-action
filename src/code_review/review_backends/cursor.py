@@ -1,21 +1,36 @@
+import asyncio
 import logging
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import timedelta
 from io import StringIO
 from typing import Final
 
 import httpx
-from cursor_sdk import AsyncAgent, AsyncClient, CursorAgentError, LocalAgentOptions, ModelSelection
+from cursor_sdk import (
+    AgentBusyError,
+    AsyncAgent,
+    AsyncClient,
+    AsyncRun,
+    CursorAgentError,
+    LocalAgentOptions,
+    ModelSelection,
+    UnsupportedRunOperationError,
+)
 
 from code_review.config import SETTINGS
+from code_review.models.backend import ReviewSessionStreams
 from code_review.models.pull_request import PullRequestContext, ReviewInputs
-from code_review.prompt import cursor_prompt
+from code_review.prompt import cursor_prompt, flush_prompt
 
 logger = logging.getLogger("code_review.cursor")
 
 BRIDGE_LAUNCH_ATTEMPTS: Final[int] = 3
 BRIDGE_READ_TIMEOUT_MARGIN: Final[timedelta] = timedelta(minutes=1)
 BRIDGE_CONNECT_TIMEOUT: Final[timedelta] = timedelta(seconds=30)
+
+FLUSH_SEND_ATTEMPTS: Final[int] = 5
+FLUSH_SEND_RETRY_DELAY: Final[timedelta] = timedelta(seconds=0.5)
 
 
 def bridge_client_timeout() -> httpx.Timeout | None:
@@ -44,8 +59,8 @@ async def launch_bridge_with_retry() -> AsyncClient:
     return await AsyncClient.launch_bridge(client_timeout=client_timeout)
 
 
-async def run_agent(prompt: str, *, load_project_rules: bool = False) -> AsyncIterator[str]:
-    """Launch a local Cursor agent on the standard variant and stream its reply text in chunks."""
+async def create_agent(*, load_project_rules: bool) -> AsyncAgent:
+    """Launch the bridge and create a local Cursor agent on the standard model variant."""
 
     client = await launch_bridge_with_retry()
 
@@ -62,9 +77,66 @@ async def run_agent(prompt: str, *, load_project_rules: bool = False) -> AsyncIt
     )
 
     local = LocalAgentOptions(setting_sources=["project"] if load_project_rules else [])
-    agent = await AsyncAgent.create(
+
+    return await AsyncAgent.create(
         client=client, model=model_selection, api_key=SETTINGS.cursor_api_key, local=local
     )
+
+
+async def interrupt_run(run: AsyncRun) -> None:
+    """Cancel an in-flight run, tolerating one that already reached a terminal status."""
+
+    try:
+        await run.cancel()
+    except UnsupportedRunOperationError:
+        logger.info("The review run had already finished; flushing without cancellation.")
+
+
+async def send_flush_turn(agent: AsyncAgent) -> AsyncRun:
+    """Send the wrap-up turn, waiting out the brief window where the cancelled run still holds the agent."""
+
+    for _ in range(FLUSH_SEND_ATTEMPTS - 1):
+        try:
+            return await agent.send(flush_prompt())
+        except AgentBusyError:
+            logger.info("Cursor agent is still busy after cancellation; retrying the flush turn.")
+
+            await asyncio.sleep(FLUSH_SEND_RETRY_DELAY.total_seconds())
+
+    return await agent.send(flush_prompt())
+
+
+@asynccontextmanager
+async def review_session(pr: PullRequestContext, inputs: ReviewInputs) -> AsyncIterator[ReviewSessionStreams]:
+    """Open a Cursor agent review session whose in-flight reply can be interrupted and flushed."""
+
+    agent = await create_agent(
+        load_project_rules=SETTINGS.enforce_project_rules or SETTINGS.simplify_nearby_code
+    )
+
+    try:
+        run = await agent.send(cursor_prompt(inputs))
+
+        async def _review_text() -> AsyncIterator[str]:
+            async for chunk in run.iter_text():
+                yield chunk
+
+        async def _flush_text() -> AsyncIterator[str]:
+            await interrupt_run(run)
+
+            flush_run = await send_flush_turn(agent)
+            async for chunk in flush_run.iter_text():
+                yield chunk
+
+        yield ReviewSessionStreams(review_text=_review_text, flush_text=_flush_text)
+    finally:
+        await agent.close()
+
+
+async def run_agent(prompt: str) -> AsyncIterator[str]:
+    """Run a single agent turn without project rules and stream its reply text in chunks."""
+
+    agent = await create_agent(load_project_rules=False)
 
     try:
         run = await agent.send(prompt)
@@ -72,16 +144,6 @@ async def run_agent(prompt: str, *, load_project_rules: bool = False) -> AsyncIt
             yield chunk
     finally:
         await agent.close()
-
-
-async def review_text(pr: PullRequestContext, inputs: ReviewInputs) -> AsyncIterator[str]:
-    """Stream Cursor's review reply text for the shared runner."""
-
-    async for chunk in run_agent(
-        cursor_prompt(inputs),
-        load_project_rules=SETTINGS.enforce_project_rules or SETTINGS.simplify_nearby_code,
-    ):
-        yield chunk
 
 
 async def generate_text(prompt: str) -> str:

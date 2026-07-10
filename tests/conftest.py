@@ -1,21 +1,41 @@
 import asyncio
 from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
 from datetime import timedelta
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from pydantic import BaseModel
+
+from cursor_sdk import AgentBusyError
 
 from code_review.config import CONFIG, Settings
 from code_review.errors import ReviewBackendError
-from code_review.models.backend import Backend, BackendHandlers, GetBackendFindings
+from code_review.models.backend import (
+    Backend,
+    BackendHandlers,
+    FindingsSession,
+    GetBackendFindings,
+    GetFindingsSession,
+    OpenReviewSession,
+    ReviewSessionStreams,
+)
 from code_review.models.config import ReviewModel
 from code_review.models.findings import Finding, FindingCategory
 from code_review.models.github_event import GithubEvent
 from code_review.models.pull_request import PullRequestContext, ReviewInputs
-from code_review.models.review import ReviewRoundResult, RoundFindings
+from code_review.models.review import FlushCompletion, ReviewRoundResult, RoundFindings
 from code_review.models.severity import DiffSide, Severity
 from code_review.models.threads import ReviewThread, ThreadCommentAuthor, ThreadCommentNode, ThreadComments
 from code_review.review_backends import cursor
+
+
+class SessionState(BaseModel):
+    """Observable lifecycle counters of a fake findings session."""
+
+    opened: int = 0
+    closed: int = 0
+    flush_calls: int = 0
 
 
 @pytest.fixture
@@ -191,6 +211,127 @@ def blocking_stream_factory() -> Callable[[list[Finding]], tuple[GetBackendFindi
 
 
 @pytest.fixture
+def cursor_agent_factory() -> Callable[..., tuple[MagicMock, list[MagicMock]]]:
+    """Build a fake Cursor AsyncAgent whose review and flush runs stream scripted chunks."""
+
+    async def _chunks(parts: tuple[str, ...]) -> AsyncIterator[str]:
+        for part in parts:
+            yield part
+
+    def _build(
+        *,
+        review_chunks: tuple[str, ...] = (),
+        flush_chunks: tuple[str, ...] = (),
+        busy_sends: int = 0,
+    ) -> tuple[MagicMock, list[MagicMock]]:
+        def _make_run(parts: tuple[str, ...]) -> MagicMock:
+            run = MagicMock()
+            run.cancel = AsyncMock(return_value=None)
+            run.iter_text = lambda: _chunks(parts)
+
+            return run
+
+        runs = [_make_run(review_chunks), _make_run(flush_chunks)]
+        send_results: list[object] = [runs[0]]
+        send_results.extend(AgentBusyError("agent busy") for _ in range(busy_sends))
+        send_results.append(runs[1])
+
+        agent = MagicMock()
+        agent.send = AsyncMock(side_effect=send_results)
+        agent.close = AsyncMock(return_value=None)
+
+        return agent, runs
+
+    return _build
+
+
+@pytest.fixture
+def review_session_opener_factory() -> Callable[..., "OpenReviewSession"]:
+    """Build an OpenReviewSession double from scripted review and flush text streams."""
+
+    def _build(
+        review_stream: Callable[[], AsyncIterator[str]],
+        flush_stream: Callable[[], AsyncIterator[str]] | None = None,
+    ) -> "OpenReviewSession":
+        async def _empty() -> AsyncIterator[str]:
+            return
+            yield ""
+
+        @asynccontextmanager
+        async def _open(pr: PullRequestContext, inputs: ReviewInputs) -> AsyncIterator[ReviewSessionStreams]:
+            yield ReviewSessionStreams(review_text=review_stream, flush_text=flush_stream or _empty)
+
+        return _open
+
+    return _build
+
+
+@pytest.fixture
+def zero_flush_headroom(monkeypatch) -> None:
+    """Remove the flush posting headroom so short test budgets still fund a flush window."""
+
+    monkeypatch.setattr("code_review.review.findings.FLUSH_POSTING_HEADROOM", timedelta(0))
+
+
+@pytest.fixture
+def findings_session_factory(monkeypatch) -> Callable[..., tuple[GetFindingsSession, SessionState]]:
+    """Build a scriptable findings-session double for the two-phase review orchestration."""
+
+    monkeypatch.setattr("code_review.review.findings.REVIEW_RETRY_BACKOFF", timedelta(0))
+
+    def _build(
+        review_findings: list[Finding] | None = None,
+        *,
+        block_after_review: bool = False,
+        review_error: ReviewBackendError | None = None,
+        review_failures: int = 0,
+        flush_findings: list[Finding] | None = None,
+        flush_error: ReviewBackendError | None = None,
+        block_in_flush: bool = False,
+        flush_complete: bool = False,
+    ) -> tuple[GetFindingsSession, SessionState]:
+        state = SessionState()
+
+        @asynccontextmanager
+        async def _open(inputs: ReviewInputs) -> AsyncIterator[FindingsSession]:
+            state.opened += 1
+            attempt = state.opened
+            completion = FlushCompletion()
+
+            async def _findings() -> AsyncIterator[Finding]:
+                if review_error is not None and (review_failures == 0 or attempt <= review_failures):
+                    raise review_error
+
+                for finding in review_findings or []:
+                    yield finding
+
+                if block_after_review:
+                    await asyncio.Event().wait()
+
+            async def _flush_findings() -> AsyncIterator[Finding]:
+                state.flush_calls += 1
+                if flush_error is not None:
+                    raise flush_error
+
+                for finding in flush_findings or []:
+                    yield finding
+
+                if block_in_flush:
+                    await asyncio.Event().wait()
+
+                completion.complete = flush_complete
+
+            try:
+                yield FindingsSession(findings=_findings, flush_findings=_flush_findings, flush_completion=completion)
+            finally:
+                state.closed += 1
+
+        return _open, state
+
+    return _build
+
+
+@pytest.fixture
 def review_github_mocks(monkeypatch) -> dict[str, AsyncMock]:
     """Patch the GitHub seams run_review_round calls and return the mocks for assertion."""
 
@@ -292,9 +433,9 @@ def managed_agent_event_factory() -> Callable[..., MagicMock]:
 
 @pytest.fixture
 def managed_agent_client_factory() -> Callable[..., MagicMock]:
-    """Build an AsyncAnthropic double driving a Managed Agents session over the given events."""
+    """Build an AsyncAnthropic double driving Managed Agents turns, one event list per opened stream."""
 
-    def _build(events: list[MagicMock]) -> MagicMock:
+    def _build(events: list[MagicMock], *turn_events: list[MagicMock]) -> MagicMock:
         client = MagicMock()
         client.__aenter__ = AsyncMock(return_value=client)
         client.__aexit__ = AsyncMock(return_value=False)
@@ -315,7 +456,9 @@ def managed_agent_client_factory() -> Callable[..., MagicMock]:
         client.beta.sessions.create = AsyncMock(return_value=session)
         client.beta.sessions.delete = AsyncMock(return_value=None)
         client.beta.sessions.events.send = AsyncMock(return_value=None)
-        client.beta.sessions.events.stream = AsyncMock(return_value=FakeManagedStream(events))
+        client.beta.sessions.events.stream = AsyncMock(
+            side_effect=[FakeManagedStream(turn) for turn in (events, *turn_events)]
+        )
 
         return client
 
@@ -351,7 +494,7 @@ def main_harness(monkeypatch, mock_config, pull_request_factory, pull_request_ev
         post_pr_summary = AsyncMock(return_value=None)
         pr = pull_request_factory()
         handlers = BackendHandlers(
-            review_text=cursor.review_text,
+            review_session=cursor.review_session,
             generate_summary=cursor.generate_text,
             errors=(cursor.CursorAgentError,),
             retryable=lambda exc: isinstance(exc, cursor.CursorAgentError) and exc.is_retryable,
