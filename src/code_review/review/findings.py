@@ -4,7 +4,6 @@ from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack
 from datetime import timedelta
 from fnmatch import fnmatch
-from functools import partial
 from typing import Final
 
 from code_review.config import SETTINGS
@@ -74,24 +73,6 @@ def flush_budget(review_timeout: timedelta) -> timedelta:
     reserve = flush_reserve(review_timeout)
 
     return reserve - min(FLUSH_POSTING_HEADROOM, reserve / FLUSH_HEADROOM_FRACTION)
-
-
-async def session_attempt_findings(
-    stack: AsyncExitStack,
-    open_session: GetFindingsSession,
-    active_sessions: list[FindingsSession],
-    inputs: ReviewInputs,
-) -> AsyncIterator[Finding]:
-    """Open a fresh backend session on the round's stack, closing any failed prior one, and stream its findings."""
-
-    await stack.aclose()
-    active_sessions.clear()
-
-    session = await stack.enter_async_context(open_session(inputs))
-    active_sessions.append(session)
-
-    async for finding in session["findings"]():
-        yield finding
 
 
 async def counted_findings(stream: AsyncIterator[Finding], stats: ReviewPhaseStats) -> AsyncIterator[Finding]:
@@ -296,15 +277,24 @@ async def collect_round_findings(
         deferred_lows=[],
         seen_anchor_keys=set(),
     )
-    active_sessions: list[FindingsSession] = []
 
     async with AsyncExitStack() as stack:
+        live_session: FindingsSession | None = None
+
+        async def open_review_findings(inputs: ReviewInputs) -> AsyncIterator[Finding]:
+            """Open a fresh session on the round's stack, closing any failed prior one, and stream its findings."""
+
+            nonlocal live_session
+            await stack.aclose()
+            live_session = None
+
+            live_session = await stack.enter_async_context(open_session(inputs))
+            async for finding in live_session["findings"]():
+                yield finding
+
         review_stats = ReviewPhaseStats(label="review")
         review_stream = counted_findings(
-            stream_findings_with_retry(
-                partial(session_attempt_findings, stack, open_session, active_sessions), inputs
-            ),
-            review_stats,
+            stream_findings_with_retry(open_review_findings, inputs), review_stats
         )
 
         try:
@@ -323,8 +313,8 @@ async def collect_round_findings(
                 review_stats.received,
             )
 
-            if active_sessions and review_timeout is not None:
-                await flush_round_findings(pr, marker, active_sessions[-1], flush_budget(review_timeout), state)
+            if live_session is not None and review_timeout is not None:
+                await flush_round_findings(pr, marker, live_session, flush_budget(review_timeout), state)
 
     await publish_deferred_lows(pr, marker, state)
 

@@ -1,6 +1,7 @@
 import logging
 from collections.abc import AsyncIterator, Awaitable
 from contextlib import asynccontextmanager
+from functools import partial
 from typing import Final
 
 import anthropic
@@ -151,15 +152,10 @@ async def review_session(pr: PullRequestContext, inputs: ReviewInputs) -> AsyncI
             except RuntimeError as exc:
                 raise ReviewBackendError(f"Claude review failed: {exc}", retryable=False) from exc
 
-            async def _review_text() -> AsyncIterator[str]:
-                async for chunk in session_turn_text(client, session.id, pull_request_message(inputs)):
-                    yield chunk
-
-            async def _flush_text() -> AsyncIterator[str]:
-                async for chunk in session_turn_text(client, session.id, flush_prompt(), interrupting=True):
-                    yield chunk
-
-            yield ReviewSessionStreams(review_text=_review_text, flush_text=_flush_text)
+            yield ReviewSessionStreams(
+                review_text=partial(session_turn_text, client, session.id, pull_request_message(inputs)),
+                flush_text=partial(session_turn_text, client, session.id, flush_prompt(), interrupting=True),
+            )
         finally:
             if environment_id is not None:
                 await teardown_managed_agent(client, environment_id, agent_id, session_id)

@@ -117,10 +117,6 @@ async def review_session(pr: PullRequestContext, inputs: ReviewInputs) -> AsyncI
     try:
         run = await agent.send(cursor_prompt(inputs))
 
-        async def _review_text() -> AsyncIterator[str]:
-            async for chunk in run.iter_text():
-                yield chunk
-
         async def _flush_text() -> AsyncIterator[str]:
             await interrupt_run(run)
 
@@ -128,7 +124,7 @@ async def review_session(pr: PullRequestContext, inputs: ReviewInputs) -> AsyncI
             async for chunk in flush_run.iter_text():
                 yield chunk
 
-        yield ReviewSessionStreams(review_text=_review_text, flush_text=_flush_text)
+        yield ReviewSessionStreams(review_text=run.iter_text, flush_text=_flush_text)
     finally:
         await agent.close()
 
