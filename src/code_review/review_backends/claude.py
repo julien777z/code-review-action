@@ -89,9 +89,8 @@ async def session_turn_text(
 ) -> AsyncIterator[str]:
     """Send one user turn into the session, interrupting any in-flight turn when asked, and stream the reply."""
 
-    events: list[object] = [{"type": "user.message", "content": [{"type": "text", "text": message}]}]
-    if interrupting:
-        events.insert(0, {"type": "user.interrupt"})
+    message_event = {"type": "user.message", "content": [{"type": "text", "text": message}]}
+    events = [{"type": "user.interrupt"}, message_event] if interrupting else [message_event]
 
     try:
         async with await client.beta.sessions.events.stream(

@@ -6,14 +6,13 @@ from pydantic import ValidationError
 from code_review.config import CONFIG
 from code_review.errors import ReviewBackendError
 from code_review.models.findings import Finding, FindingCategory, RawFinding
-from code_review.models.review import FlushCompletion
 from code_review.models.severity import DiffSide, Severity
 
 UNPARSEABLE_SNIPPET_CHARS: Final[int] = 500
 
 
-async def capture_flush_marker(chunks: AsyncIterator[str], completion: FlushCompletion) -> AsyncIterator[str]:
-    """Stream text lines while consuming flush-marker lines and recording an asserted completion."""
+async def iter_text_lines(chunks: AsyncIterator[str]) -> AsyncIterator[str]:
+    """Yield each line of a chunked text stream, keeping the newline only on complete lines."""
 
     buffer = ""
 
@@ -21,14 +20,9 @@ async def capture_flush_marker(chunks: AsyncIterator[str], completion: FlushComp
         buffer += chunk
         *lines, buffer = buffer.split("\n")
         for line in lines:
-            if line.strip() == CONFIG["flush_complete_marker"]:
-                completion.complete = True
-            elif line.strip() != CONFIG["flush_partial_marker"]:
-                yield f"{line}\n"
+            yield f"{line}\n"
 
-    if buffer.strip() == CONFIG["flush_complete_marker"]:
-        completion.complete = True
-    elif buffer.strip() != CONFIG["flush_partial_marker"] and buffer:
+    if buffer:
         yield buffer
 
 
@@ -75,28 +69,21 @@ def truncated_finding_buffer(buffer: str) -> bool:
 async def iter_findings(chunks: AsyncIterator[str]) -> AsyncIterator[Finding]:
     """Yield findings from streamed JSONL chunks, raising on non-JSONL output."""
 
-    buffer = ""
+    trailing_unparsed = ""
     full = ""
     produced = False
 
-    async for chunk in chunks:
-        full += chunk
-        buffer += chunk
-        *lines, buffer = buffer.split("\n")
-        for line in lines:
-            finding = parse_finding_line(line)
-            if finding is not None:
-                produced = True
-                yield finding
-
-    trailing = parse_finding_line(buffer)
-    if trailing is not None:
-        produced = True
-        yield trailing
-        buffer = ""
+    async for line in iter_text_lines(chunks):
+        full += line
+        finding = parse_finding_line(line)
+        if finding is not None:
+            produced = True
+            yield finding
+        elif not line.endswith("\n"):
+            trailing_unparsed = line
 
     if produced:
-        if truncated_finding_buffer(buffer):
+        if truncated_finding_buffer(trailing_unparsed):
             raise ReviewBackendError("The review model output was truncated mid-finding.", retryable=True)
 
         return

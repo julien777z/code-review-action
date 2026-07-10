@@ -5,10 +5,9 @@ import pytest
 
 from code_review.config import CONFIG
 from code_review.models.findings import Finding, FindingCategory
-from code_review.models.review import FlushCompletion
 from code_review.models.severity import DiffSide, Severity
 from code_review.errors import ReviewBackendError
-from code_review.utils.jsonl import capture_flush_marker, iter_findings, parse_finding_line
+from code_review.utils.jsonl import iter_findings, parse_finding_line
 
 
 async def text_stream(*parts: str) -> AsyncIterator[str]:
@@ -22,15 +21,6 @@ async def collect(*parts: str) -> list[Finding]:
     """Drain iter_findings over the given chunks into a list."""
 
     return [finding async for finding in iter_findings(text_stream(*parts))]
-
-
-async def capture(*parts: str) -> tuple[list[str], FlushCompletion]:
-    """Drain capture_flush_marker over the given chunks, returning the passed-through chunks and completion."""
-
-    completion = FlushCompletion()
-    chunks = [chunk async for chunk in capture_flush_marker(text_stream(*parts), completion)]
-
-    return chunks, completion
 
 
 class TestParseFindingLine:
@@ -234,54 +224,3 @@ class TestIterFindings:
         findings = asyncio.run(collect(f"{complete}\nDone."))
 
         assert [finding.title for finding in findings] == ["A"]
-
-
-class TestCaptureFlushMarker:
-    """Test that the flush-marker tee records completion and consumes marker lines from the stream."""
-
-    def test_captures_and_consumes_the_completion_marker_line(self) -> None:
-        """Test that a completion-marker line sets the holder and is removed from the passed-through text."""
-
-        marker = CONFIG["flush_complete_marker"]
-        chunks, completion = asyncio.run(capture("NO_FINDINGS\n", f"{marker}\n"))
-
-        assert chunks == ["NO_FINDINGS\n"]
-        assert completion.complete is True
-
-    def test_captures_a_marker_split_across_chunks(self) -> None:
-        """Test that a marker arriving in two chunks is still recognized and consumed."""
-
-        marker = CONFIG["flush_complete_marker"]
-        chunks, completion = asyncio.run(capture(marker[:6], f"{marker[6:]}\n"))
-
-        assert chunks == []
-        assert completion.complete is True
-
-    def test_captures_a_marker_without_a_trailing_newline(self) -> None:
-        """Test that a marker ending the stream without a newline is still recognized and consumed."""
-
-        chunks, completion = asyncio.run(capture("NO_FINDINGS\n", CONFIG["flush_complete_marker"]))
-
-        assert chunks == ["NO_FINDINGS\n"]
-        assert completion.complete is True
-
-    def test_consumes_the_partial_marker_without_capturing(self) -> None:
-        """Test that a partial-marker line is removed from the stream and leaves the holder unset."""
-
-        chunks, completion = asyncio.run(capture("REVIEW_PARTIAL\n"))
-
-        assert chunks == []
-        assert completion.complete is False
-
-    @pytest.mark.parametrize(
-        "text",
-        ["NO_FINDINGS\n", "prose mentioning REVIEW_COMPLETE inline\n"],
-        ids=["no-findings", "inline-mention"],
-    )
-    def test_passes_non_marker_lines_through(self, text: str) -> None:
-        """Test that lines without a standalone marker pass through and leave the holder unset."""
-
-        chunks, completion = asyncio.run(capture(text))
-
-        assert chunks == [text]
-        assert completion.complete is False

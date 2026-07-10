@@ -25,6 +25,7 @@ REVIEW_RETRY_BACKOFF: Final[timedelta] = timedelta(seconds=2)
 FLUSH_RESERVE_MAX: Final[timedelta] = timedelta(minutes=3)
 FLUSH_RESERVE_FRACTION: Final[int] = 5
 FLUSH_POSTING_HEADROOM: Final[timedelta] = timedelta(seconds=20)
+FLUSH_HEADROOM_FRACTION: Final[int] = 3
 
 LOW_CATEGORY_PRIORITY: Final[dict[FindingCategory, int]] = {
     FindingCategory.SECURITY: 0,
@@ -65,6 +66,14 @@ def flush_reserve(review_timeout: timedelta) -> timedelta:
     """Return how much of the review budget is held back for the wrap-up flush turn."""
 
     return min(FLUSH_RESERVE_MAX, review_timeout / FLUSH_RESERVE_FRACTION)
+
+
+def flush_budget(review_timeout: timedelta) -> timedelta:
+    """Return the flush turn's hard window, positive for any configured timeout."""
+
+    reserve = flush_reserve(review_timeout)
+
+    return reserve - min(FLUSH_POSTING_HEADROOM, reserve / FLUSH_HEADROOM_FRACTION)
 
 
 async def session_attempt_findings(
@@ -276,11 +285,6 @@ async def flush_round_findings(
 ) -> None:
     """Run the wrap-up flush turn under the remaining hard budget, tolerating a flush failure."""
 
-    if budget <= timedelta(0):
-        logger.warning("The review timeout is too small to reserve a flush turn; skipping the wrap-up.")
-
-        return
-
     flush_stats = ReviewPhaseStats(label="flush")
     try:
         async with asyncio.timeout(budget.total_seconds()):
@@ -337,8 +341,7 @@ async def collect_round_findings(
                 pr, marker, review_stream, anchors, unpatched, posted_keys, findings, deferred_lows, seen_anchor_keys
             )
         else:
-            reserve = flush_reserve(review_timeout)
-            soft_deadline = review_timeout - reserve
+            soft_deadline = review_timeout - flush_reserve(review_timeout)
             try:
                 async with asyncio.timeout(soft_deadline.total_seconds()) as review_scope:
                     await publish_round_findings(
@@ -368,7 +371,7 @@ async def collect_round_findings(
                         pr,
                         marker,
                         active_sessions[-1],
-                        reserve - FLUSH_POSTING_HEADROOM,
+                        flush_budget(review_timeout),
                         anchors,
                         unpatched,
                         posted_keys,

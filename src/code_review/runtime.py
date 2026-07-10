@@ -20,7 +20,7 @@ from code_review.models.pull_request import PullRequestContext, ReviewInputs
 from code_review.models.review import FlushCompletion, ReviewRoundResult
 from code_review.review.round import run_review_round
 from code_review.review_backends import claude, cursor
-from code_review.utils.jsonl import capture_flush_marker, iter_findings
+from code_review.utils.jsonl import iter_findings, iter_text_lines
 from code_review.summary import SummaryGenerationError, post_pr_summary
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
@@ -79,6 +79,17 @@ async def backend_text_chunks(
 
     if require_output and not produced:
         raise ReviewBackendError(f"{handlers['label']} review produced no output.", retryable=True)
+
+
+async def capture_flush_marker(chunks: AsyncIterator[str], completion: FlushCompletion) -> AsyncIterator[str]:
+    """Stream text lines while consuming flush-marker lines and recording an asserted completion."""
+
+    async for line in iter_text_lines(chunks):
+        stripped = line.strip()
+        if stripped == CONFIG["flush_complete_marker"]:
+            completion.complete = True
+        elif stripped != CONFIG["flush_partial_marker"]:
+            yield line
 
 
 @asynccontextmanager

@@ -13,6 +13,7 @@ from code_review.review.findings import (
     collect_round_findings,
     finding_anchors,
     finding_kept,
+    flush_budget,
     flush_reserve,
     is_postable,
     low_finding_rank,
@@ -445,6 +446,24 @@ class TestFlushReserve:
 
         assert flush_reserve(review_timeout) == expected
 
+    @pytest.mark.parametrize(
+        ("review_timeout", "expected"),
+        [
+            (timedelta(minutes=15), timedelta(seconds=160)),
+            (timedelta(minutes=1), timedelta(seconds=8)),
+        ],
+        ids=["default", "one-minute"],
+    )
+    def test_flush_budget(self, review_timeout: timedelta, expected: timedelta) -> None:
+        """Test that the flush window subtracts a headroom that shrinks with the reserve."""
+
+        assert flush_budget(review_timeout) == expected
+
+    def test_flush_budget_is_positive_for_every_configured_timeout(self) -> None:
+        """Test that any whole-minute timeout funds a real flush window."""
+
+        assert all(flush_budget(timedelta(minutes=minutes)) > timedelta(0) for minutes in range(1, 61))
+
 
 class TestCollectRoundFindingsTimeout:
     """Test that the soft deadline interrupts the review, flushes the session, and keeps partial findings."""
@@ -481,7 +500,7 @@ class TestCollectRoundFindingsTimeout:
         assert result.current_keys == {("src/app.py", "Streamed")}
         assert state.closed == 1
 
-    def test_tiny_timeout_skips_the_flush_turn(
+    def test_short_timeout_still_runs_the_flush_turn(
         self,
         mock_config,
         post_comment_mock,
@@ -491,9 +510,9 @@ class TestCollectRoundFindingsTimeout:
         findings_session_factory,
         finding_factory,
     ) -> None:
-        """Test that a budget too small to fund a flush window never starts the wrap-up turn."""
+        """Test that even a short budget funds a flush window that solicits unemitted findings."""
 
-        override_review_timeout(timedelta(seconds=0.1))
+        override_review_timeout(timedelta(seconds=1))
         open_session, state = findings_session_factory(
             [finding_factory()], block_after_review=True, flush_findings=[finding_factory(line=20, title="Late")]
         )
@@ -511,7 +530,8 @@ class TestCollectRoundFindingsTimeout:
         )
 
         assert result.timed_out is True
-        assert state.flush_calls == 0
+        assert state.flush_calls == 1
+        assert ("src/app.py", "Late") in result.current_keys
 
     def test_flush_turn_posts_remaining_findings(
         self,
