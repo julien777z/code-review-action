@@ -85,9 +85,13 @@ async def teardown_managed_agent(
 
 
 async def session_turn_text(
-    client: anthropic.AsyncAnthropic, session_id: str, message: str, *, idle_needs_text: bool = False
+    client: anthropic.AsyncAnthropic, session_id: str, message: str, *, interrupting: bool = False
 ) -> AsyncIterator[str]:
-    """Send one user turn into the session and stream the agent's reply text until it idles."""
+    """Send one user turn into the session, interrupting any in-flight turn when asked, and stream the reply."""
+
+    events: list[object] = [{"type": "user.message", "content": [{"type": "text", "text": message}]}]
+    if interrupting:
+        events.insert(0, {"type": "user.interrupt"})
 
     try:
         async with await client.beta.sessions.events.stream(
@@ -95,7 +99,7 @@ async def session_turn_text(
         ) as stream:
             await client.beta.sessions.events.send(
                 session_id=session_id,
-                events=[{"type": "user.message", "content": [{"type": "text", "text": message}]}],
+                events=events,
                 betas=[MANAGED_AGENTS_BETA],
             )
             produced = False
@@ -106,7 +110,7 @@ async def session_turn_text(
                             produced = True
                             yield block.text
                 elif event.type == "session.status_idle":
-                    if event.stop_reason.type == "requires_action" or (idle_needs_text and not produced):
+                    if event.stop_reason.type == "requires_action" or (interrupting and not produced):
                         continue
 
                     break
@@ -153,7 +157,7 @@ async def review_session(pr: PullRequestContext, inputs: ReviewInputs) -> AsyncI
                     yield chunk
 
             async def _flush_text() -> AsyncIterator[str]:
-                async for chunk in session_turn_text(client, session.id, flush_prompt(), idle_needs_text=True):
+                async for chunk in session_turn_text(client, session.id, flush_prompt(), interrupting=True):
                     yield chunk
 
             yield ReviewSessionStreams(review_text=_review_text, flush_text=_flush_text)

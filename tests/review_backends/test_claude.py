@@ -149,9 +149,10 @@ class TestReviewSession:
         session_ids = {call.kwargs["session_id"] for call in client.beta.sessions.events.send.await_args_list}
 
         assert session_ids == {"session-1"}
-        flush_sent = client.beta.sessions.events.send.await_args_list[1].kwargs["events"][0]
+        flush_events = client.beta.sessions.events.send.await_args_list[1].kwargs["events"]
 
-        assert flush_sent["content"][0]["text"] == flush_prompt()
+        assert flush_events[0] == {"type": "user.interrupt"}
+        assert flush_events[1]["content"][0]["text"] == flush_prompt()
         client.beta.sessions.delete.assert_awaited_once()
 
     def test_flush_turn_skips_an_idle_before_its_own_text(
