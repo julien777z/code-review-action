@@ -62,6 +62,12 @@ BACKENDS: Final[dict[Backend, BackendHandlers]] = {
 }
 
 
+def backend_review_error(handlers: BackendHandlers, exc: Exception) -> ReviewBackendError:
+    """Convert a declared backend failure into the shared review error carrying its retry policy."""
+
+    return ReviewBackendError(f"{handlers['label']} review failed: {exc}", retryable=handlers["retryable"](exc))
+
+
 async def backend_text_chunks(
     handlers: BackendHandlers, chunks: AsyncIterator[str], *, require_output: bool = True
 ) -> AsyncIterator[str]:
@@ -73,9 +79,7 @@ async def backend_text_chunks(
             produced = True
             yield chunk
     except handlers["errors"] as exc:
-        raise ReviewBackendError(
-            f"{handlers['label']} review failed: {exc}", retryable=handlers["retryable"](exc)
-        ) from exc
+        raise backend_review_error(handlers, exc) from exc
 
     if require_output and not produced:
         raise ReviewBackendError(f"{handlers['label']} review produced no output.", retryable=True)
@@ -113,9 +117,7 @@ async def backend_findings_session(
                 flush_completion=flush_completion,
             )
     except handlers["errors"] as exc:
-        raise ReviewBackendError(
-            f"{handlers['label']} review failed: {exc}", retryable=handlers["retryable"](exc)
-        ) from exc
+        raise backend_review_error(handlers, exc) from exc
 
 
 async def run_backend_review(pr: PullRequestContext, handlers: BackendHandlers) -> ReviewRoundResult:

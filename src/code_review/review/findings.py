@@ -13,7 +13,7 @@ from code_review.github import post_comment
 from code_review.models.backend import FindingsSession, GetBackendFindings, GetFindingsSession
 from code_review.models.findings import Finding, FindingCategory
 from code_review.models.pull_request import PullRequestContext, ReviewInputs
-from code_review.models.review import FindingPublication, ReviewPhaseStats, RoundFindings
+from code_review.models.review import FindingPublication, ReviewPhaseStats, RoundFindings, RoundPublishState
 from code_review.models.severity import DiffSide, Severity
 from code_review.review.comments import build_inline_comment
 
@@ -183,48 +183,36 @@ async def publish_finding(
     return FindingPublication.VERDICT
 
 
-async def publish_and_track(
-    pr: PullRequestContext,
-    marker: str,
-    finding: Finding,
-    anchors: dict[str, tuple[set[int], set[int]]],
-    findings: RoundFindings,
-) -> None:
+async def publish_and_track(pr: PullRequestContext, marker: str, finding: Finding, state: RoundPublishState) -> None:
     """Publish a finding and record it as current and published in the round accumulator."""
 
-    publication = await publish_finding(pr, marker, finding, anchors)
-    findings.track_current(finding_title_key(finding), finding)
-    findings.track_publication(finding, publication)
+    publication = await publish_finding(pr, marker, finding, state["anchors"])
+    state["findings"].track_current(finding_title_key(finding), finding)
+    state["findings"].track_publication(finding, publication)
 
 
 async def publish_round_findings(
-    pr: PullRequestContext,
-    marker: str,
-    findings_stream: AsyncIterator[Finding],
-    anchors: dict[str, tuple[set[int], set[int]]],
-    unpatched: set[str],
-    posted_keys: set[tuple[str, str]],
-    findings: RoundFindings,
-    deferred_lows: list[Finding],
-    seen_anchor_keys: set[tuple[str, int, DiffSide, str]],
+    pr: PullRequestContext, marker: str, findings_stream: AsyncIterator[Finding], state: RoundPublishState
 ) -> None:
     """Stream and deduplicate findings, publishing non-lows immediately and buffering lows for the round's end."""
+
+    findings = state["findings"]
 
     async for finding in findings_stream:
         if not finding_kept(finding):
             continue
 
         anchor_key = finding_anchor_key(finding)
-        if anchor_key in seen_anchor_keys:
+        if anchor_key in state["seen_anchor_keys"]:
             continue
 
-        seen_anchor_keys.add(anchor_key)
+        state["seen_anchor_keys"].add(anchor_key)
         title_key = finding_title_key(finding)
 
-        if not is_postable(finding, anchors, unpatched):
+        if not is_postable(finding, state["anchors"], state["unpatched"]):
             continue
 
-        if title_key in posted_keys:
+        if title_key in state["posted_keys"]:
             findings.track_current(title_key, finding)
 
             continue
@@ -233,55 +221,40 @@ async def publish_round_findings(
             continue
 
         if finding.severity is Severity.LOW:
-            deferred_lows.append(finding)
+            state["deferred_lows"].append(finding)
 
             continue
 
         if total_cap_reached(findings.published_count):
             continue
 
-        await publish_and_track(pr, marker, finding, anchors, findings)
+        await publish_and_track(pr, marker, finding, state)
 
 
-async def publish_deferred_lows(
-    pr: PullRequestContext,
-    marker: str,
-    deferred_lows: list[Finding],
-    anchors: dict[str, tuple[set[int], set[int]]],
-    findings: RoundFindings,
-) -> None:
+async def publish_deferred_lows(pr: PullRequestContext, marker: str, state: RoundPublishState) -> None:
     """Publish the most important buffered low findings within the low and total caps."""
 
+    findings = state["findings"]
     low_slots = SETTINGS.low_findings_cap
     if SETTINGS.max_findings is not None:
         low_slots = min(low_slots, max(0, SETTINGS.max_findings - findings.published_count))
 
-    ranked = sorted(enumerate(deferred_lows), key=lambda item: low_finding_rank(item[1], item[0]))
+    ranked = sorted(enumerate(state["deferred_lows"]), key=lambda item: low_finding_rank(item[1], item[0]))
 
     posted = 0
     for _, finding in ranked:
         if posted >= low_slots:
             break
 
-        title_key = finding_title_key(finding)
-        if title_key in findings.current_keys:
+        if finding_title_key(finding) in findings.current_keys:
             continue
 
-        await publish_and_track(pr, marker, finding, anchors, findings)
+        await publish_and_track(pr, marker, finding, state)
         posted += 1
 
 
 async def flush_round_findings(
-    pr: PullRequestContext,
-    marker: str,
-    session: FindingsSession,
-    budget: timedelta,
-    anchors: dict[str, tuple[set[int], set[int]]],
-    unpatched: set[str],
-    posted_keys: set[tuple[str, str]],
-    findings: RoundFindings,
-    deferred_lows: list[Finding],
-    seen_anchor_keys: set[tuple[str, int, DiffSide, str]],
+    pr: PullRequestContext, marker: str, session: FindingsSession, budget: timedelta, state: RoundPublishState
 ) -> None:
     """Run the wrap-up flush turn under the remaining hard budget, tolerating a flush failure."""
 
@@ -289,15 +262,7 @@ async def flush_round_findings(
     try:
         async with asyncio.timeout(budget.total_seconds()):
             await publish_round_findings(
-                pr,
-                marker,
-                counted_findings(session["flush_findings"](), flush_stats),
-                anchors,
-                unpatched,
-                posted_keys,
-                findings,
-                deferred_lows,
-                seen_anchor_keys,
+                pr, marker, counted_findings(session["flush_findings"](), flush_stats), state
             )
     except TimeoutError:
         logger.warning("The wrap-up flush hit its hard deadline after %d finding(s).", flush_stats.received)
@@ -307,7 +272,7 @@ async def flush_round_findings(
         logger.info("The wrap-up flush produced %d finding(s).", flush_stats.received)
         if session["flush_completion"].complete:
             logger.info("The agent reported the review as complete; concluding with a normal verdict.")
-            findings.timed_out = False
+            state["findings"].timed_out = False
 
 
 async def collect_round_findings(
@@ -322,9 +287,15 @@ async def collect_round_findings(
     """Run the review phase, and a wrap-up flush on the live session when the soft deadline expires."""
 
     review_timeout = SETTINGS.review_timeout
-    findings = RoundFindings()
-    deferred_lows: list[Finding] = []
-    seen_anchor_keys: set[tuple[str, int, DiffSide, str]] = set()
+    soft_deadline = review_timeout - flush_reserve(review_timeout) if review_timeout is not None else None
+    state = RoundPublishState(
+        anchors=anchors,
+        unpatched=unpatched,
+        posted_keys=posted_keys,
+        findings=RoundFindings(),
+        deferred_lows=[],
+        seen_anchor_keys=set(),
+    )
     active_sessions: list[FindingsSession] = []
 
     async with AsyncExitStack() as stack:
@@ -336,50 +307,25 @@ async def collect_round_findings(
             review_stats,
         )
 
-        if review_timeout is None:
-            await publish_round_findings(
-                pr, marker, review_stream, anchors, unpatched, posted_keys, findings, deferred_lows, seen_anchor_keys
+        try:
+            async with asyncio.timeout(
+                soft_deadline.total_seconds() if soft_deadline is not None else None
+            ) as review_scope:
+                await publish_round_findings(pr, marker, review_stream, state)
+        except TimeoutError:
+            if not review_scope.expired():
+                raise
+
+            state["findings"].timed_out = True
+            logger.warning(
+                "Review hit the %s soft deadline with %d finding(s) streamed; interrupting the agent to flush.",
+                soft_deadline,
+                review_stats.received,
             )
-        else:
-            soft_deadline = review_timeout - flush_reserve(review_timeout)
-            try:
-                async with asyncio.timeout(soft_deadline.total_seconds()) as review_scope:
-                    await publish_round_findings(
-                        pr,
-                        marker,
-                        review_stream,
-                        anchors,
-                        unpatched,
-                        posted_keys,
-                        findings,
-                        deferred_lows,
-                        seen_anchor_keys,
-                    )
-            except TimeoutError:
-                if not review_scope.expired():
-                    raise
 
-                findings.timed_out = True
-                logger.warning(
-                    "Review hit the %s soft deadline with %d finding(s) streamed; interrupting the agent to flush.",
-                    soft_deadline,
-                    review_stats.received,
-                )
+            if active_sessions and review_timeout is not None:
+                await flush_round_findings(pr, marker, active_sessions[-1], flush_budget(review_timeout), state)
 
-                if active_sessions:
-                    await flush_round_findings(
-                        pr,
-                        marker,
-                        active_sessions[-1],
-                        flush_budget(review_timeout),
-                        anchors,
-                        unpatched,
-                        posted_keys,
-                        findings,
-                        deferred_lows,
-                        seen_anchor_keys,
-                    )
+    await publish_deferred_lows(pr, marker, state)
 
-    await publish_deferred_lows(pr, marker, deferred_lows, anchors, findings)
-
-    return findings
+    return state["findings"]
