@@ -1,10 +1,10 @@
 from enum import StrEnum
-from typing import Final, TypedDict
+from typing import Final
 
 from pydantic import BaseModel, Field
 
 from code_review.models.findings import Finding
-from code_review.models.severity import DiffSide, Severity
+from code_review.models.severity import Severity
 
 
 class CheckConclusion(StrEnum):
@@ -84,14 +84,3 @@ class RoundFindings(BaseModel):
                 self.posted_any = True
             case FindingPublication.VERDICT:
                 self.out_of_bounds.append(finding)
-
-
-class RoundPublishState(TypedDict):
-    """Shared accumulators and diff context threaded through one round's publish phases."""
-
-    anchors: dict[str, tuple[set[int], set[int]]]
-    unpatched: set[str]
-    posted_keys: set[tuple[str, str]]
-    findings: RoundFindings
-    deferred_lows: list[Finding]
-    seen_anchor_keys: set[tuple[str, int, DiffSide, str]]

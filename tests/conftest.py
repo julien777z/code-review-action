@@ -27,6 +27,7 @@ from code_review.models.pull_request import PullRequestContext, ReviewInputs
 from code_review.models.review import FlushCompletion, ReviewRoundResult, RoundFindings
 from code_review.models.severity import DiffSide, Severity
 from code_review.models.threads import ReviewThread, ThreadCommentAuthor, ThreadCommentNode, ThreadComments
+from code_review.review import findings
 from code_review.review_backends import cursor
 
 
@@ -270,7 +271,7 @@ def review_session_opener_factory() -> Callable[..., "OpenReviewSession"]:
 def zero_flush_headroom(monkeypatch) -> None:
     """Remove the flush posting headroom so short test budgets still fund a flush window."""
 
-    monkeypatch.setattr("code_review.review.findings.FLUSH_POSTING_HEADROOM", timedelta(0))
+    monkeypatch.setitem(findings.FLUSH_TIMING, "posting_headroom", timedelta(0))
 
 
 @pytest.fixture

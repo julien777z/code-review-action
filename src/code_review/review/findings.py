@@ -4,7 +4,7 @@ from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack
 from datetime import timedelta
 from fnmatch import fnmatch
-from typing import Final
+from typing import Final, TypedDict
 
 from code_review.config import SETTINGS
 from code_review.errors import ReviewBackendError
@@ -12,7 +12,7 @@ from code_review.github import post_comment
 from code_review.models.backend import FindingsSession, GetBackendFindings, GetFindingsSession
 from code_review.models.findings import Finding, FindingCategory
 from code_review.models.pull_request import PullRequestContext, ReviewInputs
-from code_review.models.review import FindingPublication, ReviewPhaseStats, RoundFindings, RoundPublishState
+from code_review.models.review import FindingPublication, ReviewPhaseStats, RoundFindings
 from code_review.models.severity import DiffSide, Severity
 from code_review.review.comments import build_inline_comment
 
@@ -21,10 +21,22 @@ logger = logging.getLogger("code_review.review.findings")
 REVIEW_BACKEND_ATTEMPTS: Final[int] = 3
 REVIEW_RETRY_BACKOFF: Final[timedelta] = timedelta(seconds=2)
 
-FLUSH_RESERVE_MAX: Final[timedelta] = timedelta(minutes=3)
-FLUSH_RESERVE_FRACTION: Final[int] = 5
-FLUSH_POSTING_HEADROOM: Final[timedelta] = timedelta(seconds=20)
-FLUSH_HEADROOM_FRACTION: Final[int] = 3
+
+class FlushTiming(TypedDict):
+    """Tuning values for the wrap-up flush reserve and hard budget."""
+
+    reserve_max: timedelta
+    reserve_fraction: int
+    posting_headroom: timedelta
+    headroom_fraction: int
+
+
+FLUSH_TIMING: Final[FlushTiming] = FlushTiming(
+    reserve_max=timedelta(minutes=3),
+    reserve_fraction=5,
+    posting_headroom=timedelta(seconds=20),
+    headroom_fraction=3,
+)
 
 LOW_CATEGORY_PRIORITY: Final[dict[FindingCategory, int]] = {
     FindingCategory.SECURITY: 0,
@@ -36,6 +48,17 @@ LOW_CATEGORY_PRIORITY: Final[dict[FindingCategory, int]] = {
     FindingCategory.CODE_SIMPLIFICATION: 6,
     FindingCategory.OTHER: 7,
 }
+
+
+class RoundPublishState(TypedDict):
+    """Shared accumulators and diff context threaded through one round's publish phases."""
+
+    anchors: dict[str, tuple[set[int], set[int]]]
+    unpatched: set[str]
+    posted_keys: set[tuple[str, str]]
+    findings: RoundFindings
+    deferred_lows: list[Finding]
+    seen_anchor_keys: set[tuple[str, int, DiffSide, str]]
 
 
 async def stream_findings_with_retry(
@@ -64,7 +87,7 @@ async def stream_findings_with_retry(
 def flush_reserve(review_timeout: timedelta) -> timedelta:
     """Return how much of the review budget is held back for the wrap-up flush turn."""
 
-    return min(FLUSH_RESERVE_MAX, review_timeout / FLUSH_RESERVE_FRACTION)
+    return min(FLUSH_TIMING["reserve_max"], review_timeout / FLUSH_TIMING["reserve_fraction"])
 
 
 def flush_budget(review_timeout: timedelta) -> timedelta:
@@ -72,7 +95,7 @@ def flush_budget(review_timeout: timedelta) -> timedelta:
 
     reserve = flush_reserve(review_timeout)
 
-    return reserve - min(FLUSH_POSTING_HEADROOM, reserve / FLUSH_HEADROOM_FRACTION)
+    return reserve - min(FLUSH_TIMING["posting_headroom"], reserve / FLUSH_TIMING["headroom_fraction"])
 
 
 async def counted_findings(stream: AsyncIterator[Finding], stats: ReviewPhaseStats) -> AsyncIterator[Finding]:
