@@ -259,8 +259,8 @@ async def publish_deferred_lows(pr: PullRequestContext, marker: str, state: Roun
 
 async def flush_round_findings(
     pr: PullRequestContext, marker: str, session: FindingsSession, budget: timedelta, state: RoundPublishState
-) -> None:
-    """Run the wrap-up flush turn under the remaining hard budget, tolerating a flush failure."""
+) -> bool:
+    """Run the wrap-up flush turn under the remaining hard budget, returning whether the agent reported completion."""
 
     flush_stats = ReviewPhaseStats(label="flush")
     try:
@@ -274,9 +274,10 @@ async def flush_round_findings(
         logger.warning("The wrap-up flush failed; keeping the review-phase findings: %s", exc)
     else:
         logger.info("The wrap-up flush produced %d finding(s).", flush_stats.received)
-        if session["flush_completion"].complete:
-            logger.info("The agent reported the review as complete; concluding with a normal verdict.")
-            state["findings"].timed_out = False
+
+        return session["flush_completion"].complete
+
+    return False
 
 
 async def collect_round_findings(
@@ -336,7 +337,12 @@ async def collect_round_findings(
             )
 
             if live_session is not None and review_timeout is not None:
-                await flush_round_findings(pr, marker, live_session, flush_budget(review_timeout), state)
+                completed = await flush_round_findings(
+                    pr, marker, live_session, flush_budget(review_timeout), state
+                )
+                if completed:
+                    logger.info("The agent reported the review as complete; concluding with a normal verdict.")
+                    state["findings"].timed_out = False
 
     await publish_deferred_lows(pr, marker, state)
 

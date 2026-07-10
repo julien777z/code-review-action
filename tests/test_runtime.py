@@ -34,10 +34,10 @@ async def collect_findings(findings: AsyncIterator[Finding]) -> list[Finding]:
     return [finding async for finding in findings]
 
 
-async def collect_session_findings(handlers, pr, inputs, *, flush: bool = False) -> list[Finding]:
+async def collect_session_findings(handlers, inputs, *, flush: bool = False) -> list[Finding]:
     """Open a backend findings session and drain its review or flush stream."""
 
-    async with backend_findings_session(handlers, pr, inputs) as session:
+    async with backend_findings_session(handlers, inputs) as session:
         stream = session["flush_findings"]() if flush else session["findings"]()
 
         return [finding async for finding in stream]
@@ -263,7 +263,7 @@ class TestBackendReviewPolicy:
             label="Cursor",
         )
 
-        findings = asyncio.run(collect_session_findings(handlers, pull_request_factory(), review_inputs_factory()))
+        findings = asyncio.run(collect_session_findings(handlers, review_inputs_factory()))
 
         assert [finding.title for finding in findings] == ["A"]
 
@@ -286,7 +286,7 @@ class TestBackendReviewPolicy:
         )
 
         with pytest.raises(ReviewBackendError) as raised:
-            asyncio.run(collect_session_findings(handlers, pull_request_factory(), review_inputs_factory()))
+            asyncio.run(collect_session_findings(handlers, review_inputs_factory()))
 
         assert raised.value.retryable is retryable
         assert "Cursor review failed" in str(raised.value)
@@ -311,7 +311,7 @@ class TestBackendReviewPolicy:
         )
 
         with pytest.raises(ReviewBackendError) as raised:
-            asyncio.run(collect_session_findings(handlers, pull_request_factory(), review_inputs_factory()))
+            asyncio.run(collect_session_findings(handlers, review_inputs_factory()))
 
         assert raised.value.retryable is True
         assert "Claude review failed" in str(raised.value)
@@ -334,7 +334,7 @@ class TestBackendReviewPolicy:
         )
 
         with pytest.raises(ValueError):
-            asyncio.run(collect_session_findings(handlers, pull_request_factory(), review_inputs_factory()))
+            asyncio.run(collect_session_findings(handlers, review_inputs_factory()))
 
     def test_empty_backend_output_raises(
         self, review_session_opener_factory, pull_request_factory, review_inputs_factory
@@ -354,7 +354,7 @@ class TestBackendReviewPolicy:
         )
 
         with pytest.raises(ReviewBackendError, match="produced no output") as raised:
-            asyncio.run(collect_session_findings(handlers, pull_request_factory(), review_inputs_factory()))
+            asyncio.run(collect_session_findings(handlers, review_inputs_factory()))
 
         assert raised.value.retryable is True
 
@@ -376,7 +376,7 @@ class TestBackendReviewPolicy:
         )
 
         findings = asyncio.run(
-            collect_session_findings(handlers, pull_request_factory(), review_inputs_factory(), flush=True)
+            collect_session_findings(handlers, review_inputs_factory(), flush=True)
         )
 
         assert findings == []
@@ -403,7 +403,7 @@ class TestBackendReviewPolicy:
         )
 
         async def run() -> tuple[list[Finding], bool]:
-            async with backend_findings_session(handlers, pull_request_factory(), review_inputs_factory()) as session:
+            async with backend_findings_session(handlers, review_inputs_factory()) as session:
                 findings = [finding async for finding in session["flush_findings"]()]
 
                 return findings, session["flush_completion"].complete

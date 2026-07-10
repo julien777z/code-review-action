@@ -110,9 +110,7 @@ async def send_flush_turn(agent: AsyncAgent) -> AsyncRun:
 async def review_session(pr: PullRequestContext, inputs: ReviewInputs) -> AsyncIterator[ReviewSessionStreams]:
     """Open a Cursor agent review session whose in-flight reply can be interrupted and flushed."""
 
-    agent = await create_agent(
-        load_project_rules=SETTINGS.enforce_project_rules or SETTINGS.simplify_nearby_code
-    )
+    agent = await create_agent(load_project_rules=SETTINGS.loads_project_rules)
 
     try:
         run = await agent.send(cursor_prompt(inputs))

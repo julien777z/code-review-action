@@ -82,6 +82,12 @@ class Settings(BaseSettings):
 
         return timedelta(minutes=self.review_timeout_minutes)
 
+    @property
+    def loads_project_rules(self) -> bool:
+        """Return whether the run needs the repository's project rules loaded into the agent."""
+
+        return self.enforce_project_rules or self.simplify_nearby_code
+
     @model_validator(mode="before")
     @classmethod
     def strip_blank_inputs(cls, data: dict[str, str]) -> dict[str, str]:

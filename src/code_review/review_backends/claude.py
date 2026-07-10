@@ -142,7 +142,7 @@ async def session_turn_text(
 async def review_session(pr: PullRequestContext, inputs: ReviewInputs) -> AsyncIterator[ReviewSessionStreams]:
     """Open a Managed Agents review session whose in-flight turn can be followed by a flush turn."""
 
-    mount_repo = SETTINGS.enforce_project_rules or SETTINGS.simplify_nearby_code
+    mount_repo = SETTINGS.loads_project_rules
 
     async with anthropic.AsyncAnthropic(api_key=SETTINGS.anthropic_api_key) as client:
         environment_id: str | None = None

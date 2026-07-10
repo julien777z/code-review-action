@@ -98,14 +98,14 @@ async def capture_flush_marker(chunks: AsyncIterator[str], completion: FlushComp
 
 @asynccontextmanager
 async def backend_findings_session(
-    handlers: BackendHandlers, pr: PullRequestContext, inputs: ReviewInputs
+    handlers: BackendHandlers, inputs: ReviewInputs
 ) -> AsyncIterator[FindingsSession]:
     """Open a backend review session exposing parsed findings for the review and flush turns."""
 
     flush_completion = FlushCompletion()
 
     try:
-        async with handlers["review_session"](pr, inputs) as session:
+        async with handlers["review_session"](inputs.pr, inputs) as session:
             yield FindingsSession(
                 findings=lambda: iter_findings(backend_text_chunks(handlers, session["review_text"]())),
                 flush_findings=lambda: iter_findings(
@@ -123,7 +123,7 @@ async def backend_findings_session(
 async def run_backend_review(pr: PullRequestContext, handlers: BackendHandlers) -> ReviewRoundResult:
     """Run a PR review through the shared backend policy."""
 
-    return await run_review_round(pr, CONFIG["review_marker"], partial(backend_findings_session, handlers, pr))
+    return await run_review_round(pr, CONFIG["review_marker"], partial(backend_findings_session, handlers))
 
 
 def load_event() -> tuple[str, GithubEvent]:
