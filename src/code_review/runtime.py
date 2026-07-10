@@ -126,12 +126,6 @@ async def run_backend_review(pr: PullRequestContext, handlers: BackendHandlers) 
     return await run_review_round(pr, CONFIG["review_marker"], partial(backend_findings_session, handlers, pr))
 
 
-def summary_errors(handlers: BackendHandlers) -> tuple[type[Exception], ...]:
-    """Return errors that make optional summary posting fail without failing review."""
-
-    return (*SUMMARY_BASE_ERRORS, *handlers["errors"])
-
-
 def load_event() -> tuple[str, GithubEvent]:
     """Read the triggering event name and payload from the runner environment."""
 
@@ -274,7 +268,7 @@ async def main() -> int:
         if exit_code == 0 and first_review and SETTINGS.pr_review_summary:
             try:
                 await post_pr_summary(pr, handlers["generate_summary"], diff=result.diff)
-            except summary_errors(handlers) as exc:
+            except (*SUMMARY_BASE_ERRORS, *handlers["errors"]) as exc:
                 logger.error("Could not post the PR summary; the review still succeeded: %s", exc)
 
         return exit_code

@@ -46,6 +46,12 @@ def is_retryable_api_error(exc: anthropic.APIError) -> bool:
     )
 
 
+def claude_review_error(exc: RuntimeError) -> ReviewBackendError:
+    """Convert a Managed Agents runtime failure into a non-retryable review error."""
+
+    return ReviewBackendError(f"Claude review failed: {exc}", retryable=False)
+
+
 def github_repository_resource(pr: PullRequestContext) -> BetaManagedAgentsGitHubRepositoryResourceParams:
     """Describe the PR repository mount so the agent clones it and loads the project's rules."""
 
@@ -129,7 +135,7 @@ async def session_turn_text(
                 elif event.type == "session.status_terminated":
                     break
     except RuntimeError as exc:
-        raise ReviewBackendError(f"Claude review failed: {exc}", retryable=False) from exc
+        raise claude_review_error(exc) from exc
 
 
 @asynccontextmanager
@@ -162,7 +168,7 @@ async def review_session(pr: PullRequestContext, inputs: ReviewInputs) -> AsyncI
                 )
                 session_id = session.id
             except RuntimeError as exc:
-                raise ReviewBackendError(f"Claude review failed: {exc}", retryable=False) from exc
+                raise claude_review_error(exc) from exc
 
             yield ReviewSessionStreams(
                 review_text=partial(session_turn_text, client, session.id, pull_request_message(inputs)),
