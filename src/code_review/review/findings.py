@@ -334,10 +334,11 @@ async def collect_round_findings(
                 for attempt in range(REVIEW_BACKEND_ATTEMPTS):
                     produced = False
                     await stack.aclose()
-                    live_session = await stack.enter_async_context(
-                        backend["open_session"](current_inputs)
-                    )
+                    live_session = None
                     try:
+                        live_session = await stack.enter_async_context(
+                            backend["open_session"](current_inputs)
+                        )
                         async for finding in live_session["findings"]():
                             produced = True
                             yield finding

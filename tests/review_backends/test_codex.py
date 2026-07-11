@@ -21,12 +21,12 @@ class TestUsageLimitError:
     @pytest.mark.parametrize(
         ("info", "expected"),
         [
-            ("UsageLimitExceeded", True),
-            ({"type": "UsageLimitExceeded"}, True),
-            ({"type": "Unauthorized"}, False),
+            ("usageLimitExceeded", True),
+            ("sessionBudgetExceeded", False),
+            ("unauthorized", False),
             (None, False),
         ],
-        ids=["string", "tagged", "other", "missing"],
+        ids=["usage-limit", "session-budget", "unauthorized", "missing"],
     )
     def test_classifies_only_usage_limits(self, info, expected: bool) -> None:
         """Test that only the app-server usage-limit variant enables fallback."""
@@ -82,9 +82,37 @@ class TestTurnText:
                         "status": "failed",
                         "error": {
                             "message": "usage reached",
-                            "codexErrorInfo": "UsageLimitExceeded",
+                            "codexErrorInfo": "usageLimitExceeded",
                         },
                     }
+                },
+            )
+        )
+
+        with pytest.raises(ReviewBackendError) as raised:
+            asyncio.run(collect(client.turn_text("review")))
+
+        assert raised.value.usage_limited is True
+
+    def test_usage_limit_notification_enables_fallback(self) -> None:
+        """Test that an app-server error notification uses the configured fallback path."""
+
+        client = codex.CodexAppServer(MagicMock())
+        client.thread_id = "thread-1"
+        client.request = AsyncMock(
+            return_value={"turn": {"id": "turn-1", "status": "inProgress"}}
+        )
+        client.read = AsyncMock(
+            return_value=CodexRpcMessage(
+                method="error",
+                params={
+                    "error": {
+                        "message": "usage reached",
+                        "codexErrorInfo": "usageLimitExceeded",
+                    },
+                    "threadId": "thread-1",
+                    "turnId": "turn-1",
+                    "willRetry": False,
                 },
             )
         )

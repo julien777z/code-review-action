@@ -30,14 +30,7 @@ def mapping(value: JsonValue, label: str) -> dict[str, JsonValue]:
 def usage_limit_error(error: dict[str, JsonValue] | None) -> bool:
     """Return whether a Codex turn failure is the structured subscription-limit error."""
 
-    if error is None:
-        return False
-
-    info = error.get("codexErrorInfo")
-    if info == "UsageLimitExceeded":
-        return True
-
-    return isinstance(info, dict) and info.get("type") == "UsageLimitExceeded"
+    return error is not None and error.get("codexErrorInfo") == "usageLimitExceeded"
 
 
 class CodexAppServer:

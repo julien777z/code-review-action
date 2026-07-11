@@ -270,6 +270,54 @@ class TestCollectRoundFindings:
             "Not visible",
         ]
 
+    def test_usage_fallback_covers_session_startup(
+        self, monkeypatch, pull_request_factory, review_inputs_factory
+    ) -> None:
+        """Test that a usage limit raised before streaming still starts the replacement provider."""
+
+        async def empty_findings() -> AsyncIterator[Finding]:
+            return
+            yield
+
+        @asynccontextmanager
+        async def exhausted(inputs: ReviewInputs) -> AsyncIterator[FindingsSession]:
+            raise ReviewBackendError("limit", usage_limited=True)
+            yield FindingsSession(
+                findings=empty_findings,
+                flush_findings=empty_findings,
+                flush_completion=FlushCompletion(),
+            )
+
+        @asynccontextmanager
+        async def replacement(inputs: ReviewInputs) -> AsyncIterator[FindingsSession]:
+            yield FindingsSession(
+                findings=empty_findings,
+                flush_findings=empty_findings,
+                flush_completion=FlushCompletion(),
+            )
+
+        backends = (
+            FindingsBackend(label="Claude", open_session=exhausted),
+            FindingsBackend(label="Codex", open_session=replacement),
+        )
+        monkeypatch.setattr(
+            "code_review.review.findings.existing_finding_titles", AsyncMock(return_value={})
+        )
+
+        result = asyncio.run(
+            collect_round_findings(
+                pull_request_factory(),
+                "marker",
+                backends,
+                review_inputs_factory(),
+                ANCHORS_UP_TO_LINE_30,
+                set(),
+                set(),
+            )
+        )
+
+        assert result.current_keys == set()
+
 
 class TestDeferredLows:
     """Test that low findings are buffered during the stream and flushed under the caps at the end."""
