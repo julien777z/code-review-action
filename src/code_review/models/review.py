@@ -30,6 +30,19 @@ class ReviewRoundResult(BaseModel):
     diff: str | None = None
 
 
+class ReviewPhaseStats(BaseModel):
+    """Arrival counters for one review phase's finding stream."""
+
+    label: str
+    received: int = 0
+
+
+class FlushCompletion(BaseModel):
+    """Whether the wrap-up flush turn asserted the review had covered every changed file."""
+
+    complete: bool = False
+
+
 class FindingPublication(StrEnum):
     """Where a finding was made visible."""
 

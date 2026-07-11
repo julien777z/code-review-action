@@ -2,6 +2,7 @@ import logging
 import os
 import subprocess
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from functools import partial
 from pathlib import Path
 from typing import Final
@@ -12,15 +13,14 @@ from cursor_sdk import CursorAgentError
 from code_review.config import CONFIG, SETTINGS
 from code_review.errors import ReviewBackendError
 from code_review.github import add_reaction, fetch_pull_request, remove_reaction
-from code_review.models.backend import Backend, BackendHandlers
+from code_review.models.backend import Backend, BackendHandlers, FindingsSession
 from code_review.models.config import ReviewModel
-from code_review.models.findings import Finding
 from code_review.models.github_event import GithubEvent
 from code_review.models.pull_request import PullRequestContext, ReviewInputs
-from code_review.models.review import ReviewRoundResult
+from code_review.models.review import FlushCompletion, ReviewRoundResult
 from code_review.review.round import run_review_round
 from code_review.review_backends import claude, cursor
-from code_review.utils.jsonl import iter_findings
+from code_review.utils.jsonl import iter_findings, iter_text_lines
 from code_review.summary import SummaryGenerationError, post_pr_summary
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
@@ -46,14 +46,14 @@ def claude_error_retryable(exc: Exception) -> bool:
 
 BACKENDS: Final[dict[Backend, BackendHandlers]] = {
     Backend.CURSOR: BackendHandlers(
-        review_text=cursor.review_text,
+        review_session=cursor.review_session,
         generate_summary=cursor.generate_text,
         errors=(CursorAgentError,),
         retryable=cursor_error_retryable,
         label="Cursor",
     ),
     Backend.CLAUDE: BackendHandlers(
-        review_text=claude.review_text,
+        review_session=claude.review_session,
         generate_summary=claude.generate_text,
         errors=(anthropic.APIError,),
         retryable=claude_error_retryable,
@@ -62,44 +62,68 @@ BACKENDS: Final[dict[Backend, BackendHandlers]] = {
 }
 
 
+def backend_review_error(handlers: BackendHandlers, exc: Exception) -> ReviewBackendError:
+    """Convert a declared backend failure into the shared review error carrying its retry policy."""
+
+    return ReviewBackendError(f"{handlers['label']} review failed: {exc}", retryable=handlers["retryable"](exc))
+
+
 async def backend_text_chunks(
-    handlers: BackendHandlers, pr: PullRequestContext, inputs: ReviewInputs
+    handlers: BackendHandlers, chunks: AsyncIterator[str], *, require_output: bool = True
 ) -> AsyncIterator[str]:
     """Stream backend text and convert declared backend failures into review errors."""
 
     produced = False
     try:
-        async for chunk in handlers["review_text"](pr, inputs):
+        async for chunk in chunks:
             produced = True
             yield chunk
     except handlers["errors"] as exc:
-        raise ReviewBackendError(
-            f"{handlers['label']} review failed: {exc}", retryable=handlers["retryable"](exc)
-        ) from exc
+        raise backend_review_error(handlers, exc) from exc
 
-    if not produced:
+    if require_output and not produced:
         raise ReviewBackendError(f"{handlers['label']} review produced no output.", retryable=True)
 
 
-async def stream_backend_findings(
-    handlers: BackendHandlers, pr: PullRequestContext, inputs: ReviewInputs
-) -> AsyncIterator[Finding]:
-    """Parse JSONL findings from the backend text stream."""
+async def capture_flush_marker(chunks: AsyncIterator[str], completion: FlushCompletion) -> AsyncIterator[str]:
+    """Stream text lines while consuming flush-marker lines and recording an asserted completion."""
 
-    async for finding in iter_findings(backend_text_chunks(handlers, pr, inputs)):
-        yield finding
+    async for line in iter_text_lines(chunks):
+        stripped = line.strip()
+        if stripped == CONFIG["flush_complete_marker"]:
+            completion.complete = True
+        elif stripped != CONFIG["flush_partial_marker"]:
+            yield line
+
+
+@asynccontextmanager
+async def backend_findings_session(
+    handlers: BackendHandlers, inputs: ReviewInputs
+) -> AsyncIterator[FindingsSession]:
+    """Open a backend review session exposing parsed findings for the review and flush turns."""
+
+    flush_completion = FlushCompletion()
+
+    try:
+        async with handlers["review_session"](inputs.pr, inputs) as session:
+            yield FindingsSession(
+                findings=lambda: iter_findings(backend_text_chunks(handlers, session["review_text"]())),
+                flush_findings=lambda: iter_findings(
+                    capture_flush_marker(
+                        backend_text_chunks(handlers, session["flush_text"](), require_output=False),
+                        flush_completion,
+                    )
+                ),
+                flush_completion=flush_completion,
+            )
+    except handlers["errors"] as exc:
+        raise backend_review_error(handlers, exc) from exc
 
 
 async def run_backend_review(pr: PullRequestContext, handlers: BackendHandlers) -> ReviewRoundResult:
     """Run a PR review through the shared backend policy."""
 
-    return await run_review_round(pr, CONFIG["review_marker"], partial(stream_backend_findings, handlers, pr))
-
-
-def summary_errors(handlers: BackendHandlers) -> tuple[type[Exception], ...]:
-    """Return errors that make optional summary posting fail without failing review."""
-
-    return (*SUMMARY_BASE_ERRORS, *handlers["errors"])
+    return await run_review_round(pr, CONFIG["review_marker"], partial(backend_findings_session, handlers))
 
 
 def load_event() -> tuple[str, GithubEvent]:
@@ -244,7 +268,7 @@ async def main() -> int:
         if exit_code == 0 and first_review and SETTINGS.pr_review_summary:
             try:
                 await post_pr_summary(pr, handlers["generate_summary"], diff=result.diff)
-            except summary_errors(handlers) as exc:
+            except (*SUMMARY_BASE_ERRORS, *handlers["errors"]) as exc:
                 logger.error("Could not post the PR summary; the review still succeeded: %s", exc)
 
         return exit_code

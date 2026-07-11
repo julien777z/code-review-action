@@ -17,6 +17,8 @@ DISCLAIMER: Final[str] = (
 CONFIG: Final[ReviewConfig] = ReviewConfig(
     review_marker="<!-- code-review -->",
     no_findings_marker="NO_FINDINGS",
+    flush_complete_marker="REVIEW_COMPLETE",
+    flush_partial_marker="REVIEW_PARTIAL",
     untrusted_input_open="<!-- UNTRUSTED_INPUT START -->",
     untrusted_input_close="<!-- UNTRUSTED_INPUT END -->",
     summary_marker_open="<!-- code-review:summary:start -->",
@@ -79,6 +81,12 @@ class Settings(BaseSettings):
             return None
 
         return timedelta(minutes=self.review_timeout_minutes)
+
+    @property
+    def loads_project_rules(self) -> bool:
+        """Return whether the run needs the repository's project rules loaded into the agent."""
+
+        return self.enforce_project_rules or self.simplify_nearby_code
 
     @model_validator(mode="before")
     @classmethod

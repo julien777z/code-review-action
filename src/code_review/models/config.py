@@ -23,6 +23,8 @@ class ReviewConfig(TypedDict):
 
     review_marker: str
     no_findings_marker: str
+    flush_complete_marker: str
+    flush_partial_marker: str
     untrusted_input_open: str
     untrusted_input_close: str
     summary_marker_open: str
