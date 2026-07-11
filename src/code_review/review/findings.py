@@ -9,12 +9,13 @@ from typing import Final, TypedDict
 from code_review.config import SETTINGS
 from code_review.errors import ReviewBackendError
 from code_review.github import post_comment
-from code_review.models.backend import FindingsSession, GetBackendFindings, GetFindingsSession
+from code_review.models.backend import FindingsBackend, FindingsSession
 from code_review.models.findings import Finding, FindingCategory
-from code_review.models.pull_request import PullRequestContext, ReviewInputs
+from code_review.models.pull_request import PostedFinding, PullRequestContext, ReviewInputs
 from code_review.models.review import FindingPublication, ReviewPhaseStats, RoundFindings
 from code_review.models.severity import DiffSide, Severity
 from code_review.review.comments import build_inline_comment
+from code_review.review.threads import existing_finding_titles
 
 logger = logging.getLogger("code_review.review.findings")
 
@@ -59,29 +60,7 @@ class RoundPublishState(TypedDict):
     findings: RoundFindings
     deferred_lows: list[Finding]
     seen_anchor_keys: set[tuple[str, int, DiffSide, str]]
-
-
-async def stream_findings_with_retry(
-    get_findings: GetBackendFindings, inputs: ReviewInputs
-) -> AsyncIterator[Finding]:
-    """Stream the backend's findings, retrying transient failures only before the first one arrives."""
-
-    for attempt in range(REVIEW_BACKEND_ATTEMPTS):
-        produced = False
-        try:
-            async for finding in get_findings(inputs):
-                produced = True
-                yield finding
-
-            return
-        except ReviewBackendError as exc:
-            if produced or not exc.retryable or attempt == REVIEW_BACKEND_ATTEMPTS - 1:
-                raise
-
-            backoff = REVIEW_RETRY_BACKOFF * (2**attempt)
-            logger.warning("Review backend failed; retrying in %ss: %s", backoff.total_seconds(), exc)
-
-            await asyncio.sleep(backoff.total_seconds())
+    observed_findings: list[Finding]
 
 
 def flush_reserve(review_timeout: timedelta) -> timedelta:
@@ -216,6 +195,8 @@ async def publish_round_findings(
         if not is_postable(finding, state["anchors"], state["unpatched"]):
             continue
 
+        state["observed_findings"].append(finding)
+
         if title_key in state["posted_keys"]:
             findings.track_current(title_key, finding)
 
@@ -283,7 +264,7 @@ async def flush_round_findings(
 async def collect_round_findings(
     pr: PullRequestContext,
     marker: str,
-    open_session: GetFindingsSession,
+    backends: tuple[FindingsBackend, ...],
     inputs: ReviewInputs,
     anchors: dict[str, tuple[set[int], set[int]]],
     unpatched: set[str],
@@ -300,26 +281,102 @@ async def collect_round_findings(
         findings=RoundFindings(),
         deferred_lows=[],
         seen_anchor_keys=set(),
+        observed_findings=[],
     )
 
     async with AsyncExitStack() as stack:
         live_session: FindingsSession | None = None
 
-        async def open_review_findings(inputs: ReviewInputs) -> AsyncIterator[Finding]:
-            """Open a fresh session on the round's stack, closing any failed prior one, and stream its findings."""
+        async def fallback_inputs(
+            current_inputs: ReviewInputs, previous: str, replacement: str
+        ) -> ReviewInputs:
+            """Refresh posted findings and add only missing in-memory findings for a provider handoff."""
+
+            posted = await existing_finding_titles(
+                current_inputs.pr.repo, current_inputs.pr.number, marker
+            )
+            posted_keys = {
+                (path, finding.title)
+                for path, findings in posted.items()
+                for finding in findings
+            }
+            for finding in state["observed_findings"]:
+                key = (finding.path, finding.title)
+                if key in posted_keys:
+                    continue
+
+                posted.setdefault(finding.path, []).append(
+                    PostedFinding(severity=finding.severity.value, title=finding.title)
+                )
+                posted_keys.add(key)
+
+            return current_inputs.model_copy(
+                update={
+                    "posted_findings": posted,
+                    "provider_handoff": (
+                        f"{previous} reached its subscription usage limit during this review, so you are "
+                        f"continuing the same round as the {replacement} provider. The prior-findings list "
+                        "below was refreshed from PR comments and supplemented only with findings that had "
+                        "not become visible there. Re-evaluate the full diff and re-emit every still-valid "
+                        "finding using the exact existing title and severity."
+                    ),
+                }
+            )
+
+        async def review_findings() -> AsyncIterator[Finding]:
+            """Stream providers in fallback order, retrying transient startup failures per provider."""
 
             nonlocal live_session
-            await stack.aclose()
-            live_session = None
+            current_inputs = inputs
+            last_error: ReviewBackendError | None = None
 
-            live_session = await stack.enter_async_context(open_session(inputs))
-            async for finding in live_session["findings"]():
-                yield finding
+            for backend_index, backend in enumerate(backends):
+                for attempt in range(REVIEW_BACKEND_ATTEMPTS):
+                    produced = False
+                    await stack.aclose()
+                    live_session = await stack.enter_async_context(
+                        backend["open_session"](current_inputs)
+                    )
+                    try:
+                        async for finding in live_session["findings"]():
+                            produced = True
+                            yield finding
+
+                        return
+                    except ReviewBackendError as exc:
+                        last_error = exc
+                        has_fallback = backend_index < len(backends) - 1
+                        if exc.usage_limited and has_fallback:
+                            replacement = backends[backend_index + 1]
+                            logger.warning(
+                                "%s usage is exhausted; continuing the round with %s.",
+                                backend["label"],
+                                replacement["label"],
+                            )
+                            current_inputs = await fallback_inputs(
+                                current_inputs, backend["label"], replacement["label"]
+                            )
+                            break
+
+                        if produced or not exc.retryable or attempt == REVIEW_BACKEND_ATTEMPTS - 1:
+                            raise
+
+                        backoff = REVIEW_RETRY_BACKOFF * (2**attempt)
+                        logger.warning(
+                            "%s failed; retrying in %ss: %s",
+                            backend["label"],
+                            backoff.total_seconds(),
+                            exc,
+                        )
+                        await asyncio.sleep(backoff.total_seconds())
+                else:
+                    continue
+
+            if last_error is not None:
+                raise last_error
 
         review_stats = ReviewPhaseStats(label="review")
-        review_stream = counted_findings(
-            stream_findings_with_retry(open_review_findings, inputs), review_stats
-        )
+        review_stream = counted_findings(review_findings(), review_stats)
 
         review_scope = asyncio.timeout(soft_deadline.total_seconds() if soft_deadline is not None else None)
         try:

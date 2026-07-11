@@ -1,22 +1,9 @@
-import logging
-from collections.abc import AsyncIterator, Awaitable
+import os
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from functools import partial
-from typing import Final
 
-import anthropic
-from anthropic.types.beta import (
-    BetaCloudConfigParams,
-    BetaManagedAgentsCommitCheckoutParam,
-    BetaManagedAgentsGitHubRepositoryResourceParams,
-    BetaUnrestrictedNetworkParam,
-)
-from anthropic.types.beta.sessions import (
-    BetaManagedAgentsEventParams,
-    BetaManagedAgentsTextBlockParam,
-    BetaManagedAgentsUserInterruptEventParams,
-    BetaManagedAgentsUserMessageEventParams,
-)
+from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient, ClaudeSDKError
+from claude_agent_sdk.types import AssistantMessage, RateLimitEvent, ResultMessage, StreamEvent, TextBlock
 
 from code_review.config import SETTINGS
 from code_review.errors import ReviewBackendError
@@ -24,169 +11,101 @@ from code_review.models.backend import ReviewSessionStreams
 from code_review.models.pull_request import PullRequestContext, ReviewInputs
 from code_review.prompt import flush_prompt, pull_request_message, review_instructions
 
-logger = logging.getLogger("code_review.claude")
 
-SUMMARY_MAX_TOKENS: Final[int] = 1500
+def claude_options(*, reviewing: bool = True) -> ClaudeAgentOptions:
+    """Build read-only Claude Code options for a review or standalone summary turn."""
 
-MANAGED_AGENTS_BETA: Final[str] = "managed-agents-2026-04-01"
-REVIEW_AGENT_NAME: Final[str] = "code-review-action"
+    environment = dict(os.environ)
+    environment["CLAUDE_CODE_OAUTH_TOKEN"] = SETTINGS.claude_code_oauth_token
+    environment.pop("ANTHROPIC_API_KEY", None)
+    environment.pop("CODEX_AUTH_JSON", None)
 
-
-def is_retryable_api_error(exc: anthropic.APIError) -> bool:
-    """Return whether an Anthropic API error is worth retrying."""
-
-    return isinstance(
-        exc,
-        (
-            anthropic.APIConnectionError,
-            anthropic.InternalServerError,
-            anthropic.OverloadedError,
-            anthropic.RateLimitError,
-        ),
+    return ClaudeAgentOptions(
+        allowed_tools=["Read", "Glob", "Grep", "Agent"] if reviewing else [],
+        disallowed_tools=["Bash", "Edit", "Write", "NotebookEdit", "WebFetch", "WebSearch"],
+        system_prompt=review_instructions() if reviewing else None,
+        model=SETTINGS.claude_model,
+        cwd=os.environ.get("GITHUB_WORKSPACE") or os.getcwd(),
+        env=environment,
+        include_partial_messages=True,
+        permission_mode="dontAsk",
+        setting_sources=["project"] if reviewing else [],
     )
 
 
-def claude_review_error(exc: RuntimeError) -> ReviewBackendError:
-    """Convert a Managed Agents runtime failure into a non-retryable review error."""
+def stream_delta(message: StreamEvent) -> str | None:
+    """Return a text delta from a Claude stream event when present."""
 
-    return ReviewBackendError(f"Claude review failed: {exc}", retryable=False)
+    event = message.event
+    if event.get("type") != "content_block_delta":
+        return None
 
+    delta = event.get("delta")
+    if not isinstance(delta, dict) or delta.get("type") != "text_delta":
+        return None
 
-def github_repository_resource(pr: PullRequestContext) -> BetaManagedAgentsGitHubRepositoryResourceParams:
-    """Describe the PR repository mount so the agent clones it and loads the project's rules."""
+    text = delta.get("text")
 
-    return BetaManagedAgentsGitHubRepositoryResourceParams(
-        type="github_repository",
-        url=f"https://github.com/{pr.repo}",
-        authorization_token=SETTINGS.github_token,
-        checkout=BetaManagedAgentsCommitCheckoutParam(type="commit", sha=pr.head_sha),
-    )
-
-
-async def create_environment(client: anthropic.AsyncAnthropic) -> str:
-    """Create a fresh cloud environment for this run's session and return its id."""
-
-    environment = await client.beta.environments.create(
-        name=REVIEW_AGENT_NAME,
-        config=BetaCloudConfigParams(type="cloud", networking=BetaUnrestrictedNetworkParam(type="unrestricted")),
-        betas=[MANAGED_AGENTS_BETA],
-    )
-
-    return environment.id
+    return text if isinstance(text, str) else None
 
 
-async def teardown_managed_agent(
-    client: anthropic.AsyncAnthropic, environment_id: str, agent_id: str | None, session_id: str | None
-) -> None:
-    """Delete whichever of the run's session, agent, and environment were created, tolerating failures."""
+async def turn_text(client: ClaudeSDKClient, prompt: str, *, interrupt: bool = False) -> AsyncIterator[str]:
+    """Run one Claude Code turn and stream only its assistant text."""
 
-    async def _delete(action: Awaitable[object]) -> None:
-        """Await one teardown call and swallow an API failure so the others still run."""
+    if interrupt:
+        await client.interrupt()
+        async for _ in client.receive_response():
+            pass
 
-        try:
-            await action
-        except anthropic.APIError as exc:
-            logger.warning("Could not tear down a Claude agent resource: %s", exc)
-
-    if session_id is not None:
-        await _delete(client.beta.sessions.delete(session_id, betas=[MANAGED_AGENTS_BETA]))
-
-    if agent_id is not None:
-        await _delete(client.beta.agents.archive(agent_id, betas=[MANAGED_AGENTS_BETA]))
-
-    await _delete(client.beta.environments.delete(environment_id, betas=[MANAGED_AGENTS_BETA]))
-
-
-async def session_turn_text(
-    client: anthropic.AsyncAnthropic, session_id: str, message: str, *, interrupting: bool = False
-) -> AsyncIterator[str]:
-    """Send one user turn into the session, interrupting any in-flight turn when asked, and stream the reply."""
-
-    message_event = BetaManagedAgentsUserMessageEventParams(
-        type="user.message", content=[BetaManagedAgentsTextBlockParam(type="text", text=message)]
-    )
-    events: list[BetaManagedAgentsEventParams] = (
-        [BetaManagedAgentsUserInterruptEventParams(type="user.interrupt"), message_event]
-        if interrupting
-        else [message_event]
-    )
-
-    try:
-        async with await client.beta.sessions.events.stream(
-            session_id=session_id, betas=[MANAGED_AGENTS_BETA]
-        ) as stream:
-            await client.beta.sessions.events.send(
-                session_id=session_id,
-                events=events,
-                betas=[MANAGED_AGENTS_BETA],
+    await client.query(prompt)
+    partial_output = False
+    async for message in client.receive_response():
+        if isinstance(message, RateLimitEvent) and message.rate_limit_info.status == "rejected":
+            raise ReviewBackendError(
+                "Claude subscription usage limit reached.", usage_limited=True
             )
-            produced = False
-            async for event in stream:
-                if event.type == "agent.message":
-                    for block in event.content:
-                        if block.type == "text":
-                            produced = True
-                            yield block.text
-                elif event.type == "session.status_idle":
-                    if event.stop_reason.type == "requires_action" or (interrupting and not produced):
-                        continue
 
-                    break
-                elif event.type == "session.status_terminated":
-                    break
-    except RuntimeError as exc:
-        raise claude_review_error(exc) from exc
+        if isinstance(message, StreamEvent) and (delta := stream_delta(message)) is not None:
+            partial_output = True
+            yield delta
+        elif isinstance(message, AssistantMessage) and not partial_output:
+            for block in message.content:
+                if isinstance(block, TextBlock):
+                    yield block.text
+        elif isinstance(message, ResultMessage) and message.is_error:
+            details = "; ".join(message.errors or ()) or message.result or message.subtype
+            usage_limited = any(
+                marker in details.lower()
+                for marker in ("session limit", "weekly limit", "opus limit", "usage limit")
+            )
+            raise ReviewBackendError(
+                f"Claude Code failed: {details}", usage_limited=usage_limited
+            )
 
 
 @asynccontextmanager
 async def review_session(pr: PullRequestContext, inputs: ReviewInputs) -> AsyncIterator[ReviewSessionStreams]:
-    """Open a Managed Agents review session whose in-flight turn can be followed by a flush turn."""
+    """Open a persistent Claude Code review session with interruptible review and flush turns."""
 
-    mount_repo = SETTINGS.loads_project_rules
-
-    async with anthropic.AsyncAnthropic(api_key=SETTINGS.anthropic_api_key) as client:
-        environment_id: str | None = None
-        agent_id: str | None = None
-        session_id: str | None = None
-
-        try:
-            try:
-                environment_id = await create_environment(client)
-                agent = await client.beta.agents.create(
-                    name=REVIEW_AGENT_NAME,
-                    model=SETTINGS.claude_model,
-                    system=review_instructions(),
-                    tools=[{"type": "agent_toolset_20260401", "default_config": {"enabled": True}}],
-                    betas=[MANAGED_AGENTS_BETA],
-                )
-                agent_id = agent.id
-                session = await client.beta.sessions.create(
-                    agent={"type": "agent", "id": agent.id, "version": agent.version},
-                    environment_id=environment_id,
-                    resources=[github_repository_resource(pr)] if mount_repo else [],
-                    betas=[MANAGED_AGENTS_BETA],
-                )
-                session_id = session.id
-            except RuntimeError as exc:
-                raise claude_review_error(exc) from exc
-
+    try:
+        async with ClaudeSDKClient(options=claude_options()) as client:
             yield ReviewSessionStreams(
-                review_text=partial(session_turn_text, client, session.id, pull_request_message(inputs)),
-                flush_text=partial(session_turn_text, client, session.id, flush_prompt(), interrupting=True),
+                review_text=lambda: turn_text(client, pull_request_message(inputs)),
+                flush_text=lambda: turn_text(client, flush_prompt(), interrupt=True),
             )
-        finally:
-            if environment_id is not None:
-                await teardown_managed_agent(client, environment_id, agent_id, session_id)
+    except ClaudeSDKError as exc:
+        raise ReviewBackendError(f"Claude Code failed: {exc}", retryable=True) from exc
 
 
 async def generate_text(prompt: str) -> str:
-    """Run a single-shot Claude completion and return the joined text output."""
+    """Run one Claude Code turn and return its complete assistant text."""
 
-    async with anthropic.AsyncAnthropic(api_key=SETTINGS.anthropic_api_key) as client:
-        message = await client.messages.create(
-            model=SETTINGS.claude_model,
-            max_tokens=SUMMARY_MAX_TOKENS,
-            messages=[{"role": "user", "content": prompt}],
-        )
+    output: list[str] = []
+    try:
+        async with ClaudeSDKClient(options=claude_options(reviewing=False)) as client:
+            async for chunk in turn_text(client, prompt):
+                output.append(chunk)
+    except ClaudeSDKError as exc:
+        raise ReviewBackendError(f"Claude Code failed: {exc}", retryable=True) from exc
 
-    return "".join(block.text for block in message.content if block.type == "text")
+    return "".join(output)

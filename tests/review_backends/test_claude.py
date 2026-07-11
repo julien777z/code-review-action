@@ -1,11 +1,11 @@
 import asyncio
 from collections.abc import AsyncIterator
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from claude_agent_sdk.types import RateLimitEvent, RateLimitInfo, ResultMessage, StreamEvent
 
-from code_review.config import CONFIG
 from code_review.errors import ReviewBackendError
-from code_review.prompt import flush_prompt
 from code_review.review_backends import claude
 
 
@@ -15,256 +15,131 @@ async def collect(chunks: AsyncIterator[str]) -> list[str]:
     return [chunk async for chunk in chunks]
 
 
-async def open_and_collect(pr, inputs, *, flush: bool = False, both: bool = False) -> list[str]:
-    """Open a Claude review session and drain its review turn, flush turn, or both in order."""
+def stream_event(text: str) -> StreamEvent:
+    """Build one Claude text-delta stream event."""
 
-    async with claude.review_session(pr, inputs) as session:
-        chunks: list[str] = []
-        if both or not flush:
-            chunks.extend(await collect(session["review_text"]()))
+    return StreamEvent(
+        uuid="message-1",
+        session_id="session-1",
+        event={"type": "content_block_delta", "delta": {"type": "text_delta", "text": text}},
+    )
 
-        if both or flush:
-            chunks.extend(await collect(session["flush_text"]()))
 
-        return chunks
+def result_message(*, error: str | None = None) -> ResultMessage:
+    """Build one terminal Claude result message."""
+
+    return ResultMessage(
+        subtype="error_during_execution" if error else "success",
+        duration_ms=1,
+        duration_api_ms=1,
+        is_error=error is not None,
+        num_turns=1,
+        session_id="session-1",
+        result=error,
+        errors=[error] if error else [],
+    )
+
+
+ClaudeMessage = RateLimitEvent | ResultMessage | StreamEvent
+
+
+def claude_client(*responses: list[ClaudeMessage]) -> MagicMock:
+    """Build a persistent ClaudeSDKClient double with one message stream per turn."""
+
+    client = MagicMock()
+    client.query = AsyncMock(return_value=None)
+    client.interrupt = AsyncMock(return_value=None)
+    streams = iter(responses)
+
+    async def _receive() -> AsyncIterator[ClaudeMessage]:
+        for message in next(streams):
+            yield message
+
+    client.receive_response = _receive
+    client.__aenter__ = AsyncMock(return_value=client)
+    client.__aexit__ = AsyncMock(return_value=False)
+
+    return client
+
+
+class TestClaudeOptions:
+    """Test that Claude Code runs with subscription auth and read-only tools."""
+
+    def test_uses_oauth_and_disables_mutating_tools(self, mock_config, monkeypatch) -> None:
+        """Test that Claude options carry OAuth while denying shell and write tools."""
+
+        mock_config(claude_code_oauth_token="oauth-token")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "api-key")
+        monkeypatch.setenv("CODEX_AUTH_JSON", "codex-secret")
+
+        options = claude.claude_options()
+
+        assert options.env["CLAUDE_CODE_OAUTH_TOKEN"] == "oauth-token"
+        assert "ANTHROPIC_API_KEY" not in options.env
+        assert "CODEX_AUTH_JSON" not in options.env
+        assert {"Bash", "Edit", "Write"}.issubset(options.disallowed_tools)
 
 
 class TestReviewSession:
-    """Test that the Managed Agents session streams turns, mounts the repo on request, and tears down."""
+    """Test that Claude review turns stream, interrupt, and detect usage exhaustion."""
 
-    @pytest.mark.parametrize(
-        ("enforce", "nearby", "repo_mounted"),
-        [(True, False, True), (False, True, True), (False, False, False)],
-        ids=["enforcing", "nearby-code", "neither"],
-    )
-    def test_repo_mount_follows_enforcement(
-        self,
-        monkeypatch,
-        mock_config,
-        pull_request_factory,
-        review_inputs_factory,
-        managed_agent_client_factory,
-        managed_agent_event_factory,
-        enforce: bool,
-        nearby: bool,
-        repo_mounted: bool,
+    def test_streams_review_then_interrupts_before_flush(
+        self, monkeypatch, mock_config, pull_request_factory, review_inputs_factory
     ) -> None:
-        """Test that the session mounts the repo when rules are enforced or nearby code is weighed."""
+        """Test that the flush drains the interrupted result before sending its follow-up."""
 
-        mock_config(anthropic_api_key="key", enforce_project_rules=enforce, simplify_nearby_code=nearby)
-        events = [
-            managed_agent_event_factory("agent.message", text=CONFIG["no_findings_marker"]),
-            managed_agent_event_factory("session.status_idle", stop_reason="end_turn"),
-        ]
-        client = managed_agent_client_factory(events)
-        monkeypatch.setattr("code_review.review_backends.claude.anthropic.AsyncAnthropic", lambda **kwargs: client)
+        mock_config(claude_code_oauth_token="oauth-token")
+        client = claude_client(
+            [stream_event("review"), result_message()],
+            [result_message(error="interrupted")],
+            [stream_event("flush"), result_message()],
+        )
+        monkeypatch.setattr(claude, "ClaudeSDKClient", lambda options: client)
 
-        chunks = asyncio.run(open_and_collect(pull_request_factory(), review_inputs_factory()))
+        async def run() -> tuple[list[str], list[str]]:
+            async with claude.review_session(
+                pull_request_factory(), review_inputs_factory()
+            ) as session:
+                review = await collect(session["review_text"]())
+                flush = await collect(session["flush_text"]())
 
-        assert chunks == [CONFIG["no_findings_marker"]]
-        assert bool(client.beta.sessions.create.await_args.kwargs["resources"]) is repo_mounted
+                return review, flush
 
-    def test_streams_message_text_until_idle(
-        self,
-        monkeypatch,
-        mock_config,
-        pull_request_factory,
-        review_inputs_factory,
-        managed_agent_client_factory,
-        managed_agent_event_factory,
-    ) -> None:
-        """Test that text blocks are yielded and the stream stops on a terminal idle."""
+        review, flush = asyncio.run(run())
 
-        mock_config(anthropic_api_key="key")
-        events = [
-            managed_agent_event_factory("agent.message", text="finding one\n"),
-            managed_agent_event_factory("agent.message", text="finding two"),
-            managed_agent_event_factory("session.status_idle", stop_reason="end_turn"),
-            managed_agent_event_factory("agent.message", text="after idle"),
-        ]
-        client = managed_agent_client_factory(events)
-        monkeypatch.setattr("code_review.review_backends.claude.anthropic.AsyncAnthropic", lambda **kwargs: client)
+        assert review == ["review"]
+        assert flush == ["flush"]
+        client.interrupt.assert_awaited_once()
+        assert client.query.await_count == 2
 
-        chunks = asyncio.run(open_and_collect(pull_request_factory(), review_inputs_factory()))
+    def test_rejected_rate_limit_is_usage_exhaustion(self, mock_config) -> None:
+        """Test that a rejected subscription rate event enables provider fallback."""
 
-        assert chunks == ["finding one\n", "finding two"]
-
-    def test_mounts_repo_at_head_and_sends_prompt(
-        self,
-        monkeypatch,
-        mock_config,
-        pull_request_factory,
-        review_inputs_factory,
-        managed_agent_client_factory,
-        managed_agent_event_factory,
-    ) -> None:
-        """Test that the PR repo is mounted at the head commit and the diff turn is sent as the user message."""
-
-        mock_config(anthropic_api_key="key")
-        events = [
-            managed_agent_event_factory("agent.message", text="x"),
-            managed_agent_event_factory("session.status_terminated"),
-        ]
-        client = managed_agent_client_factory(events)
-        monkeypatch.setattr("code_review.review_backends.claude.anthropic.AsyncAnthropic", lambda **kwargs: client)
-
-        pr = pull_request_factory(repo="octo/repo", head_sha="deadbeef")
-        asyncio.run(open_and_collect(pr, review_inputs_factory(pr=pr, diff="DIFF_BODY")))
-
-        resource = client.beta.sessions.create.await_args.kwargs["resources"][0]
-
-        assert resource["url"] == "https://github.com/octo/repo"
-        assert resource["checkout"]["sha"] == "deadbeef"
-        sent = client.beta.sessions.events.send.await_args.kwargs["events"][0]
-
-        assert "DIFF_BODY" in sent["content"][0]["text"]
-
-    def test_flush_turn_reuses_the_session_with_a_fresh_stream(
-        self,
-        monkeypatch,
-        mock_config,
-        pull_request_factory,
-        review_inputs_factory,
-        managed_agent_client_factory,
-        managed_agent_event_factory,
-    ) -> None:
-        """Test that the flush turn sends the wrap-up prompt into the same session over its own stream."""
-
-        mock_config(anthropic_api_key="key")
-        review_events = [
-            managed_agent_event_factory("agent.message", text="partial"),
-            managed_agent_event_factory("session.status_idle", stop_reason="end_turn"),
-        ]
-        flush_events = [
-            managed_agent_event_factory("agent.message", text="late"),
-            managed_agent_event_factory("session.status_idle", stop_reason="end_turn"),
-        ]
-        client = managed_agent_client_factory(review_events, flush_events)
-        monkeypatch.setattr("code_review.review_backends.claude.anthropic.AsyncAnthropic", lambda **kwargs: client)
-
-        chunks = asyncio.run(open_and_collect(pull_request_factory(), review_inputs_factory(), both=True))
-
-        assert chunks == ["partial", "late"]
-        assert client.beta.sessions.events.stream.await_count == 2
-        session_ids = {call.kwargs["session_id"] for call in client.beta.sessions.events.send.await_args_list}
-
-        assert session_ids == {"session-1"}
-        flush_events = client.beta.sessions.events.send.await_args_list[1].kwargs["events"]
-
-        assert flush_events[0] == {"type": "user.interrupt"}
-        assert flush_events[1]["content"][0]["text"] == flush_prompt()
-        client.beta.sessions.delete.assert_awaited_once()
-
-    def test_flush_turn_skips_an_idle_before_its_own_text(
-        self,
-        monkeypatch,
-        mock_config,
-        pull_request_factory,
-        review_inputs_factory,
-        managed_agent_client_factory,
-        managed_agent_event_factory,
-    ) -> None:
-        """Test that an idle left over from the interrupted turn does not end the flush before its reply."""
-
-        mock_config(anthropic_api_key="key")
-        flush_events = [
-            managed_agent_event_factory("session.status_idle", stop_reason="end_turn"),
-            managed_agent_event_factory("agent.message", text="late"),
-            managed_agent_event_factory("session.status_idle", stop_reason="end_turn"),
-        ]
-        client = managed_agent_client_factory(flush_events)
-        monkeypatch.setattr("code_review.review_backends.claude.anthropic.AsyncAnthropic", lambda **kwargs: client)
-
-        chunks = asyncio.run(open_and_collect(pull_request_factory(), review_inputs_factory(), flush=True))
-
-        assert chunks == ["late"]
-
-    def test_no_output_streams_empty(
-        self,
-        monkeypatch,
-        mock_config,
-        pull_request_factory,
-        review_inputs_factory,
-        managed_agent_client_factory,
-        managed_agent_event_factory,
-    ) -> None:
-        """Test that a session that answers with no text streams nothing for the runner's no-output check."""
-
-        mock_config(anthropic_api_key="key")
-        events = [managed_agent_event_factory("session.status_terminated")]
-        client = managed_agent_client_factory(events)
-        monkeypatch.setattr("code_review.review_backends.claude.anthropic.AsyncAnthropic", lambda **kwargs: client)
-
-        chunks = asyncio.run(open_and_collect(pull_request_factory(), review_inputs_factory()))
-
-        assert chunks == []
-
-    def test_creates_and_tears_down_the_run_resources(
-        self,
-        monkeypatch,
-        mock_config,
-        pull_request_factory,
-        review_inputs_factory,
-        managed_agent_client_factory,
-        managed_agent_event_factory,
-    ) -> None:
-        """Test that a fresh environment is created for the run and every resource is torn down once."""
-
-        mock_config(anthropic_api_key="key")
-        events = [
-            managed_agent_event_factory("agent.message", text="x"),
-            managed_agent_event_factory("session.status_idle", stop_reason="end_turn"),
-        ]
-        client = managed_agent_client_factory(events)
-        monkeypatch.setattr("code_review.review_backends.claude.anthropic.AsyncAnthropic", lambda **kwargs: client)
-
-        asyncio.run(open_and_collect(pull_request_factory(), review_inputs_factory()))
-
-        client.beta.environments.create.assert_awaited_once()
-        client.beta.sessions.delete.assert_awaited_once()
-        client.beta.agents.archive.assert_awaited_once()
-        client.beta.environments.delete.assert_awaited_once()
-
-    def test_setup_failure_maps_to_review_failure_and_tears_down(
-        self, monkeypatch, mock_config, pull_request_factory, review_inputs_factory, managed_agent_client_factory
-    ) -> None:
-        """Test that a failure creating the agent maps to a terminal review failure and still deletes the environment."""
-
-        mock_config(anthropic_api_key="key")
-        client = managed_agent_client_factory([])
-        client.beta.agents.create.side_effect = RuntimeError("boom")
-        monkeypatch.setattr("code_review.review_backends.claude.anthropic.AsyncAnthropic", lambda **kwargs: client)
+        mock_config(claude_code_oauth_token="oauth-token")
+        client = claude_client(
+            [
+                RateLimitEvent(
+                    rate_limit_info=RateLimitInfo(status="rejected"),
+                    uuid="limit-1",
+                    session_id="session-1",
+                )
+            ]
+        )
 
         with pytest.raises(ReviewBackendError) as raised:
-            asyncio.run(open_and_collect(pull_request_factory(), review_inputs_factory()))
+            asyncio.run(collect(claude.turn_text(client, "review")))
 
-        assert raised.value.retryable is False
-        assert "Claude review failed: boom" in str(raised.value)
-        client.beta.environments.delete.assert_awaited_once()
-        client.beta.sessions.delete.assert_not_awaited()
-        client.beta.agents.archive.assert_not_awaited()
+        assert raised.value.usage_limited is True
 
 
 class TestGenerateText:
-    """Test that the single-shot Claude completion returns the joined text output."""
+    """Test that Claude summary generation joins streamed text."""
 
-    def test_joins_text_blocks(self, monkeypatch, mock_config, anthropic_client_factory) -> None:
-        """Test that the text content of the response is returned."""
+    def test_joins_text_deltas(self, monkeypatch, mock_config) -> None:
+        """Test that a single summary turn returns its complete text."""
 
-        mock_config(anthropic_api_key="key")
-        client = anthropic_client_factory(text="Generated summary")
-        monkeypatch.setattr("code_review.review_backends.claude.anthropic.AsyncAnthropic", lambda **kwargs: client)
+        mock_config(claude_code_oauth_token="oauth-token")
+        client = claude_client([stream_event("Generated "), stream_event("summary"), result_message()])
+        monkeypatch.setattr(claude, "ClaudeSDKClient", lambda options: client)
 
         assert asyncio.run(claude.generate_text("prompt")) == "Generated summary"
-
-    def test_sends_prompt_to_the_model(self, monkeypatch, mock_config, anthropic_client_factory) -> None:
-        """Test that the prompt is forwarded as the user message."""
-
-        mock_config(anthropic_api_key="key")
-        client = anthropic_client_factory()
-        monkeypatch.setattr("code_review.review_backends.claude.anthropic.AsyncAnthropic", lambda **kwargs: client)
-
-        asyncio.run(claude.generate_text("Summarize this"))
-        kwargs = client.messages.create.await_args.kwargs
-
-        assert kwargs["messages"] == [{"role": "user", "content": "Summarize this"}]

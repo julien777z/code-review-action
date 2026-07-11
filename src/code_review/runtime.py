@@ -1,25 +1,21 @@
 import logging
 import os
-import subprocess
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from functools import partial
 from pathlib import Path
 from typing import Final
 
-import anthropic
-from cursor_sdk import CursorAgentError
-
 from code_review.config import CONFIG, SETTINGS
 from code_review.errors import ReviewBackendError
 from code_review.github import add_reaction, fetch_pull_request, remove_reaction
-from code_review.models.backend import Backend, BackendHandlers, FindingsSession
+from code_review.models.backend import Backend, BackendHandlers, FindingsBackend, FindingsSession
 from code_review.models.config import ReviewModel
 from code_review.models.github_event import GithubEvent
 from code_review.models.pull_request import PullRequestContext, ReviewInputs
 from code_review.models.review import FlushCompletion, ReviewRoundResult
 from code_review.review.round import run_review_round
-from code_review.review_backends import claude, cursor
+from code_review.review_backends import claude, codex
 from code_review.utils.jsonl import iter_findings, iter_text_lines
 from code_review.summary import SummaryGenerationError, post_pr_summary
 
@@ -29,57 +25,32 @@ logger = logging.getLogger("code_review")
 PULL_REQUEST_ACTIONS = ("opened", "synchronize", "ready_for_review")
 FIRST_REVIEW_ACTIONS = ("opened", "ready_for_review")
 
-SUMMARY_BASE_ERRORS: Final[tuple[type[Exception], ...]] = (SummaryGenerationError, subprocess.CalledProcessError)
-
-
-def cursor_error_retryable(exc: Exception) -> bool:
-    """Return whether a Cursor backend exception should be retried."""
-
-    return isinstance(exc, CursorAgentError) and exc.is_retryable
-
-
-def claude_error_retryable(exc: Exception) -> bool:
-    """Return whether a Claude backend exception should be retried."""
-
-    return isinstance(exc, anthropic.APIError) and claude.is_retryable_api_error(exc)
+SUMMARY_BASE_ERRORS: Final[tuple[type[Exception], ...]] = (SummaryGenerationError, ReviewBackendError)
 
 
 BACKENDS: Final[dict[Backend, BackendHandlers]] = {
-    Backend.CURSOR: BackendHandlers(
-        review_session=cursor.review_session,
-        generate_summary=cursor.generate_text,
-        errors=(CursorAgentError,),
-        retryable=cursor_error_retryable,
-        label="Cursor",
-    ),
     Backend.CLAUDE: BackendHandlers(
         review_session=claude.review_session,
         generate_summary=claude.generate_text,
-        errors=(anthropic.APIError,),
-        retryable=claude_error_retryable,
         label="Claude",
     ),
+    Backend.CODEX: BackendHandlers(
+        review_session=codex.review_session,
+        generate_summary=codex.generate_text,
+        label="Codex",
+    ),
 }
-
-
-def backend_review_error(handlers: BackendHandlers, exc: Exception) -> ReviewBackendError:
-    """Convert a declared backend failure into the shared review error carrying its retry policy."""
-
-    return ReviewBackendError(f"{handlers['label']} review failed: {exc}", retryable=handlers["retryable"](exc))
 
 
 async def backend_text_chunks(
     handlers: BackendHandlers, chunks: AsyncIterator[str], *, require_output: bool = True
 ) -> AsyncIterator[str]:
-    """Stream backend text and convert declared backend failures into review errors."""
+    """Stream backend text and reject an empty review response."""
 
     produced = False
-    try:
-        async for chunk in chunks:
-            produced = True
-            yield chunk
-    except handlers["errors"] as exc:
-        raise backend_review_error(handlers, exc) from exc
+    async for chunk in chunks:
+        produced = True
+        yield chunk
 
     if require_output and not produced:
         raise ReviewBackendError(f"{handlers['label']} review produced no output.", retryable=True)
@@ -104,26 +75,33 @@ async def backend_findings_session(
 
     flush_completion = FlushCompletion()
 
-    try:
-        async with handlers["review_session"](inputs.pr, inputs) as session:
-            yield FindingsSession(
-                findings=lambda: iter_findings(backend_text_chunks(handlers, session["review_text"]())),
-                flush_findings=lambda: iter_findings(
-                    capture_flush_marker(
-                        backend_text_chunks(handlers, session["flush_text"](), require_output=False),
-                        flush_completion,
-                    )
-                ),
-                flush_completion=flush_completion,
-            )
-    except handlers["errors"] as exc:
-        raise backend_review_error(handlers, exc) from exc
+    async with handlers["review_session"](inputs.pr, inputs) as session:
+        yield FindingsSession(
+            findings=lambda: iter_findings(backend_text_chunks(handlers, session["review_text"]())),
+            flush_findings=lambda: iter_findings(
+                capture_flush_marker(
+                    backend_text_chunks(handlers, session["flush_text"](), require_output=False),
+                    flush_completion,
+                )
+            ),
+            flush_completion=flush_completion,
+        )
 
 
-async def run_backend_review(pr: PullRequestContext, handlers: BackendHandlers) -> ReviewRoundResult:
+async def run_backend_review(
+    pr: PullRequestContext, handlers: tuple[BackendHandlers, ...]
+) -> ReviewRoundResult:
     """Run a PR review through the shared backend policy."""
 
-    return await run_review_round(pr, CONFIG["review_marker"], partial(backend_findings_session, handlers))
+    backends = tuple(
+        FindingsBackend(
+            label=backend["label"],
+            open_session=partial(backend_findings_session, backend),
+        )
+        for backend in handlers
+    )
+
+    return await run_review_round(pr, CONFIG["review_marker"], backends)
 
 
 def load_event() -> tuple[str, GithubEvent]:
@@ -201,27 +179,65 @@ def reaction_subject(event_name: str, event: GithubEvent, repo: str, pr_number: 
     return f"repos/{repo}/issues/{pr_number}"
 
 
-def select_backend(first_review: bool) -> Backend | None:
-    """Pick the backend for this event, resolving `auto` and skipping when creds are missing."""
+def configured_backends() -> tuple[Backend, ...]:
+    """Return configured backends in automatic preference order."""
 
-    requested = (
-        SETTINGS.first_review_model
-        if first_review and SETTINGS.first_review_model is not None
-        else SETTINGS.review_model
+    return tuple(
+        backend
+        for backend, configured in (
+            (Backend.CLAUDE, bool(SETTINGS.claude_code_oauth_token)),
+            (Backend.CODEX, bool(SETTINGS.codex_auth_json)),
+        )
+        if configured
     )
 
-    match requested:
-        case ReviewModel.AUTO:
-            if SETTINGS.anthropic_api_key:
-                return Backend.CLAUDE
 
-            return Backend.CURSOR if SETTINGS.cursor_api_key else None
+def select_backends() -> tuple[Backend, ...]:
+    """Resolve the requested primary backend and optional usage-limit fallback."""
+
+    configured = configured_backends()
+    match SETTINGS.review_model:
+        case ReviewModel.AUTO:
+            selected = configured
         case ReviewModel.CLAUDE:
-            return Backend.CLAUDE if SETTINGS.anthropic_api_key else None
-        case ReviewModel.CURSOR:
-            return Backend.CURSOR if SETTINGS.cursor_api_key else None
+            selected = (Backend.CLAUDE,) if Backend.CLAUDE in configured else ()
+        case ReviewModel.CODEX:
+            selected = (Backend.CODEX,) if Backend.CODEX in configured else ()
         case _:
-            return None
+            selected = ()
+
+    if not selected or not SETTINGS.fallback_on_usage_limit:
+        return selected[:1]
+
+    fallback = tuple(backend for backend in configured if backend != selected[0])
+
+    return selected[:1] + fallback[:1]
+
+
+async def generate_summary_with_fallback(
+    handlers: tuple[BackendHandlers, ...], prompt: str
+) -> str:
+    """Generate summary text, switching once when subscription usage is exhausted."""
+
+    last_error: ReviewBackendError | None = None
+    for index, handler in enumerate(handlers):
+        try:
+            return await handler["generate_summary"](prompt)
+        except ReviewBackendError as exc:
+            last_error = exc
+            if not exc.usage_limited or index == len(handlers) - 1:
+                raise
+
+            logger.warning(
+                "%s summary usage is exhausted; retrying with %s.",
+                handler["label"],
+                handlers[index + 1]["label"],
+            )
+
+    if last_error is not None:
+        raise last_error
+
+    raise ReviewBackendError("No summary backend is configured.")
 
 
 async def main() -> int:
@@ -240,8 +256,8 @@ async def main() -> int:
         return 1
 
     first_review = is_first_review_event(event_name, event)
-    backend = select_backend(first_review)
-    if backend is None:
+    backends = select_backends()
+    if not backends:
         logger.info("No review backend is configured for this event; skipping.")
 
         return 0
@@ -262,13 +278,15 @@ async def main() -> int:
     reaction_id = await add_reaction(subject)
 
     try:
-        handlers = BACKENDS[backend]
+        handlers = tuple(BACKENDS[backend] for backend in backends)
         result = await run_backend_review(pr, handlers)
         exit_code = result.exit_code
         if exit_code == 0 and first_review and SETTINGS.pr_review_summary:
             try:
-                await post_pr_summary(pr, handlers["generate_summary"], diff=result.diff)
-            except (*SUMMARY_BASE_ERRORS, *handlers["errors"]) as exc:
+                await post_pr_summary(
+                    pr, partial(generate_summary_with_fallback, handlers), diff=result.diff
+                )
+            except SUMMARY_BASE_ERRORS as exc:
                 logger.error("Could not post the PR summary; the review still succeeded: %s", exc)
 
         return exit_code

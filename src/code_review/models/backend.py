@@ -9,15 +9,14 @@ from code_review.models.review import FlushCompletion
 
 SessionTextStream = Callable[[], AsyncIterator[str]]
 SessionFindingsStream = Callable[[], AsyncIterator[Finding]]
-BackendRetryable = Callable[[Exception], bool]
 GenerateSummary = Callable[[str], Awaitable[str]]
 
 
 class Backend(StrEnum):
     """The concrete backend resolved for this run."""
 
-    CURSOR = "cursor"
     CLAUDE = "claude"
+    CODEX = "codex"
 
 
 class ReviewSessionStreams(TypedDict):
@@ -37,8 +36,6 @@ class BackendHandlers(TypedDict):
 
     review_session: OpenReviewSession
     generate_summary: GenerateSummary
-    errors: tuple[type[Exception], ...]
-    retryable: BackendRetryable
     label: str
 
 
@@ -52,4 +49,9 @@ class FindingsSession(TypedDict):
 
 GetFindingsSession = Callable[[ReviewInputs], AbstractAsyncContextManager[FindingsSession]]
 
-GetBackendFindings = Callable[[ReviewInputs], AsyncIterator[Finding]]
+
+class FindingsBackend(TypedDict):
+    """A named findings-session provider in fallback order."""
+
+    label: str
+    open_session: GetFindingsSession

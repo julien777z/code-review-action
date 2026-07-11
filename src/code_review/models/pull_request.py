@@ -33,3 +33,4 @@ class ReviewInputs(BaseModel):
     pr: PullRequestContext
     diff: str
     posted_findings: dict[str, list[PostedFinding]] = Field(default_factory=dict)
+    provider_handoff: str | None = None

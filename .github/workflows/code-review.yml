@@ -30,7 +30,8 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || format('refs/pull/{0}/head', github.event.issue.number) }}
       - uses: ./
         with:
-          cursor-api-key: ${{ secrets.CURSOR_API_KEY }}
+          claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          codex-auth-json: ${{ secrets.CODEX_AUTH_JSON }}
           resolve-token: ${{ secrets.CODE_REVIEW_TOKEN }}
           project-rules-severity: "medium"
           simplify-suggest: "true"

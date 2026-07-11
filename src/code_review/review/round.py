@@ -16,7 +16,7 @@ from code_review.github import (
     resolve_threads,
     start_check_run,
 )
-from code_review.models.backend import GetFindingsSession
+from code_review.models.backend import FindingsBackend
 from code_review.models.findings import ReviewPayload
 from code_review.models.pull_request import PullRequestContext, ReviewInputs
 from code_review.models.review import CheckConclusion, ReviewRoundResult
@@ -71,7 +71,7 @@ async def note_diff_too_large(pr: PullRequestContext, marker: str) -> ReviewRoun
 
 
 async def run_review_round(
-    pr: PullRequestContext, marker: str, open_session: GetFindingsSession
+    pr: PullRequestContext, marker: str, backends: tuple[FindingsBackend, ...]
 ) -> ReviewRoundResult:
     """Stream a backend's findings, post review comments, and record the verdict."""
 
@@ -125,7 +125,7 @@ async def run_review_round(
 
         try:
             findings = await collect_round_findings(
-                pr, marker, open_session, inputs, anchors, unpatched, posted_keys
+                pr, marker, backends, inputs, anchors, unpatched, posted_keys
             )
         except ReviewBackendError as exc:
             logger.error("Review backend failed: %s", exc)
