@@ -122,6 +122,37 @@ class TestTurnText:
 
         assert raised.value.usage_limited is True
 
+    def test_retrying_error_notification_keeps_streaming(self) -> None:
+        """Test that an app-server retry notification does not abort the active turn."""
+
+        client = codex.CodexAppServer(MagicMock())
+        client.thread_id = "thread-1"
+        client.request = AsyncMock(
+            return_value={"turn": {"id": "turn-1", "status": "inProgress"}}
+        )
+        client.read = AsyncMock(
+            side_effect=[
+                CodexRpcMessage(
+                    method="error",
+                    params={
+                        "error": {"message": "retrying"},
+                        "threadId": "thread-1",
+                        "turnId": "turn-1",
+                        "willRetry": True,
+                    },
+                ),
+                CodexRpcMessage(
+                    method="item/agentMessage/delta", params={"delta": "finding"}
+                ),
+                CodexRpcMessage(
+                    method="turn/completed",
+                    params={"turn": {"id": "turn-1", "status": "completed"}},
+                ),
+            ]
+        )
+
+        assert asyncio.run(collect(client.turn_text("review"))) == ["finding"]
+
     def test_error_notification_raises(self) -> None:
         """Test that a non-limit error notification cannot leave the stream waiting forever."""
 

@@ -188,6 +188,8 @@ class CodexAppServer:
                     raise ReviewBackendError(
                         "Codex subscription usage limit reached.", usage_limited=True
                     )
+                if params.get("willRetry") is True:
+                    continue
 
                 message_text = str(error.get("message") or "unknown failure")
                 raise ReviewBackendError(f"Codex failed: {message_text}")
