@@ -13,6 +13,8 @@ from code_review.review.findings import (
     collect_round_findings,
     finding_anchors,
     finding_kept,
+    flush_budget,
+    flush_reserve,
     is_postable,
     low_finding_rank,
     stream_findings_with_retry,
@@ -205,7 +207,7 @@ class TestCollectRoundFindings:
         post_comment_mock,
         pull_request_factory,
         review_inputs_factory,
-        stream_findings_factory,
+        findings_session_factory,
         finding_factory,
     ) -> None:
         """Test that a capped finding cannot affect thread reconciliation or blocking state."""
@@ -217,7 +219,7 @@ class TestCollectRoundFindings:
             collect_round_findings(
                 pull_request_factory(),
                 "marker",
-                stream_findings_factory([finding]),
+                findings_session_factory([finding])[0],
                 review_inputs_factory(),
                 {"src/app.py": ({10}, set())},
                 set(),
@@ -233,7 +235,7 @@ class TestCollectRoundFindings:
         self,
         pull_request_factory,
         review_inputs_factory,
-        stream_findings_factory,
+        findings_session_factory,
         finding_factory,
     ) -> None:
         """Test that a finding already posted on the PR keeps its thread current."""
@@ -244,7 +246,7 @@ class TestCollectRoundFindings:
             collect_round_findings(
                 pull_request_factory(),
                 "marker",
-                stream_findings_factory([finding]),
+                findings_session_factory([finding])[0],
                 review_inputs_factory(),
                 {"src/app.py": ({10}, set())},
                 set(),
@@ -260,7 +262,7 @@ class TestDeferredLows:
     """Test that low findings are buffered during the stream and flushed under the caps at the end."""
 
     def test_lows_post_after_non_lows(
-        self, mock_config, post_comment_mock, pull_request_factory, review_inputs_factory, stream_findings_factory, finding_factory
+        self, mock_config, post_comment_mock, pull_request_factory, review_inputs_factory, findings_session_factory, finding_factory
     ) -> None:
         """Test that a low arriving before a medium still posts after it, proving the buffer defers lows."""
 
@@ -271,7 +273,7 @@ class TestDeferredLows:
             collect_round_findings(
                 pull_request_factory(),
                 "marker",
-                stream_findings_factory([low, medium]),
+                findings_session_factory([low, medium])[0],
                 review_inputs_factory(),
                 ANCHORS_UP_TO_LINE_30,
                 set(),
@@ -283,7 +285,7 @@ class TestDeferredLows:
         assert result.current_keys == {("src/app.py", "Low first"), ("src/app.py", "Medium second")}
 
     def test_important_low_beats_earlier_low_under_cap(
-        self, mock_config, post_comment_mock, pull_request_factory, review_inputs_factory, stream_findings_factory, finding_factory
+        self, mock_config, post_comment_mock, pull_request_factory, review_inputs_factory, findings_session_factory, finding_factory
     ) -> None:
         """Test that a later high-priority-category low outranks an earlier one when the low cap is one."""
 
@@ -295,7 +297,7 @@ class TestDeferredLows:
             collect_round_findings(
                 pull_request_factory(),
                 "marker",
-                stream_findings_factory([early, late]),
+                findings_session_factory([early, late])[0],
                 review_inputs_factory(),
                 ANCHORS_UP_TO_LINE_30,
                 set(),
@@ -307,7 +309,7 @@ class TestDeferredLows:
         assert result.current_keys == {("src/app.py", "Bug low")}
 
     def test_lows_share_the_total_cap_budget(
-        self, mock_config, post_comment_mock, pull_request_factory, review_inputs_factory, stream_findings_factory, finding_factory
+        self, mock_config, post_comment_mock, pull_request_factory, review_inputs_factory, findings_session_factory, finding_factory
     ) -> None:
         """Test that lows are dropped when non-lows already fill the total-findings cap."""
 
@@ -322,7 +324,7 @@ class TestDeferredLows:
             collect_round_findings(
                 pull_request_factory(),
                 "marker",
-                stream_findings_factory(findings),
+                findings_session_factory(findings)[0],
                 review_inputs_factory(),
                 ANCHORS_UP_TO_LINE_30,
                 set(),
@@ -334,7 +336,7 @@ class TestDeferredLows:
         assert result.current_keys == {("src/app.py", "M1"), ("src/app.py", "M2")}
 
     def test_low_matching_existing_thread_is_tracked_not_buffered(
-        self, mock_config, post_comment_mock, pull_request_factory, review_inputs_factory, stream_findings_factory, finding_factory
+        self, mock_config, post_comment_mock, pull_request_factory, review_inputs_factory, findings_session_factory, finding_factory
     ) -> None:
         """Test that a low matching an existing thread is tracked current immediately and never posts a new comment."""
 
@@ -344,7 +346,7 @@ class TestDeferredLows:
             collect_round_findings(
                 pull_request_factory(),
                 "marker",
-                stream_findings_factory([low]),
+                findings_session_factory([low])[0],
                 review_inputs_factory(),
                 ANCHORS_UP_TO_LINE_30,
                 set(),
@@ -357,7 +359,7 @@ class TestDeferredLows:
         assert result.severity_by_key[("src/app.py", "Existing")] is Severity.LOW
 
     def test_later_non_low_supersedes_earlier_same_title_low(
-        self, mock_config, post_comment_mock, pull_request_factory, review_inputs_factory, stream_findings_factory, finding_factory
+        self, mock_config, post_comment_mock, pull_request_factory, review_inputs_factory, findings_session_factory, finding_factory
     ) -> None:
         """Test that a non-low emitted after a same-title buffered low still publishes and wins the title."""
 
@@ -368,7 +370,7 @@ class TestDeferredLows:
             collect_round_findings(
                 pull_request_factory(),
                 "marker",
-                stream_findings_factory([low, medium]),
+                findings_session_factory([low, medium])[0],
                 review_inputs_factory(),
                 ANCHORS_UP_TO_LINE_30,
                 set(),
@@ -380,7 +382,7 @@ class TestDeferredLows:
         assert result.severity_by_key[("src/app.py", "Shared")] is Severity.MEDIUM
 
     def test_dropped_finding_does_not_claim_its_title(
-        self, mock_config, post_comment_mock, pull_request_factory, review_inputs_factory, stream_findings_factory, finding_factory
+        self, mock_config, post_comment_mock, pull_request_factory, review_inputs_factory, findings_session_factory, finding_factory
     ) -> None:
         """Test that a finding dropped by the total cap does not block a later distinct finding sharing its title."""
 
@@ -392,7 +394,7 @@ class TestDeferredLows:
             collect_round_findings(
                 pull_request_factory(),
                 "marker",
-                stream_findings_factory([first, dropped]),
+                findings_session_factory([first, dropped])[0],
                 review_inputs_factory(),
                 ANCHORS_UP_TO_LINE_30,
                 set(),
@@ -404,7 +406,7 @@ class TestDeferredLows:
         assert ("src/app.py", "Contested") not in result.current_keys
 
     def test_buffered_lows_dedupe_by_title(
-        self, mock_config, post_comment_mock, pull_request_factory, review_inputs_factory, stream_findings_factory, finding_factory
+        self, mock_config, post_comment_mock, pull_request_factory, review_inputs_factory, findings_session_factory, finding_factory
     ) -> None:
         """Test that two buffered lows sharing a title on different lines post only once."""
 
@@ -415,7 +417,7 @@ class TestDeferredLows:
             collect_round_findings(
                 pull_request_factory(),
                 "marker",
-                stream_findings_factory([first, second]),
+                findings_session_factory([first, second])[0],
                 review_inputs_factory(),
                 ANCHORS_UP_TO_LINE_30,
                 set(),
@@ -427,8 +429,44 @@ class TestDeferredLows:
         assert result.current_keys == {("src/app.py", "Duplicate")}
 
 
+class TestFlushReserve:
+    """Test that the flush reserve caps at three minutes and scales down with short budgets."""
+
+    @pytest.mark.parametrize(
+        ("review_timeout", "expected"),
+        [
+            (timedelta(minutes=15), timedelta(minutes=3)),
+            (timedelta(minutes=5), timedelta(minutes=1)),
+            (timedelta(minutes=30), timedelta(minutes=3)),
+        ],
+        ids=["default", "short", "long"],
+    )
+    def test_flush_reserve(self, review_timeout: timedelta, expected: timedelta) -> None:
+        """Test that the reserve is a fifth of the budget capped at three minutes."""
+
+        assert flush_reserve(review_timeout) == expected
+
+    @pytest.mark.parametrize(
+        ("review_timeout", "expected"),
+        [
+            (timedelta(minutes=15), timedelta(seconds=160)),
+            (timedelta(minutes=1), timedelta(seconds=8)),
+        ],
+        ids=["default", "one-minute"],
+    )
+    def test_flush_budget(self, review_timeout: timedelta, expected: timedelta) -> None:
+        """Test that the flush window subtracts a headroom that shrinks with the reserve."""
+
+        assert flush_budget(review_timeout) == expected
+
+    def test_flush_budget_is_positive_for_every_configured_timeout(self) -> None:
+        """Test that any whole-minute timeout funds a real flush window."""
+
+        assert all(flush_budget(timedelta(minutes=minutes)) > timedelta(0) for minutes in range(1, 61))
+
+
 class TestCollectRoundFindingsTimeout:
-    """Test that the review time limit finalizes with partial findings and cleans up the backend."""
+    """Test that the soft deadline interrupts the review, flushes the session, and keeps partial findings."""
 
     def test_timeout_keeps_partial_findings_and_cleans_up(
         self,
@@ -437,20 +475,20 @@ class TestCollectRoundFindingsTimeout:
         override_review_timeout,
         pull_request_factory,
         review_inputs_factory,
-        blocking_stream_factory,
+        findings_session_factory,
         finding_factory,
     ) -> None:
-        """Test that hitting the limit marks the round timed out, keeps streamed findings, and runs cleanup."""
+        """Test that hitting the limit marks the round timed out, keeps streamed findings, and closes the session."""
 
         override_review_timeout(timedelta(seconds=0.1))
         finding = finding_factory(path="src/app.py", line=10, title="Streamed")
-        get_findings, state = blocking_stream_factory([finding])
+        open_session, state = findings_session_factory([finding], block_after_review=True)
 
         result = asyncio.run(
             collect_round_findings(
                 pull_request_factory(),
                 "marker",
-                get_findings,
+                open_session,
                 review_inputs_factory(),
                 {"src/app.py": ({10}, set())},
                 set(),
@@ -460,34 +498,30 @@ class TestCollectRoundFindingsTimeout:
 
         assert result.timed_out is True
         assert result.current_keys == {("src/app.py", "Streamed")}
-        assert state["cleaned_up"] is True
+        assert state.closed == 1
 
-    def test_timeout_flushes_top_low_after_streamed_non_low(
+    def test_short_timeout_still_runs_the_flush_turn(
         self,
         mock_config,
         post_comment_mock,
         override_review_timeout,
         pull_request_factory,
         review_inputs_factory,
-        blocking_stream_factory,
+        findings_session_factory,
         finding_factory,
     ) -> None:
-        """Test that hitting the limit still posts the streamed non-low and the best buffered low."""
+        """Test that even a short budget funds a flush window that solicits unemitted findings."""
 
-        mock_config(low_findings_cap=1)
-        override_review_timeout(timedelta(seconds=0.1))
-        medium = finding_factory(line=10, severity=Severity.MEDIUM, title="Medium")
-        low_bug = finding_factory(line=20, severity=Severity.LOW, category=FindingCategory.BUG, title="Bug low")
-        low_simplify = finding_factory(
-            line=30, severity=Severity.LOW, category=FindingCategory.CODE_SIMPLIFICATION, title="Simplify low"
+        override_review_timeout(timedelta(seconds=1))
+        open_session, state = findings_session_factory(
+            [finding_factory()], block_after_review=True, flush_findings=[finding_factory(line=20, title="Late")]
         )
-        get_findings, state = blocking_stream_factory([medium, low_bug, low_simplify])
 
         result = asyncio.run(
             collect_round_findings(
                 pull_request_factory(),
                 "marker",
-                get_findings,
+                open_session,
                 review_inputs_factory(),
                 ANCHORS_UP_TO_LINE_30,
                 set(),
@@ -496,9 +530,162 @@ class TestCollectRoundFindingsTimeout:
         )
 
         assert result.timed_out is True
-        assert state["cleaned_up"] is True
-        assert posted_titles(post_comment_mock) == ["Medium", "Bug low"]
-        assert result.current_keys == {("src/app.py", "Medium"), ("src/app.py", "Bug low")}
+        assert state.flush_calls == 1
+        assert ("src/app.py", "Late") in result.current_keys
+
+    def test_flush_turn_posts_remaining_findings(
+        self,
+        mock_config,
+        post_comment_mock,
+        override_review_timeout,
+        zero_flush_headroom,
+        pull_request_factory,
+        review_inputs_factory,
+        findings_session_factory,
+        finding_factory,
+    ) -> None:
+        """Test that the wrap-up flush publishes the agent's remaining findings after the interruption."""
+
+        mock_config(low_findings_cap=1)
+        override_review_timeout(timedelta(seconds=0.5))
+        streamed = finding_factory(line=10, severity=Severity.MEDIUM, title="Streamed")
+        duplicate = finding_factory(line=10, severity=Severity.MEDIUM, title="Streamed")
+        late = finding_factory(line=20, severity=Severity.MEDIUM, title="Late")
+        low = finding_factory(line=30, severity=Severity.LOW, category=FindingCategory.BUG, title="Low")
+        open_session, state = findings_session_factory(
+            [streamed], block_after_review=True, flush_findings=[duplicate, late, low]
+        )
+
+        result = asyncio.run(
+            collect_round_findings(
+                pull_request_factory(),
+                "marker",
+                open_session,
+                review_inputs_factory(),
+                ANCHORS_UP_TO_LINE_30,
+                set(),
+                set(),
+            )
+        )
+
+        assert result.timed_out is True
+        assert state.flush_calls == 1
+        assert state.closed == 1
+        assert posted_titles(post_comment_mock) == ["Streamed", "Late", "Low"]
+        assert result.current_keys == {
+            ("src/app.py", "Streamed"),
+            ("src/app.py", "Late"),
+            ("src/app.py", "Low"),
+        }
+
+    def test_complete_flush_clears_the_timed_out_flag(
+        self,
+        mock_config,
+        post_comment_mock,
+        override_review_timeout,
+        zero_flush_headroom,
+        pull_request_factory,
+        review_inputs_factory,
+        findings_session_factory,
+        finding_factory,
+    ) -> None:
+        """Test that a flush asserting full coverage concludes the round as a normal review."""
+
+        override_review_timeout(timedelta(seconds=0.5))
+        open_session, state = findings_session_factory(
+            [finding_factory()], block_after_review=True, flush_findings=[], flush_complete=True
+        )
+
+        result = asyncio.run(
+            collect_round_findings(
+                pull_request_factory(),
+                "marker",
+                open_session,
+                review_inputs_factory(),
+                ANCHORS_UP_TO_LINE_30,
+                set(),
+                set(),
+            )
+        )
+
+        assert result.timed_out is False
+        assert state.flush_calls == 1
+
+    @pytest.mark.parametrize(
+        ("session_overrides", "expected_flush_calls"),
+        [
+            ({"flush_error": ReviewBackendError("flush dropped", retryable=True)}, 1),
+            ({"block_in_flush": True}, 1),
+            ({"flush_findings": [], "flush_complete": False}, 1),
+        ],
+        ids=["flush-error-not-retried", "flush-hard-timeout", "partial-flush"],
+    )
+    def test_failed_or_partial_flush_keeps_the_round_timed_out(
+        self,
+        mock_config,
+        post_comment_mock,
+        override_review_timeout,
+        zero_flush_headroom,
+        pull_request_factory,
+        review_inputs_factory,
+        findings_session_factory,
+        finding_factory,
+        session_overrides,
+        expected_flush_calls,
+    ) -> None:
+        """Test that a failing, hanging, or partial flush keeps the phase-one findings and the timed-out verdict."""
+
+        override_review_timeout(timedelta(seconds=0.5))
+        finding = finding_factory(path="src/app.py", line=10, title="Streamed")
+        open_session, state = findings_session_factory([finding], block_after_review=True, **session_overrides)
+
+        result = asyncio.run(
+            collect_round_findings(
+                pull_request_factory(),
+                "marker",
+                open_session,
+                review_inputs_factory(),
+                {"src/app.py": ({10}, set())},
+                set(),
+                set(),
+            )
+        )
+
+        assert result.timed_out is True
+        assert result.current_keys == {("src/app.py", "Streamed")}
+        assert state.flush_calls == expected_flush_calls
+
+    def test_retry_before_first_finding_reopens_a_fresh_session(
+        self,
+        mock_config,
+        post_comment_mock,
+        pull_request_factory,
+        review_inputs_factory,
+        findings_session_factory,
+        finding_factory,
+    ) -> None:
+        """Test that a retryable failure before any finding opens a fresh session and closes the failed one."""
+
+        finding = finding_factory(path="src/app.py", line=10, title="Recovered")
+        open_session, state = findings_session_factory(
+            [finding], review_error=ReviewBackendError("bridge dropped", retryable=True), review_failures=1
+        )
+
+        result = asyncio.run(
+            collect_round_findings(
+                pull_request_factory(),
+                "marker",
+                open_session,
+                review_inputs_factory(),
+                {"src/app.py": ({10}, set())},
+                set(),
+                set(),
+            )
+        )
+
+        assert result.current_keys == {("src/app.py", "Recovered")}
+        assert state.opened == 2
+        assert state.closed == 2
 
     def test_disabled_timeout_drains_stream(
         self,
@@ -507,7 +694,7 @@ class TestCollectRoundFindingsTimeout:
         override_review_timeout,
         pull_request_factory,
         review_inputs_factory,
-        stream_findings_factory,
+        findings_session_factory,
         finding_factory,
     ) -> None:
         """Test that a disabled timeout leaves the round un-flagged and drains the whole stream."""
@@ -519,7 +706,7 @@ class TestCollectRoundFindingsTimeout:
             collect_round_findings(
                 pull_request_factory(),
                 "marker",
-                stream_findings_factory([finding]),
+                findings_session_factory([finding])[0],
                 review_inputs_factory(),
                 {"src/app.py": ({10}, set())},
                 set(),

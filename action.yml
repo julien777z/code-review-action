@@ -86,7 +86,7 @@ inputs:
     description: PR number to review on a workflow_dispatch run.
     default: ""
   review-timeout-minutes:
-    description: Overall cap on the review agent's runtime in minutes; the agent streams findings incrementally, so a cut-off keeps the findings emitted so far and the verdict notes it. Set to 0 to disable.
+    description: Overall cap on the review agent's runtime in minutes. The agent streams findings incrementally, and a few minutes before the cap the runner interrupts it and asks it to immediately emit any findings it has identified but not yet reported, so a timed-out review still posts what was found. Set to 0 to disable.
     default: "15"
 
 runs:

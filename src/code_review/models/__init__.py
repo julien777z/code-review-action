@@ -20,8 +20,13 @@ from code_review.models.backend import (
     Backend,
     BackendHandlers,
     BackendRetryable,
+    FindingsSession,
     GetBackendFindings,
-    ReviewTextStream,
+    GetFindingsSession,
+    OpenReviewSession,
+    ReviewSessionStreams,
+    SessionFindingsStream,
+    SessionTextStream,
 )
 from code_review.models.config import ReviewConfig, ReviewModel
 from code_review.models.pull_request import (
@@ -30,7 +35,13 @@ from code_review.models.pull_request import (
     PullRequestContext,
     ReviewInputs,
 )
-from code_review.models.review import FindingPublication, ReviewRoundResult, RoundFindings
+from code_review.models.review import (
+    FindingPublication,
+    FlushCompletion,
+    ReviewPhaseStats,
+    ReviewRoundResult,
+    RoundFindings,
+)
 from code_review.models.severity import SEVERITY_ORDER, DiffSide, Severity
 from code_review.models.threads import (
     ReviewThread,
@@ -51,15 +62,19 @@ __all__ = [
     "Finding",
     "FindingCategory",
     "FindingPublication",
+    "FindingsSession",
+    "FlushCompletion",
     "Backend",
     "BackendHandlers",
     "BackendRetryable",
     "GetBackendFindings",
+    "GetFindingsSession",
     "GithubEvent",
     "IssuePullRequestRef",
     "PostedFinding",
     "PullRequestBodyUpdate",
     "PullRequestContext",
+    "OpenReviewSession",
     "RawFinding",
     "ReviewComment",
     "ReviewCommentRequest",
@@ -67,10 +82,13 @@ __all__ = [
     "ReviewInputs",
     "ReviewModel",
     "ReviewPayload",
+    "ReviewPhaseStats",
     "ReviewRoundResult",
-    "ReviewTextStream",
+    "ReviewSessionStreams",
     "ReviewThread",
     "RoundFindings",
+    "SessionFindingsStream",
+    "SessionTextStream",
     "Severity",
     "ThreadCommentAuthor",
     "ThreadCommentNode",

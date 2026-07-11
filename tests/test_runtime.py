@@ -6,6 +6,7 @@ import httpx
 import pytest
 from cursor_sdk import CursorAgentError
 
+from code_review.config import CONFIG
 from code_review.errors import ReviewBackendError
 from code_review.models.backend import Backend, BackendHandlers
 from code_review.models.config import ReviewModel
@@ -13,15 +14,17 @@ from code_review.models.findings import Finding
 from code_review.models.github_event import GithubEvent
 from code_review.review_backends import claude, cursor
 from code_review.summary import SummaryGenerationError
+from code_review.models.review import FlushCompletion
 from code_review.runtime import (
     BACKENDS,
+    backend_findings_session,
+    capture_flush_marker,
     is_eligible,
     is_first_review_event,
     main,
     reaction_subject,
     resolve_pr_number,
     select_backend,
-    stream_backend_findings,
 )
 
 
@@ -29,6 +32,15 @@ async def collect_findings(findings: AsyncIterator[Finding]) -> list[Finding]:
     """Drain an async finding stream into a list."""
 
     return [finding async for finding in findings]
+
+
+async def collect_session_findings(handlers, inputs, *, flush: bool = False) -> list[Finding]:
+    """Open a backend findings session and drain its review or flush stream."""
+
+    async with backend_findings_session(handlers, inputs) as session:
+        stream = session["flush_findings"]() if flush else session["findings"]()
+
+        return [finding async for finding in stream]
 
 
 class TestIsFirstReviewEvent:
@@ -215,19 +227,19 @@ class TestBackends:
     """Test that each backend maps to its stream, summary, and error policy."""
 
     @pytest.mark.parametrize(
-        ("backend", "review_text", "generate_summary", "errors"),
+        ("backend", "review_session", "generate_summary", "errors"),
         [
-            (Backend.CURSOR, cursor.review_text, cursor.generate_text, (CursorAgentError,)),
-            (Backend.CLAUDE, claude.review_text, claude.generate_text, (anthropic.APIError,)),
+            (Backend.CURSOR, cursor.review_session, cursor.generate_text, (CursorAgentError,)),
+            (Backend.CLAUDE, claude.review_session, claude.generate_text, (anthropic.APIError,)),
         ],
         ids=["cursor", "claude"],
     )
-    def test_handlers(self, backend, review_text, generate_summary, errors) -> None:
-        """Test that the handler map wires the streamer, generator, and declared errors."""
+    def test_handlers(self, backend, review_session, generate_summary, errors) -> None:
+        """Test that the handler map wires the session opener, generator, and declared errors."""
 
         handlers = BACKENDS[backend]
 
-        assert handlers["review_text"] is review_text
+        assert handlers["review_session"] is review_session
         assert handlers["generate_summary"] is generate_summary
         assert handlers["errors"] == errors
 
@@ -235,36 +247,38 @@ class TestBackends:
 class TestBackendReviewPolicy:
     """Test that the shared backend runner owns JSONL parsing and error mapping."""
 
-    def test_parses_backend_text_findings(self, pull_request_factory, review_inputs_factory) -> None:
+    def test_parses_backend_text_findings(
+        self, review_session_opener_factory, pull_request_factory, review_inputs_factory
+    ) -> None:
         """Test that backend text is parsed into findings by the shared runner."""
 
-        async def review_text(pr, inputs) -> AsyncIterator[str]:
+        async def review_text() -> AsyncIterator[str]:
             yield '{"path":"a.py","line":1,"side":"RIGHT","severity":"high","title":"A","body":"B"}\n'
 
         handlers = BackendHandlers(
-            review_text=review_text,
+            review_session=review_session_opener_factory(review_text),
             generate_summary=cursor.generate_text,
             errors=(CursorAgentError,),
             retryable=lambda exc: isinstance(exc, CursorAgentError) and exc.is_retryable,
             label="Cursor",
         )
 
-        findings = asyncio.run(
-            collect_findings(stream_backend_findings(handlers, pull_request_factory(), review_inputs_factory()))
-        )
+        findings = asyncio.run(collect_session_findings(handlers, review_inputs_factory()))
 
         assert [finding.title for finding in findings] == ["A"]
 
     @pytest.mark.parametrize("retryable", [True, False], ids=["retryable", "terminal"])
-    def test_cursor_error_maps_retryability(self, pull_request_factory, review_inputs_factory, retryable: bool) -> None:
+    def test_cursor_error_maps_retryability(
+        self, review_session_opener_factory, pull_request_factory, review_inputs_factory, retryable: bool
+    ) -> None:
         """Test that CursorAgentError retryability is preserved by the shared runner."""
 
-        async def review_text(pr, inputs) -> AsyncIterator[str]:
+        async def review_text() -> AsyncIterator[str]:
             raise CursorAgentError("bridge unavailable", is_retryable=retryable)
             yield ""
 
         handlers = BackendHandlers(
-            review_text=review_text,
+            review_session=review_session_opener_factory(review_text),
             generate_summary=cursor.generate_text,
             errors=(CursorAgentError,),
             retryable=lambda exc: isinstance(exc, CursorAgentError) and exc.is_retryable,
@@ -272,22 +286,24 @@ class TestBackendReviewPolicy:
         )
 
         with pytest.raises(ReviewBackendError) as raised:
-            asyncio.run(collect_findings(stream_backend_findings(handlers, pull_request_factory(), review_inputs_factory())))
+            asyncio.run(collect_session_findings(handlers, review_inputs_factory()))
 
         assert raised.value.retryable is retryable
         assert "Cursor review failed" in str(raised.value)
 
-    def test_claude_api_error_maps_retryable(self, pull_request_factory, review_inputs_factory) -> None:
+    def test_claude_api_error_maps_retryable(
+        self, review_session_opener_factory, pull_request_factory, review_inputs_factory
+    ) -> None:
         """Test that Anthropic retryability is preserved by the shared runner."""
 
         request = httpx.Request("GET", "https://api.anthropic.com")
 
-        async def review_text(pr, inputs) -> AsyncIterator[str]:
+        async def review_text() -> AsyncIterator[str]:
             raise anthropic.APIConnectionError(request=request)
             yield ""
 
         handlers = BackendHandlers(
-            review_text=review_text,
+            review_session=review_session_opener_factory(review_text),
             generate_summary=claude.generate_text,
             errors=(anthropic.APIError,),
             retryable=lambda exc: isinstance(exc, anthropic.APIError) and claude.is_retryable_api_error(exc),
@@ -295,20 +311,22 @@ class TestBackendReviewPolicy:
         )
 
         with pytest.raises(ReviewBackendError) as raised:
-            asyncio.run(collect_findings(stream_backend_findings(handlers, pull_request_factory(), review_inputs_factory())))
+            asyncio.run(collect_session_findings(handlers, review_inputs_factory()))
 
         assert raised.value.retryable is True
         assert "Claude review failed" in str(raised.value)
 
-    def test_unexpected_error_propagates(self, pull_request_factory, review_inputs_factory) -> None:
+    def test_unexpected_error_propagates(
+        self, review_session_opener_factory, pull_request_factory, review_inputs_factory
+    ) -> None:
         """Test that undeclared backend exceptions are not converted."""
 
-        async def review_text(pr, inputs) -> AsyncIterator[str]:
+        async def review_text() -> AsyncIterator[str]:
             raise ValueError("programming error")
             yield ""
 
         handlers = BackendHandlers(
-            review_text=review_text,
+            review_session=review_session_opener_factory(review_text),
             generate_summary=cursor.generate_text,
             errors=(CursorAgentError,),
             retryable=lambda exc: False,
@@ -316,17 +334,19 @@ class TestBackendReviewPolicy:
         )
 
         with pytest.raises(ValueError):
-            asyncio.run(collect_findings(stream_backend_findings(handlers, pull_request_factory(), review_inputs_factory())))
+            asyncio.run(collect_session_findings(handlers, review_inputs_factory()))
 
-    def test_empty_backend_output_raises(self, pull_request_factory, review_inputs_factory) -> None:
+    def test_empty_backend_output_raises(
+        self, review_session_opener_factory, pull_request_factory, review_inputs_factory
+    ) -> None:
         """Test that an empty backend response fails instead of approving cleanly."""
 
-        async def review_text(pr, inputs) -> AsyncIterator[str]:
+        async def review_text() -> AsyncIterator[str]:
             if False:
                 yield ""
 
         handlers = BackendHandlers(
-            review_text=review_text,
+            review_session=review_session_opener_factory(review_text),
             generate_summary=cursor.generate_text,
             errors=(CursorAgentError,),
             retryable=lambda exc: False,
@@ -334,9 +354,127 @@ class TestBackendReviewPolicy:
         )
 
         with pytest.raises(ReviewBackendError, match="produced no output") as raised:
-            asyncio.run(collect_findings(stream_backend_findings(handlers, pull_request_factory(), review_inputs_factory())))
+            asyncio.run(collect_session_findings(handlers, review_inputs_factory()))
 
         assert raised.value.retryable is True
+
+    def test_empty_flush_output_does_not_raise(
+        self, review_session_opener_factory, pull_request_factory, review_inputs_factory
+    ) -> None:
+        """Test that an empty flush reply is legitimate and yields no findings."""
+
+        async def review_text() -> AsyncIterator[str]:
+            if False:
+                yield ""
+
+        handlers = BackendHandlers(
+            review_session=review_session_opener_factory(review_text),
+            generate_summary=cursor.generate_text,
+            errors=(CursorAgentError,),
+            retryable=lambda exc: False,
+            label="Cursor",
+        )
+
+        findings = asyncio.run(
+            collect_session_findings(handlers, review_inputs_factory(), flush=True)
+        )
+
+        assert findings == []
+
+    def test_flush_complete_marker_sets_completion(
+        self, review_session_opener_factory, pull_request_factory, review_inputs_factory
+    ) -> None:
+        """Test that a flush reply ending in the completion marker flips the session's completion holder."""
+
+        async def review_text() -> AsyncIterator[str]:
+            if False:
+                yield ""
+
+        async def flush_text() -> AsyncIterator[str]:
+            yield '{"path":"a.py","line":1,"side":"RIGHT","severity":"high","title":"A","body":"B"}\n'
+            yield f"{CONFIG['flush_complete_marker']}\n"
+
+        handlers = BackendHandlers(
+            review_session=review_session_opener_factory(review_text, flush_text),
+            generate_summary=cursor.generate_text,
+            errors=(CursorAgentError,),
+            retryable=lambda exc: False,
+            label="Cursor",
+        )
+
+        async def run() -> tuple[list[Finding], bool]:
+            async with backend_findings_session(handlers, review_inputs_factory()) as session:
+                findings = [finding async for finding in session["flush_findings"]()]
+
+                return findings, session["flush_completion"].complete
+
+        findings, complete = asyncio.run(run())
+
+        assert [finding.title for finding in findings] == ["A"]
+        assert complete is True
+
+
+async def capture(*parts: str) -> tuple[list[str], FlushCompletion]:
+    """Drain capture_flush_marker over the given chunks, returning the passed-through lines and completion."""
+
+    async def chunks() -> AsyncIterator[str]:
+        for part in parts:
+            yield part
+
+    completion = FlushCompletion()
+    lines = [line async for line in capture_flush_marker(chunks(), completion)]
+
+    return lines, completion
+
+
+class TestCaptureFlushMarker:
+    """Test that the flush-marker tee records completion and consumes marker lines from the stream."""
+
+    def test_captures_and_consumes_the_completion_marker_line(self) -> None:
+        """Test that a completion-marker line sets the holder and is removed from the passed-through text."""
+
+        lines, completion = asyncio.run(capture("NO_FINDINGS\n", f"{CONFIG['flush_complete_marker']}\n"))
+
+        assert lines == ["NO_FINDINGS\n"]
+        assert completion.complete is True
+
+    def test_captures_a_marker_split_across_chunks(self) -> None:
+        """Test that a marker arriving in two chunks is still recognized and consumed."""
+
+        marker = CONFIG["flush_complete_marker"]
+        lines, completion = asyncio.run(capture(marker[:6], f"{marker[6:]}\n"))
+
+        assert lines == []
+        assert completion.complete is True
+
+    def test_captures_a_marker_without_a_trailing_newline(self) -> None:
+        """Test that a marker ending the stream without a newline is still recognized and consumed."""
+
+        lines, completion = asyncio.run(capture("NO_FINDINGS\n", CONFIG["flush_complete_marker"]))
+
+        assert lines == ["NO_FINDINGS\n"]
+        assert completion.complete is True
+
+    def test_consumes_the_partial_marker_without_capturing(self) -> None:
+        """Test that a partial-marker line is removed from the stream and leaves the holder unset."""
+
+        lines, completion = asyncio.run(capture(f"{CONFIG['flush_partial_marker']}\n"))
+
+        assert lines == []
+        assert completion.complete is False
+
+    @pytest.mark.parametrize(
+        "text",
+        ["NO_FINDINGS\n", "prose mentioning REVIEW_COMPLETE inline\n"],
+        ids=["no-findings", "inline-mention"],
+    )
+    def test_passes_non_marker_lines_through(self, text: str) -> None:
+        """Test that lines without a standalone marker pass through and leave the holder unset."""
+
+        lines, completion = asyncio.run(capture(text))
+
+        assert lines == [text]
+        assert completion.complete is False
 
 
 class TestMain:
