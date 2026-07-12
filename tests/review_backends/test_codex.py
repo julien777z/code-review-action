@@ -180,10 +180,9 @@ class TestStopProcess:
 
         process = MagicMock()
         process.returncode = None
-        process.wait = AsyncMock(side_effect=[TimeoutError, None])
+        process.communicate = AsyncMock(side_effect=[TimeoutError, None])
 
         asyncio.run(codex.stop_process(process))
 
-        process.stdin.close.assert_called_once()
         process.kill.assert_called_once()
-        assert process.wait.await_count == 2
+        assert process.communicate.await_count == 2

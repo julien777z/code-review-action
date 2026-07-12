@@ -9,6 +9,7 @@ from collections import deque
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Final
 from pydantic import JsonValue, ValidationError
 
 from code_review.config import SETTINGS
@@ -19,6 +20,8 @@ from code_review.models.pull_request import PullRequestContext, ReviewInputs
 from code_review.prompt import flush_prompt, pull_request_message, review_instructions
 
 logger = logging.getLogger("code_review.review_backends.codex")
+
+APP_SERVER_LINE_LIMIT: Final[int] = 10 * 1024 * 1024
 
 
 def mapping(value: JsonValue, label: str) -> dict[str, JsonValue]:
@@ -214,18 +217,16 @@ class CodexAppServer:
 async def stop_process(process: asyncio.subprocess.Process) -> None:
     """Stop an app-server subprocess without allowing cleanup to consume the review deadline."""
 
-    if process.stdin is not None:
-        process.stdin.close()
     if process.returncode is not None:
         return
 
     try:
-        await asyncio.wait_for(process.wait(), timeout=5)
+        await asyncio.wait_for(process.communicate(), timeout=5)
     except TimeoutError:
         logger.warning("Codex app-server did not exit after stdin closed; killing it.")
         process.kill()
         try:
-            await asyncio.wait_for(process.wait(), timeout=5)
+            await asyncio.wait_for(process.communicate(), timeout=5)
         except TimeoutError:
             logger.error("Codex app-server did not exit after being killed.")
 
@@ -259,6 +260,7 @@ async def app_server(*, reviewing: bool = True) -> AsyncIterator[CodexAppServer]
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=environment,
+            limit=APP_SERVER_LINE_LIMIT,
         )
         client = CodexAppServer(process)
         try:
