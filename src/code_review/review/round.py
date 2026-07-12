@@ -2,7 +2,7 @@ import asyncio
 import logging
 import signal
 
-from code_review.config import DISCLAIMER, SETTINGS
+from code_review.config import SETTINGS
 from code_review.errors import ReviewBackendError
 from code_review.github import (
     already_reviewed,
@@ -20,7 +20,7 @@ from code_review.models.backend import FindingsBackend
 from code_review.models.findings import ReviewPayload
 from code_review.models.pull_request import PullRequestContext, ReviewInputs
 from code_review.models.review import CheckConclusion, ReviewRoundResult
-from code_review.review.comments import build_verdict_review, compute_verdict, verdict_summary
+from code_review.review.comments import build_verdict_review, compute_verdict, review_disclaimer, verdict_summary
 from code_review.review.findings import collect_round_findings, finalization_reserve, hurry_reserve
 from code_review.review.threads import classify_threads, existing_finding_titles, extract_posted_keys
 
@@ -56,10 +56,13 @@ def resolve_round_verdict(
     return event, conclusion, title, summary
 
 
-async def note_diff_too_large(pr: PullRequestContext, marker: str) -> ReviewRoundResult:
+async def note_diff_too_large(pr: PullRequestContext, marker: str, reviewer: str) -> ReviewRoundResult:
     """Post a note that the diff is too large to auto-review."""
 
-    body = f"The diff is too large to auto-review, so this review was skipped.\n\n{DISCLAIMER}\n\n{marker}"
+    body = (
+        f"The diff is too large to auto-review, so this review was skipped.\n\n"
+        f"{review_disclaimer({reviewer})}\n\n{marker}"
+    )
     check_id = None if SETTINGS.approval_disable else await start_check_run(pr.repo, pr.head_sha)
 
     await post_review(pr.repo, pr.number, ReviewPayload(commit_id=pr.head_sha, event="COMMENT", body=body, comments=[]))
@@ -96,7 +99,7 @@ async def run_review_round(
     if diff is None:
         logger.warning("PR diff is too large to auto-review; posting a note and skipping.")
 
-        return await note_diff_too_large(pr, marker)
+        return await note_diff_too_large(pr, marker, backends[0]["reviewer"])
 
     (anchors, unpatched), posted_findings = await asyncio.gather(
         diff_anchors(pr.repo, pr.number),
@@ -164,7 +167,14 @@ async def run_review_round(
             if (findings.needs_verdict_review or SETTINGS.approval_disable) and not await already_reviewed(
                 pr.repo, pr.number, pr.head_sha, marker
             ):
-                payload = build_verdict_review(pr.head_sha, findings.out_of_bounds, event, summary, marker)
+                payload = build_verdict_review(
+                    pr.head_sha,
+                    findings.out_of_bounds,
+                    event,
+                    summary,
+                    marker,
+                    findings.reviewers or {backends[0]["reviewer"]},
+                )
                 await post_review_or_warn(pr.repo, pr.number, payload, event)
 
             stale_to_resolve = [] if findings.timed_out else stale_ids

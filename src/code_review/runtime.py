@@ -43,6 +43,23 @@ BACKENDS: Final[dict[Backend, BackendHandlers]] = {
 }
 
 
+def model_display_name(model: str) -> str:
+    """Format a configured model identifier for review-comment attribution."""
+
+    if model.startswith("gpt-"):
+        return f"GPT {model.removeprefix('gpt-').replace('-', ' ').title()}"
+
+    return model.removeprefix("claude-").replace("-", " ").title()
+
+
+def reviewer_name(provider: str) -> str:
+    """Return the provider and configured model shown on its review posts."""
+
+    model = SETTINGS.claude_model if provider == "Claude" else SETTINGS.codex_model
+
+    return f"{provider} {model_display_name(model)}"
+
+
 async def backend_text_chunks(
     handlers: BackendHandlers, chunks: AsyncIterator[str], *, require_output: bool = True
 ) -> AsyncIterator[str]:
@@ -97,6 +114,7 @@ async def run_backend_review(
     backends = tuple(
         FindingsBackend(
             label=backend["label"],
+            reviewer=reviewer_name(backend["label"]),
             open_session=partial(backend_findings_session, backend),
         )
         for backend in handlers

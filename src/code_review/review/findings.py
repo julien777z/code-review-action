@@ -105,6 +105,13 @@ async def counted_findings(stream: AsyncIterator[Finding], stats: ReviewPhaseSta
         yield finding
 
 
+async def attributed_findings(stream: AsyncIterator[Finding], reviewer: str) -> AsyncIterator[Finding]:
+    """Attach the active reviewer to every finding from one provider stream."""
+
+    async for finding in stream:
+        yield finding.model_copy(update={"reviewer": reviewer})
+
+
 def path_allowed(path: str) -> bool:
     """Return whether a path passes the include/exclude glob filters."""
 
@@ -253,15 +260,21 @@ async def publish_deferred_lows(pr: PullRequestContext, marker: str, state: Roun
 
 
 async def flush_round_findings(
-    pr: PullRequestContext, marker: str, session: FindingsSession, budget: timedelta, state: RoundPublishState
+    pr: PullRequestContext,
+    marker: str,
+    session: FindingsSession,
+    reviewer: str,
+    budget: timedelta,
+    state: RoundPublishState,
 ) -> bool:
     """Run the wrap-up flush turn under the remaining hard budget, returning whether the agent reported completion."""
 
     flush_stats = ReviewPhaseStats(label="flush")
+
     try:
         async with asyncio.timeout(budget.total_seconds()):
             await publish_round_findings(
-                pr, marker, counted_findings(session["flush_findings"](), flush_stats), state
+                pr, marker, counted_findings(attributed_findings(session["flush_findings"](), reviewer), flush_stats), state
             )
     except TimeoutError:
         logger.warning("The wrap-up flush hit its hard deadline after %d finding(s).", flush_stats.received)
@@ -366,7 +379,9 @@ async def collect_round_findings(
                             backend["open_session"](current_inputs)
                         )
                         logger.info("%s review session is ready.", backend["label"])
-                        async for finding in live_session["findings"]():
+                        async for finding in attributed_findings(
+                            live_session["findings"](), backend["reviewer"]
+                        ):
                             produced = True
                             yield finding
 
@@ -439,7 +454,14 @@ async def collect_round_findings(
                         if budget > timedelta(0):
                             logger.info("Sending the hurry-up turn with %.0fs remaining for model output.", budget.total_seconds())
                             try:
-                                completed = await flush_round_findings(pr, marker, live_session, budget, state)
+                                completed = await flush_round_findings(
+                                    pr,
+                                    marker,
+                                    live_session,
+                                    backends[live_backend_index or 0]["reviewer"],
+                                    budget,
+                                    state,
+                                )
                             except ReviewBackendError as exc:
                                 replacement_index = (live_backend_index or 0) + 1
                                 if not exc.usage_limited or replacement_index >= len(backends):
@@ -465,7 +487,12 @@ async def collect_round_findings(
                                         await publish_round_findings(
                                             pr,
                                             marker,
-                                            counted_findings(live_session["findings"](), handoff_stats),
+                                            counted_findings(
+                                                attributed_findings(
+                                                    live_session["findings"](), replacement["reviewer"]
+                                                ),
+                                                handoff_stats,
+                                            ),
                                             state,
                                         )
                                 except TimeoutError:

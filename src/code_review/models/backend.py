@@ -54,4 +54,5 @@ class FindingsBackend(TypedDict):
     """A named findings-session provider in fallback order."""
 
     label: str
+    reviewer: str
     open_session: GetFindingsSession

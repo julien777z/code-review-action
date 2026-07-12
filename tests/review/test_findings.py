@@ -246,8 +246,8 @@ class TestCollectRoundFindings:
             AsyncMock(return_value={"src/app.py": [PostedFinding(severity="high", title="Visible")]}),
         )
         backends = (
-            FindingsBackend(label="Claude", open_session=first),
-            FindingsBackend(label="Codex", open_session=second),
+            FindingsBackend(label="Claude", reviewer="Claude Test", open_session=first),
+            FindingsBackend(label="Codex", reviewer="Codex Test", open_session=second),
         )
 
         asyncio.run(
@@ -298,8 +298,8 @@ class TestCollectRoundFindings:
             )
 
         backends = (
-            FindingsBackend(label="Claude", open_session=exhausted),
-            FindingsBackend(label="Codex", open_session=replacement),
+            FindingsBackend(label="Claude", reviewer="Claude Test", open_session=exhausted),
+            FindingsBackend(label="Codex", reviewer="Codex Test", open_session=replacement),
         )
         monkeypatch.setattr(
             "code_review.review.findings.existing_finding_titles", AsyncMock(return_value={})

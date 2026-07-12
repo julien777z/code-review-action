@@ -223,7 +223,7 @@ def findings_session_factory(monkeypatch) -> Callable[..., tuple[tuple[FindingsB
             finally:
                 state.closed += 1
 
-        return (FindingsBackend(label="Test", open_session=_open),), state
+        return (FindingsBackend(label="Test", reviewer="Test Model", open_session=_open),), state
 
     return _build
 

@@ -51,6 +51,7 @@ class Finding(BaseModel):
     severity: Severity
     title: str
     body: str
+    reviewer: str = ""
 
 
 class RawFinding(BaseModel):

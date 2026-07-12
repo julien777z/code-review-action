@@ -19,6 +19,7 @@ from code_review.runtime import (
     is_eligible,
     main,
     reaction_subject,
+    reviewer_name,
     resolve_pr_number,
     select_backends,
 )
@@ -140,6 +141,21 @@ class TestBackends:
 
         assert handlers["review_session"] is review_session
         assert handlers["generate_summary"] is generate_summary
+
+    @pytest.mark.parametrize(
+        ("provider", "model_override", "expected"),
+        [
+            ("Codex", {"codex_model": "gpt-5.6-terra"}, "Codex GPT 5.6 Terra"),
+            ("Claude", {"claude_model": "claude-opus-4-8"}, "Claude Opus 4 8"),
+        ],
+        ids=["codex-terra", "claude-opus"],
+    )
+    def test_reviewer_name_includes_the_configured_model(self, mock_config, provider, model_override, expected) -> None:
+        """Test that review-post attribution names the active provider and model."""
+
+        mock_config(**model_override)
+
+        assert reviewer_name(provider) == expected
 
 
 class TestBackendReviewPolicy:

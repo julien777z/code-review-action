@@ -49,6 +49,14 @@ def finding_category_footer(finding: Finding) -> str:
     return f"<sub>{finding.category.label}</sub>"
 
 
+def review_disclaimer(reviewers: set[str]) -> str:
+    """Render action attribution with the model that produced the review content."""
+
+    model = ", ".join(sorted(reviewers))
+
+    return f"{DISCLAIMER}\n\n<sub>Model: {model}</sub>" if model else DISCLAIMER
+
+
 def comment_body(finding: Finding, marker: str) -> str:
     """Render one inline comment body with category and severity."""
 
@@ -56,7 +64,7 @@ def comment_body(finding: Finding, marker: str) -> str:
         f"{CONFIG['untrusted_input_open']}\n"
         f"### {finding.title}\n\n{finding_severity_line(finding)}<br>{finding_category_footer(finding)}\n\n{finding.body}\n"
         f"{CONFIG['untrusted_input_close']}\n\n"
-        f"{DISCLAIMER}\n\n{marker}"
+        f"{review_disclaimer({finding.reviewer})}\n\n{marker}"
     )
 
 
@@ -109,6 +117,7 @@ def build_verdict_review(
     event: str,
     summary_line: str,
     marker: str,
+    reviewers: set[str],
 ) -> ReviewPayload:
     """Build the final verdict review."""
 
@@ -123,7 +132,7 @@ def build_verdict_review(
 
     body = (
         f"{CONFIG['untrusted_input_open']}\n{body}\n{CONFIG['untrusted_input_close']}\n\n"
-        f"{DISCLAIMER}\n\n{marker}"
+        f"{review_disclaimer(reviewers)}\n\n{marker}"
     )
 
     return ReviewPayload(commit_id=head_sha, event=event, body=body, comments=[])
