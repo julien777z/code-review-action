@@ -62,14 +62,6 @@ jobs:
 configured, reaching a provider's subscription usage limit switches the current round once to the
 other provider. Comment `agent review` on a PR to trigger a manual review.
 
-### Upgrade from Cursor
-
-This release removes Cursor entirely. Before moving an existing workflow to its new `v0` tag, replace
-`cursor-api-key: ${{ secrets.CURSOR_API_KEY }}` and `review-model: cursor` with
-`codex-auth-json: ${{ secrets.CODEX_AUTH_JSON }}` (or the Claude Code token input). Apply that workflow
-change in the same rollout as the tag update: the old tag does not understand the new input, and the
-new tag does not accept the old Cursor configuration.
-
 ## Create the subscription secrets
 
 The commands below use the GitHub CLI in the repository whose Actions secrets you want to set.
