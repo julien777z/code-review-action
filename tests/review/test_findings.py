@@ -142,6 +142,7 @@ class TestCollectRoundFindings:
     def test_capped_finding_is_not_current(
         self,
         mock_config,
+        monkeypatch,
         post_comment_mock,
         pull_request_factory,
         review_inputs_factory,
@@ -671,6 +672,46 @@ class TestCollectRoundFindingsTimeout:
 
         assert result.timed_out is False
         assert state.flush_calls == 1
+
+    def test_usage_limited_flush_switches_to_the_other_provider(
+        self,
+        mock_config,
+        monkeypatch,
+        post_comment_mock,
+        override_review_timeout,
+        zero_flush_headroom,
+        pull_request_factory,
+        review_inputs_factory,
+        findings_session_factory,
+        finding_factory,
+    ) -> None:
+        """Test that a flush usage limit starts the replacement provider with the same round context."""
+
+        override_review_timeout(timedelta(seconds=0.5))
+        monkeypatch.setattr("code_review.review.findings.existing_finding_titles", AsyncMock(return_value={}))
+        primary, primary_state = findings_session_factory(
+            [finding_factory(line=10, title="Streamed")],
+            block_after_review=True,
+            flush_error=ReviewBackendError("limit", usage_limited=True),
+        )
+        fallback, fallback_state = findings_session_factory([finding_factory(line=20, title="Recovered")])
+
+        result = asyncio.run(
+            collect_round_findings(
+                pull_request_factory(),
+                "marker",
+                primary + fallback,
+                review_inputs_factory(),
+                ANCHORS_UP_TO_LINE_30,
+                set(),
+                set(),
+            )
+        )
+
+        assert result.timed_out is True
+        assert primary_state.flush_calls == 1
+        assert fallback_state.opened == 1
+        assert posted_titles(post_comment_mock) == ["Streamed", "Recovered"]
 
     @pytest.mark.parametrize(
         ("session_overrides", "expected_flush_calls"),

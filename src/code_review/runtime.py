@@ -274,6 +274,12 @@ async def main() -> int:
 
         return 0
 
+    owner, _, _ = repo.partition("/")
+    if pr.head_repo_owner != owner:
+        logger.info("PR #%s originates from a fork; skipping before provider startup.", pr_number)
+
+        return 0
+
     subject = reaction_subject(event_name, event, repo, pr_number)
     reaction_id = await add_reaction(subject)
 

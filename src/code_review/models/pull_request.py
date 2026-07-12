@@ -15,6 +15,7 @@ class PullRequestContext(BaseModel):
     number: int
     head_sha: str
     head_ref: str
+    head_repo_owner: str
     url: str
     author: str
     is_draft: bool

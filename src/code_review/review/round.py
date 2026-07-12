@@ -99,6 +99,7 @@ async def run_review_round(
 
     check_id = None if SETTINGS.approval_disable else await start_check_run(pr.repo, pr.head_sha)
     concluded = False
+    review_timeout = SETTINGS.review_timeout
     loop = asyncio.get_running_loop()
     review_task = asyncio.current_task()
 
@@ -110,56 +111,64 @@ async def run_review_round(
         loop.add_signal_handler(cancel_signal, _cancel_on_signal)
 
     try:
-        if await current_head_sha(pr.repo, pr.number) != pr.head_sha:
-            logger.info("Head moved before review; skipping (the new commit reviews next).")
-            await complete_check_run(
-                pr.repo, check_id, CheckConclusion.CANCELLED, "Superseded", "The head moved before review."
+        async with asyncio.timeout(review_timeout.total_seconds() if review_timeout is not None else None):
+            if await current_head_sha(pr.repo, pr.number) != pr.head_sha:
+                logger.info("Head moved before review; skipping (the new commit reviews next).")
+                await complete_check_run(
+                    pr.repo, check_id, CheckConclusion.CANCELLED, "Superseded", "The head moved before review."
+                )
+                concluded = True
+
+                return ReviewRoundResult(exit_code=0)
+
+            reviewed_files = set(anchors) | unpatched
+            threads = await list_review_threads(pr.repo, pr.number)
+            posted_keys = extract_posted_keys(threads, marker)
+
+            try:
+                findings = await collect_round_findings(
+                    pr, marker, backends, inputs, anchors, unpatched, posted_keys
+                )
+            except ReviewBackendError as exc:
+                logger.error("Review backend failed: %s", exc)
+                await complete_check_run(pr.repo, check_id, CheckConclusion.ACTION_REQUIRED, "Review failed", str(exc))
+                concluded = True
+
+                return ReviewRoundResult(exit_code=1, diff=diff)
+
+            open_existing, stale_ids, kept_blocking = classify_threads(
+                threads, marker, findings.current_keys, reviewed_files
             )
+
+            new_open_keys = {key for key in findings.current_keys if key not in posted_keys}
+            open_keys = open_existing | new_open_keys
+            open_count = len(open_keys)
+            open_blocking = bool(kept_blocking) or any(
+                findings.severity_by_key.get(key) in SETTINGS.approval_include for key in open_keys
+            )
+
+            previous_count = len(open_existing)
+            event, conclusion, title, summary = resolve_round_verdict(
+                open_count, open_blocking, previous_count, findings.timed_out
+            )
+
+            if (findings.needs_verdict_review or SETTINGS.approval_disable) and not await already_reviewed(
+                pr.repo, pr.number, pr.head_sha, marker
+            ):
+                payload = build_verdict_review(pr.head_sha, findings.out_of_bounds, event, summary, marker)
+                await post_review_or_warn(pr.repo, pr.number, payload, event)
+
+            stale_to_resolve = [] if findings.timed_out else stale_ids
+            logger.info("Resolving %d stale thread(s); %d open issue(s) remain.", len(stale_to_resolve), open_count)
+            await resolve_threads(pr.repo, stale_to_resolve)
+
+            await complete_check_run(pr.repo, check_id, conclusion, title, summary)
             concluded = True
 
-            return ReviewRoundResult(exit_code=0)
-
-        reviewed_files = set(anchors) | unpatched
-        threads = await list_review_threads(pr.repo, pr.number)
-        posted_keys = extract_posted_keys(threads, marker)
-
-        try:
-            findings = await collect_round_findings(
-                pr, marker, backends, inputs, anchors, unpatched, posted_keys
-            )
-        except ReviewBackendError as exc:
-            logger.error("Review backend failed: %s", exc)
-            await complete_check_run(pr.repo, check_id, CheckConclusion.ACTION_REQUIRED, "Review failed", str(exc))
-            concluded = True
-
-            return ReviewRoundResult(exit_code=1, diff=diff)
-
-        open_existing, stale_ids, kept_blocking = classify_threads(
-            threads, marker, findings.current_keys, reviewed_files
-        )
-
-        new_open_keys = {key for key in findings.current_keys if key not in posted_keys}
-        open_keys = open_existing | new_open_keys
-        open_count = len(open_keys)
-        open_blocking = bool(kept_blocking) or any(
-            findings.severity_by_key.get(key) in SETTINGS.approval_include for key in open_keys
-        )
-
-        previous_count = len(open_existing)
-        event, conclusion, title, summary = resolve_round_verdict(
-            open_count, open_blocking, previous_count, findings.timed_out
-        )
-
-        if (findings.needs_verdict_review or SETTINGS.approval_disable) and not await already_reviewed(
-            pr.repo, pr.number, pr.head_sha, marker
-        ):
-            payload = build_verdict_review(pr.head_sha, findings.out_of_bounds, event, summary, marker)
-            await post_review_or_warn(pr.repo, pr.number, payload, event)
-
-        stale_to_resolve = [] if findings.timed_out else stale_ids
-        logger.info("Resolving %d stale thread(s); %d open issue(s) remain.", len(stale_to_resolve), open_count)
-        await resolve_threads(pr.repo, stale_to_resolve)
-
+            return ReviewRoundResult(exit_code=0, diff=diff)
+    except TimeoutError:
+        logger.warning("Review hit its %s deadline before it could conclude.", review_timeout)
+        _, conclusion, title, summary = resolve_round_verdict(0, False, 0, timed_out=True)
         await complete_check_run(pr.repo, check_id, conclusion, title, summary)
         concluded = True
 

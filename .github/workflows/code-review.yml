@@ -12,15 +12,33 @@ permissions:
   checks: write
 
 jobs:
-  Review:
+  Trust:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
     if: >-
       (github.event_name == 'pull_request'
         && github.event.pull_request.head.repo.full_name == github.repository)
       || (github.event_name == 'issue_comment'
         && github.event.issue.pull_request
         && startsWith(github.event.comment.body, 'agent review'))
+    outputs:
+      trusted: ${{ steps.trust.outputs.trusted }}
+    steps:
+      - id: trust
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+        run: |
+          head_repo="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq '.head.repo.full_name')"
+          if [[ "$head_repo" == "$GITHUB_REPOSITORY" ]]; then
+            echo "trusted=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "trusted=false" >> "$GITHUB_OUTPUT"
+          fi
+  Review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: Trust
+    if: needs.Trust.outputs.trusted == 'true'
     concurrency:
       group: code-review-${{ github.event.pull_request.number || github.event.issue.number }}-${{ github.event_name == 'issue_comment' && 'comment' || 'review' }}
       cancel-in-progress: true

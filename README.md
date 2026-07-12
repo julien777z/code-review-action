@@ -22,8 +22,7 @@ permissions:
   checks: write
 
 jobs:
-  review:
-    name: Review
+  trust:
     runs-on: ubuntu-latest
     if: >-
       (github.event_name == 'pull_request'
@@ -31,6 +30,21 @@ jobs:
       || (github.event_name == 'issue_comment'
         && github.event.issue.pull_request
         && startsWith(github.event.comment.body, 'agent review'))
+    outputs:
+      trusted: ${{ steps.trust.outputs.trusted }}
+    steps:
+      - id: trust
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+        run: |
+          head_repo="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq '.head.repo.full_name')"
+          echo "trusted=$([[ "$head_repo" == "$GITHUB_REPOSITORY" ]] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+  review:
+    name: Review
+    runs-on: ubuntu-latest
+    needs: trust
+    if: needs.trust.outputs.trusted == 'true'
     concurrency:
       group: code-review-${{ github.event.pull_request.number || github.event.issue.number }}-${{ github.event_name == 'issue_comment' && 'comment' || 'review' }}
       cancel-in-progress: true
@@ -47,6 +61,14 @@ jobs:
 `review-model: auto` prefers Claude and uses Codex when Claude is not configured. When both are
 configured, reaching a provider's subscription usage limit switches the current round once to the
 other provider. Comment `agent review` on a PR to trigger a manual review.
+
+### Upgrade from Cursor
+
+This release removes Cursor entirely. Before moving an existing workflow to its new `v0` tag, replace
+`cursor-api-key: ${{ secrets.CURSOR_API_KEY }}` and `review-model: cursor` with
+`codex-auth-json: ${{ secrets.CODEX_AUTH_JSON }}` (or the Claude Code token input). Apply that workflow
+change in the same rollout as the tag update: the old tag does not understand the new input, and the
+new tag does not accept the old Cursor configuration.
 
 ## Create the subscription secrets
 

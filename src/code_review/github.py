@@ -78,7 +78,7 @@ async def fetch_pull_request(repo: str, pr_number: int) -> PullRequestContext:
             "--repo",
             repo,
             "--json",
-            "url,headRefName,headRefOid,author,state,isDraft",
+            "url,headRefName,headRefOid,headRepositoryOwner,author,state,isDraft",
         ]
     )
     data = json.loads(raw)
@@ -88,6 +88,7 @@ async def fetch_pull_request(repo: str, pr_number: int) -> PullRequestContext:
         number=pr_number,
         head_sha=data["headRefOid"],
         head_ref=data["headRefName"],
+        head_repo_owner=(data.get("headRepositoryOwner") or {}).get("login", ""),
         url=data["url"],
         author=(data.get("author") or {}).get("login", ""),
         is_draft=bool(data.get("isDraft")),

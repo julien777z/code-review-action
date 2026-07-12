@@ -247,3 +247,13 @@ class TestMain:
 
         assert asyncio.run(main()) == 0
         mocks["post_pr_summary"].assert_not_awaited()
+
+    def test_forked_comment_target_skips_before_starting_a_provider(self, main_harness) -> None:
+        """Test that manual triggers for forked PRs cannot consume subscription credentials."""
+
+        mocks = main_harness()
+        mocks["pr"].head_repo_owner = "forker"
+
+        assert asyncio.run(main()) == 0
+        mocks["run_backend_review"].assert_not_awaited()
+        mocks["post_pr_summary"].assert_not_awaited()

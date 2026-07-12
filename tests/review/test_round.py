@@ -1,5 +1,6 @@
 import asyncio
 import subprocess
+from datetime import timedelta
 from unittest.mock import AsyncMock
 
 import pytest
@@ -317,3 +318,27 @@ class TestRunReviewRoundTimeout:
         assert result.exit_code == 1
         assert review_github_mocks["complete_check_run"].await_args.args[2] == "cancelled"
         assert review_github_mocks["complete_check_run"].await_args.args[3] == "Superseded"
+
+    def test_global_deadline_concludes_a_stalled_pre_stream_review(
+        self,
+        mock_config,
+        override_review_timeout,
+        review_github_mocks,
+        findings_session_factory,
+        pull_request_factory,
+    ) -> None:
+        """Test that a stalled coordination call concludes the check at the configured deadline."""
+
+        async def wait_forever(repo: str, number: int) -> str:
+            await asyncio.Event().wait()
+
+            return f"{repo}/{number}"
+
+        override_review_timeout(timedelta(milliseconds=10))
+        review_github_mocks["current_head_sha"].side_effect = wait_forever
+
+        result = asyncio.run(run_review_round(pull_request_factory(), MARKER, findings_session_factory([])[0]))
+
+        assert result.exit_code == 0
+        assert review_github_mocks["complete_check_run"].await_args.args[2] == "timed_out"
+        assert review_github_mocks["complete_check_run"].await_args.args[3] == "Review timed out"

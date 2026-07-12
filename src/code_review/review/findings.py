@@ -252,6 +252,9 @@ async def flush_round_findings(
     except TimeoutError:
         logger.warning("The wrap-up flush hit its hard deadline after %d finding(s).", flush_stats.received)
     except ReviewBackendError as exc:
+        if exc.usage_limited:
+            raise
+
         logger.warning("The wrap-up flush failed; keeping the review-phase findings: %s", exc)
     else:
         logger.info("The wrap-up flush produced %d finding(s).", flush_stats.received)
@@ -286,6 +289,7 @@ async def collect_round_findings(
 
     async with AsyncExitStack() as stack:
         live_session: FindingsSession | None = None
+        live_backend_index: int | None = None
 
         async def fallback_inputs(
             current_inputs: ReviewInputs, previous: str, replacement: str
@@ -326,7 +330,7 @@ async def collect_round_findings(
         async def review_findings() -> AsyncIterator[Finding]:
             """Stream providers in fallback order, retrying transient startup failures per provider."""
 
-            nonlocal live_session
+            nonlocal live_backend_index, live_session
             current_inputs = inputs
             last_error: ReviewBackendError | None = None
 
@@ -335,6 +339,7 @@ async def collect_round_findings(
                     produced = False
                     await stack.aclose()
                     live_session = None
+                    live_backend_index = backend_index
                     try:
                         live_session = await stack.enter_async_context(
                             backend["open_session"](current_inputs)
@@ -395,9 +400,41 @@ async def collect_round_findings(
             )
 
             if live_session is not None and review_timeout is not None:
-                completed = await flush_round_findings(
-                    pr, marker, live_session, flush_budget(review_timeout), state
-                )
+                budget = flush_budget(review_timeout)
+                try:
+                    completed = await flush_round_findings(pr, marker, live_session, budget, state)
+                except ReviewBackendError as exc:
+                    replacement_index = (live_backend_index or 0) + 1
+                    if not exc.usage_limited or replacement_index >= len(backends):
+                        raise
+
+                    previous = backends[replacement_index - 1]
+                    replacement = backends[replacement_index]
+                    logger.warning(
+                        "%s usage is exhausted during the flush; continuing with %s.",
+                        previous["label"],
+                        replacement["label"],
+                    )
+                    handoff_inputs = await fallback_inputs(inputs, previous["label"], replacement["label"])
+                    await stack.aclose()
+                    live_session = await stack.enter_async_context(replacement["open_session"](handoff_inputs))
+                    handoff_stats = ReviewPhaseStats(label="handoff")
+                    try:
+                        async with asyncio.timeout(budget.total_seconds()):
+                            await publish_round_findings(
+                                pr,
+                                marker,
+                                counted_findings(live_session["findings"](), handoff_stats),
+                                state,
+                            )
+                    except TimeoutError:
+                        logger.warning(
+                            "The replacement review hit its hard deadline after %d finding(s).",
+                            handoff_stats.received,
+                        )
+                    else:
+                        logger.info("The replacement review produced %d finding(s).", handoff_stats.received)
+                    completed = False
                 if completed:
                     logger.info("The agent reported the review as complete; concluding with a normal verdict.")
                     state["findings"].timed_out = False

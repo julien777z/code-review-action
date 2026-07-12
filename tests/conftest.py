@@ -328,6 +328,7 @@ def pull_request_factory() -> Callable[..., PullRequestContext]:
             "number": 7,
             "head_sha": "abc123",
             "head_ref": "feature",
+            "head_repo_owner": "octo",
             "url": "https://github.com/octo/repo/pull/7",
             "author": "dev",
             "is_draft": False,
