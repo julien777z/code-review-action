@@ -254,7 +254,7 @@ class TestMain:
         """Test that manual triggers for forked PRs cannot consume subscription credentials."""
 
         mocks = main_harness()
-        mocks["pr"].head_repo_owner = "forker"
+        mocks["pr"].head_repo_name = "fork"
 
         assert asyncio.run(main()) == 0
         mocks["run_backend_review"].assert_not_awaited()

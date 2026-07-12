@@ -122,7 +122,9 @@ def output_contract() -> str:
         "Report every issue that still applies to the diff at the location where it occurs — include "
         "a finding even when a similar review comment already exists, and never skip a still-valid "
         "finding. The runner reconciles your full set against the existing threads, so omitting a "
-        "still-applicable finding would wrongly resolve its thread."
+        "still-applicable finding would wrongly resolve its thread. Before reporting a claim about an "
+        "external CLI, SDK, or dependency contract, verify it from the changed code, installed help or "
+        "version output, or authoritative project documentation; otherwise omit the claim."
     )
 
 

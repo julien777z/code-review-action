@@ -286,8 +286,7 @@ async def main() -> int:
 
         return 0
 
-    owner, _, _ = repo.partition("/")
-    if pr.head_repo_owner != owner:
+    if pr.head_repository != repo:
         logger.info("PR #%s originates from a fork; skipping before provider startup.", pr_number)
 
         return 0
