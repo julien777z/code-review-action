@@ -78,6 +78,7 @@ class TestClaudeOptions:
         assert "ANTHROPIC_API_KEY" not in options.env
         assert "CODEX_AUTH_JSON" not in options.env
         assert {"Bash", "Edit", "Write"}.issubset(options.disallowed_tools)
+        assert {"WebFetch", "WebSearch"}.issubset(options.allowed_tools)
 
 
 class TestReviewSession:

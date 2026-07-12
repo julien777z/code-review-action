@@ -256,6 +256,8 @@ async def app_server(*, reviewing: bool = True) -> AsyncIterator[CodexAppServer]
             "codex",
             "app-server",
             "--stdio",
+            "--config",
+            'web_search = "live"',
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,

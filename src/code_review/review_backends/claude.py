@@ -21,8 +21,8 @@ def claude_options(*, reviewing: bool = True) -> ClaudeAgentOptions:
     environment.pop("CODEX_AUTH_JSON", None)
 
     return ClaudeAgentOptions(
-        allowed_tools=["Read", "Glob", "Grep", "Agent"] if reviewing else [],
-        disallowed_tools=["Bash", "Edit", "Write", "NotebookEdit", "WebFetch", "WebSearch"],
+        allowed_tools=["Read", "Glob", "Grep", "Agent", "WebFetch", "WebSearch"] if reviewing else [],
+        disallowed_tools=["Bash", "Edit", "Write", "NotebookEdit"],
         system_prompt=review_instructions() if reviewing else None,
         model=SETTINGS.claude_model,
         cwd=os.environ.get("GITHUB_WORKSPACE") or os.getcwd(),

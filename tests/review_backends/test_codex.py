@@ -186,3 +186,32 @@ class TestStopProcess:
 
         process.kill.assert_called_once()
         assert process.communicate.await_count == 2
+
+
+class TestAppServer:
+    """Test Codex app-server setup for review sessions."""
+
+    def test_enables_live_web_search(self, monkeypatch, mock_config) -> None:
+        """Test that review sessions enable native web search and page fetching."""
+
+        mock_config(codex_auth_json="{}")
+        process = MagicMock(returncode=0)
+        start = AsyncMock(return_value=process)
+        initialize = AsyncMock(return_value=None)
+        monkeypatch.setattr(codex.shutil, "which", lambda command: command)
+        monkeypatch.setattr(codex.asyncio, "create_subprocess_exec", start)
+        monkeypatch.setattr(codex.CodexAppServer, "initialize", initialize)
+
+        async def run() -> None:
+            async with codex.app_server():
+                pass
+
+        asyncio.run(run())
+
+        assert start.await_args.args == (
+            "codex",
+            "app-server",
+            "--stdio",
+            "--config",
+            'web_search = "live"',
+        )

@@ -124,7 +124,8 @@ def output_contract() -> str:
         "finding. The runner reconciles your full set against the existing threads, so omitting a "
         "still-applicable finding would wrongly resolve its thread. Before reporting a claim about an "
         "external CLI, SDK, or dependency contract, verify it from the changed code, installed help or "
-        "version output, or authoritative project documentation; otherwise omit the claim."
+        "version output, or authoritative project documentation. Use the available web search and page-fetch "
+        "tools when external evidence is needed; otherwise omit the claim."
     )
 
 
