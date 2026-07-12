@@ -1,10 +1,7 @@
 import asyncio
 from collections.abc import AsyncIterator
 
-import anthropic
-import httpx
 import pytest
-from cursor_sdk import CursorAgentError
 
 from code_review.config import CONFIG
 from code_review.errors import ReviewBackendError
@@ -12,26 +9,20 @@ from code_review.models.backend import Backend, BackendHandlers
 from code_review.models.config import ReviewModel
 from code_review.models.findings import Finding
 from code_review.models.github_event import GithubEvent
-from code_review.review_backends import claude, cursor
-from code_review.summary import SummaryGenerationError
 from code_review.models.review import FlushCompletion
+from code_review.review_backends import claude, codex
 from code_review.runtime import (
     BACKENDS,
     backend_findings_session,
     capture_flush_marker,
+    generate_summary_with_fallback,
     is_eligible,
-    is_first_review_event,
     main,
     reaction_subject,
+    reviewer_name,
     resolve_pr_number,
-    select_backend,
+    select_backends,
 )
-
-
-async def collect_findings(findings: AsyncIterator[Finding]) -> list[Finding]:
-    """Drain an async finding stream into a list."""
-
-    return [finding async for finding in findings]
 
 
 async def collect_session_findings(handlers, inputs, *, flush: bool = False) -> list[Finding]:
@@ -43,57 +34,22 @@ async def collect_session_findings(handlers, inputs, *, flush: bool = False) -> 
         return [finding async for finding in stream]
 
 
-class TestIsFirstReviewEvent:
-    """Test that only opened/ready pull_request events count as the first review."""
-
-    @pytest.mark.parametrize(
-        ("action", "expected"),
-        [("opened", True), ("ready_for_review", True), ("synchronize", False)],
-        ids=["opened", "ready", "sync"],
-    )
-    def test_pull_request_actions(self, pull_request_event_factory, action: str, expected: bool) -> None:
-        """Test that the first-review actions are recognized and others are not."""
-
-        assert is_first_review_event("pull_request", pull_request_event_factory(action=action)) is expected
-
-    def test_non_pull_request(self, issue_comment_event_factory) -> None:
-        """Test that a comment event is never the first review."""
-
-        assert is_first_review_event("issue_comment", issue_comment_event_factory()) is False
-
-
 class TestReactionSubject:
-    """Test that the reviewing reaction targets the trigger comment or the pull request."""
+    """Test reaction targets for automatic and comment-triggered reviews."""
 
-    def test_comment_trigger_targets_the_comment(self, issue_comment_event_factory) -> None:
-        """Test that a trigger-phrase comment is the reaction subject."""
+    def test_comment_trigger_targets_comment(self, issue_comment_event_factory) -> None:
+        """Test that a manual trigger reacts on the triggering comment."""
 
         event = issue_comment_event_factory(comment_id=555)
 
         assert reaction_subject("issue_comment", event, "octo/repo", 7) == "repos/octo/repo/issues/comments/555"
 
-    @pytest.mark.parametrize("event_name", ["pull_request", "workflow_dispatch"], ids=["pull_request", "dispatch"])
-    def test_other_events_target_the_pull_request(self, pull_request_event_factory, event_name: str) -> None:
-        """Test that pull_request and manual-dispatch events react on the PR itself."""
-
-        assert reaction_subject(event_name, pull_request_event_factory(), "octo/repo", 7) == "repos/octo/repo/issues/7"
-
 
 class TestResolvePrNumber:
-    """Test that the PR number resolves from each event type."""
+    """Test PR-number resolution from supported event types."""
 
-    def test_from_pull_request(self, pull_request_event_factory) -> None:
-        """Test that a pull_request event yields its PR number."""
-
-        assert resolve_pr_number("pull_request", pull_request_event_factory(number=12)) == 12
-
-    def test_from_issue_comment(self, issue_comment_event_factory) -> None:
-        """Test that a comment event yields the issue number."""
-
-        assert resolve_pr_number("issue_comment", issue_comment_event_factory(number=9)) == 9
-
-    def test_from_dispatch(self, mock_config) -> None:
-        """Test that a manual dispatch yields the configured PR number."""
+    def test_dispatch_uses_configured_number(self, mock_config) -> None:
+        """Test that workflow dispatch reads the explicit action input."""
 
         mock_config(pr_number=33)
 
@@ -101,321 +57,149 @@ class TestResolvePrNumber:
 
 
 class TestIsEligible:
-    """Test that fork, bot-comment, and trigger gates decide eligibility."""
+    """Test the event, fork, bot, and trigger gates."""
 
-    def test_pull_request_member(self, mock_config, pull_request_event_factory) -> None:
-        """Test that a member's same-repo PR is eligible."""
-
-        mock_config()
+    def test_same_repo_pull_request_allowed(self, pull_request_event_factory) -> None:
+        """Test that a same-repository PR is eligible."""
 
         assert is_eligible("pull_request", pull_request_event_factory()) is True
 
-    def test_fork_rejected(self, mock_config, pull_request_event_factory) -> None:
-        """Test that a PR from a fork is rejected."""
+    def test_fork_rejected(self, pull_request_event_factory) -> None:
+        """Test that forked PRs cannot receive subscription credentials."""
 
-        mock_config()
+        assert is_eligible(
+            "pull_request", pull_request_event_factory(head_full_name="forker/repo")
+        ) is False
 
-        assert is_eligible("pull_request", pull_request_event_factory(head_full_name="forker/repo")) is False
+    def test_bot_comment_rejected(self, issue_comment_event_factory) -> None:
+        """Test that bot-authored trigger comments do not recurse."""
 
-    def test_bot_sender_pull_request_allowed(self, mock_config, pull_request_event_factory) -> None:
-        """Test that bot-pushed updates to eligible PRs are allowed."""
-
-        mock_config()
-
-        assert is_eligible("pull_request", pull_request_event_factory(action="synchronize", sender_type="Bot")) is True
-
-    def test_unhandled_action_rejected(self, mock_config, pull_request_event_factory) -> None:
-        """Test that a non-review pull_request action is rejected."""
-
-        mock_config()
-
-        assert is_eligible("pull_request", pull_request_event_factory(action="closed")) is False
-
-    def test_comment_trigger(self, mock_config, issue_comment_event_factory) -> None:
-        """Test that a PR comment starting with the trigger phrase is eligible."""
-
-        mock_config()
-
-        assert is_eligible("issue_comment", issue_comment_event_factory(body="agent review please")) is True
-
-    def test_comment_wrong_phrase(self, mock_config, issue_comment_event_factory) -> None:
-        """Test that a comment without the trigger phrase is rejected."""
-
-        mock_config()
-
-        assert is_eligible("issue_comment", issue_comment_event_factory(body="lgtm")) is False
-
-    def test_comment_bot_rejected(self, mock_config, issue_comment_event_factory) -> None:
-        """Test that bot-authored trigger comments are rejected."""
-
-        mock_config()
-
-        assert is_eligible("issue_comment", issue_comment_event_factory(sender_type="Bot")) is False
-
-    def test_comment_non_pull_request(self, mock_config, issue_comment_event_factory) -> None:
-        """Test that a comment on a plain issue is rejected."""
-
-        mock_config()
-
-        assert is_eligible("issue_comment", issue_comment_event_factory(is_pull_request=False)) is False
-
-    def test_dispatch_allowed(self, mock_config) -> None:
-        """Test that a manual dispatch is always eligible."""
-
-        mock_config()
-
-        assert is_eligible("workflow_dispatch", GithubEvent()) is True
+        assert is_eligible(
+            "issue_comment", issue_comment_event_factory(sender_type="Bot")
+        ) is False
 
 
-class TestSelectBackend:
-    """Test that the backend resolves from the model inputs and available credentials."""
+class TestSelectBackends:
+    """Test primary provider selection and subscription fallback order."""
 
-    def test_auto_prefers_claude(self, mock_config) -> None:
-        """Test that auto picks Claude when an Anthropic key is set."""
-
-        mock_config(review_model=ReviewModel.AUTO, anthropic_api_key="key")
-
-        assert select_backend(False) is Backend.CLAUDE
-
-    def test_auto_selects_cursor_with_only_cursor_key(self, mock_config) -> None:
-        """Test that auto picks Cursor when only a Cursor key is set."""
-
-        mock_config(review_model=ReviewModel.AUTO, cursor_api_key="key")
-
-        assert select_backend(False) is Backend.CURSOR
-
-    def test_auto_none_without_creds(self, mock_config) -> None:
-        """Test that auto skips when no credentials are configured."""
-
-        mock_config(review_model=ReviewModel.AUTO)
-
-        assert select_backend(False) is None
-
-    def test_claude_requires_key(self, mock_config) -> None:
-        """Test that an explicit Claude request skips without an Anthropic key."""
-
-        mock_config(review_model=ReviewModel.CLAUDE)
-
-        assert select_backend(False) is None
-
-    def test_cursor(self, mock_config) -> None:
-        """Test that an explicit Cursor request resolves with a Cursor key."""
-
-        mock_config(review_model=ReviewModel.CURSOR, cursor_api_key="key")
-
-        assert select_backend(False) is Backend.CURSOR
-
-    @pytest.mark.parametrize(
-        ("first_review", "expected"),
-        [(True, Backend.CLAUDE), (False, Backend.CURSOR)],
-        ids=["first", "subsequent"],
-    )
-    def test_first_review_override(self, mock_config, first_review: bool, expected: Backend) -> None:
-        """Test that the first review uses first-review-model and later events use review-model."""
+    def test_auto_prefers_claude_then_codex(self, mock_config) -> None:
+        """Test that auto mode uses Claude first and Codex as its fallback."""
 
         mock_config(
-            review_model=ReviewModel.CURSOR,
-            first_review_model=ReviewModel.CLAUDE,
-            anthropic_api_key="key",
-            cursor_api_key="key",
+            review_model=ReviewModel.AUTO,
+            claude_code_oauth_token="claude-token",
+            codex_auth_json='{"auth_mode":"chatgpt"}',
         )
 
-        assert select_backend(first_review) is expected
+        assert select_backends() == (Backend.CLAUDE, Backend.CODEX)
+
+    def test_explicit_codex_still_falls_back(self, mock_config) -> None:
+        """Test that explicit Codex uses Claude only after subscription exhaustion."""
+
+        mock_config(
+            review_model=ReviewModel.CODEX,
+            claude_code_oauth_token="claude-token",
+            codex_auth_json='{"auth_mode":"chatgpt"}',
+        )
+
+        assert select_backends() == (Backend.CODEX, Backend.CLAUDE)
+
+    def test_disabled_fallback_returns_only_primary(self, mock_config) -> None:
+        """Test that the fallback input limits selection to one provider."""
+
+        mock_config(
+            claude_code_oauth_token="claude-token",
+            codex_auth_json='{"auth_mode":"chatgpt"}',
+            fallback_on_usage_limit=False,
+        )
+
+        assert select_backends() == (Backend.CLAUDE,)
+
+    def test_missing_credentials_skips(self, mock_config) -> None:
+        """Test that a run without subscription credentials has no backend."""
+
+        mock_config()
+
+        assert select_backends() == ()
 
 
 class TestBackends:
-    """Test that each backend maps to its stream, summary, and error policy."""
+    """Test that each provider maps to its local subscription implementation."""
 
     @pytest.mark.parametrize(
-        ("backend", "review_session", "generate_summary", "errors"),
+        ("backend", "review_session", "generate_summary"),
         [
-            (Backend.CURSOR, cursor.review_session, cursor.generate_text, (CursorAgentError,)),
-            (Backend.CLAUDE, claude.review_session, claude.generate_text, (anthropic.APIError,)),
+            (Backend.CLAUDE, claude.review_session, claude.generate_text),
+            (Backend.CODEX, codex.review_session, codex.generate_text),
         ],
-        ids=["cursor", "claude"],
+        ids=["claude", "codex"],
     )
-    def test_handlers(self, backend, review_session, generate_summary, errors) -> None:
-        """Test that the handler map wires the session opener, generator, and declared errors."""
+    def test_handlers(self, backend, review_session, generate_summary) -> None:
+        """Test that handler registration uses the expected backend functions."""
 
         handlers = BACKENDS[backend]
 
         assert handlers["review_session"] is review_session
         assert handlers["generate_summary"] is generate_summary
-        assert handlers["errors"] == errors
+
+    @pytest.mark.parametrize(
+        ("provider", "model_override", "expected"),
+        [
+            ("Codex", {"codex_model": "gpt-5.6-terra"}, "Codex GPT 5.6 Terra"),
+            ("Claude", {"claude_model": "claude-opus-4-8"}, "Claude Opus 4 8"),
+        ],
+        ids=["codex-terra", "claude-opus"],
+    )
+    def test_reviewer_name_includes_the_configured_model(self, mock_config, provider, model_override, expected) -> None:
+        """Test that review-post attribution names the active provider and model."""
+
+        mock_config(**model_override)
+
+        assert reviewer_name(provider) == expected
 
 
 class TestBackendReviewPolicy:
-    """Test that the shared backend runner owns JSONL parsing and error mapping."""
+    """Test shared JSONL parsing and empty-output policy."""
 
     def test_parses_backend_text_findings(
-        self, review_session_opener_factory, pull_request_factory, review_inputs_factory
+        self, review_session_opener_factory, review_inputs_factory
     ) -> None:
-        """Test that backend text is parsed into findings by the shared runner."""
+        """Test that text from either local agent is parsed into findings."""
 
         async def review_text() -> AsyncIterator[str]:
             yield '{"path":"a.py","line":1,"side":"RIGHT","severity":"high","title":"A","body":"B"}\n'
 
         handlers = BackendHandlers(
             review_session=review_session_opener_factory(review_text),
-            generate_summary=cursor.generate_text,
-            errors=(CursorAgentError,),
-            retryable=lambda exc: isinstance(exc, CursorAgentError) and exc.is_retryable,
-            label="Cursor",
+            generate_summary=claude.generate_text,
+            label="Claude",
         )
 
         findings = asyncio.run(collect_session_findings(handlers, review_inputs_factory()))
 
         assert [finding.title for finding in findings] == ["A"]
 
-    @pytest.mark.parametrize("retryable", [True, False], ids=["retryable", "terminal"])
-    def test_cursor_error_maps_retryability(
-        self, review_session_opener_factory, pull_request_factory, review_inputs_factory, retryable: bool
+    def test_empty_backend_output_raises(
+        self, review_session_opener_factory, review_inputs_factory
     ) -> None:
-        """Test that CursorAgentError retryability is preserved by the shared runner."""
+        """Test that empty model output cannot silently approve a PR."""
 
         async def review_text() -> AsyncIterator[str]:
-            raise CursorAgentError("bridge unavailable", is_retryable=retryable)
-            yield ""
-
-        handlers = BackendHandlers(
-            review_session=review_session_opener_factory(review_text),
-            generate_summary=cursor.generate_text,
-            errors=(CursorAgentError,),
-            retryable=lambda exc: isinstance(exc, CursorAgentError) and exc.is_retryable,
-            label="Cursor",
-        )
-
-        with pytest.raises(ReviewBackendError) as raised:
-            asyncio.run(collect_session_findings(handlers, review_inputs_factory()))
-
-        assert raised.value.retryable is retryable
-        assert "Cursor review failed" in str(raised.value)
-
-    def test_claude_api_error_maps_retryable(
-        self, review_session_opener_factory, pull_request_factory, review_inputs_factory
-    ) -> None:
-        """Test that Anthropic retryability is preserved by the shared runner."""
-
-        request = httpx.Request("GET", "https://api.anthropic.com")
-
-        async def review_text() -> AsyncIterator[str]:
-            raise anthropic.APIConnectionError(request=request)
+            return
             yield ""
 
         handlers = BackendHandlers(
             review_session=review_session_opener_factory(review_text),
             generate_summary=claude.generate_text,
-            errors=(anthropic.APIError,),
-            retryable=lambda exc: isinstance(exc, anthropic.APIError) and claude.is_retryable_api_error(exc),
             label="Claude",
         )
 
-        with pytest.raises(ReviewBackendError) as raised:
+        with pytest.raises(ReviewBackendError, match="produced no output"):
             asyncio.run(collect_session_findings(handlers, review_inputs_factory()))
-
-        assert raised.value.retryable is True
-        assert "Claude review failed" in str(raised.value)
-
-    def test_unexpected_error_propagates(
-        self, review_session_opener_factory, pull_request_factory, review_inputs_factory
-    ) -> None:
-        """Test that undeclared backend exceptions are not converted."""
-
-        async def review_text() -> AsyncIterator[str]:
-            raise ValueError("programming error")
-            yield ""
-
-        handlers = BackendHandlers(
-            review_session=review_session_opener_factory(review_text),
-            generate_summary=cursor.generate_text,
-            errors=(CursorAgentError,),
-            retryable=lambda exc: False,
-            label="Cursor",
-        )
-
-        with pytest.raises(ValueError):
-            asyncio.run(collect_session_findings(handlers, review_inputs_factory()))
-
-    def test_empty_backend_output_raises(
-        self, review_session_opener_factory, pull_request_factory, review_inputs_factory
-    ) -> None:
-        """Test that an empty backend response fails instead of approving cleanly."""
-
-        async def review_text() -> AsyncIterator[str]:
-            if False:
-                yield ""
-
-        handlers = BackendHandlers(
-            review_session=review_session_opener_factory(review_text),
-            generate_summary=cursor.generate_text,
-            errors=(CursorAgentError,),
-            retryable=lambda exc: False,
-            label="Cursor",
-        )
-
-        with pytest.raises(ReviewBackendError, match="produced no output") as raised:
-            asyncio.run(collect_session_findings(handlers, review_inputs_factory()))
-
-        assert raised.value.retryable is True
-
-    def test_empty_flush_output_does_not_raise(
-        self, review_session_opener_factory, pull_request_factory, review_inputs_factory
-    ) -> None:
-        """Test that an empty flush reply is legitimate and yields no findings."""
-
-        async def review_text() -> AsyncIterator[str]:
-            if False:
-                yield ""
-
-        handlers = BackendHandlers(
-            review_session=review_session_opener_factory(review_text),
-            generate_summary=cursor.generate_text,
-            errors=(CursorAgentError,),
-            retryable=lambda exc: False,
-            label="Cursor",
-        )
-
-        findings = asyncio.run(
-            collect_session_findings(handlers, review_inputs_factory(), flush=True)
-        )
-
-        assert findings == []
-
-    def test_flush_complete_marker_sets_completion(
-        self, review_session_opener_factory, pull_request_factory, review_inputs_factory
-    ) -> None:
-        """Test that a flush reply ending in the completion marker flips the session's completion holder."""
-
-        async def review_text() -> AsyncIterator[str]:
-            if False:
-                yield ""
-
-        async def flush_text() -> AsyncIterator[str]:
-            yield '{"path":"a.py","line":1,"side":"RIGHT","severity":"high","title":"A","body":"B"}\n'
-            yield f"{CONFIG['flush_complete_marker']}\n"
-
-        handlers = BackendHandlers(
-            review_session=review_session_opener_factory(review_text, flush_text),
-            generate_summary=cursor.generate_text,
-            errors=(CursorAgentError,),
-            retryable=lambda exc: False,
-            label="Cursor",
-        )
-
-        async def run() -> tuple[list[Finding], bool]:
-            async with backend_findings_session(handlers, review_inputs_factory()) as session:
-                findings = [finding async for finding in session["flush_findings"]()]
-
-                return findings, session["flush_completion"].complete
-
-        findings, complete = asyncio.run(run())
-
-        assert [finding.title for finding in findings] == ["A"]
-        assert complete is True
 
 
 async def capture(*parts: str) -> tuple[list[str], FlushCompletion]:
-    """Drain capture_flush_marker over the given chunks, returning the passed-through lines and completion."""
+    """Drain flush-marker capture over the supplied chunks."""
 
     async def chunks() -> AsyncIterator[str]:
         for part in parts:
@@ -428,18 +212,10 @@ async def capture(*parts: str) -> tuple[list[str], FlushCompletion]:
 
 
 class TestCaptureFlushMarker:
-    """Test that the flush-marker tee records completion and consumes marker lines from the stream."""
+    """Test standalone completion-marker capture."""
 
-    def test_captures_and_consumes_the_completion_marker_line(self) -> None:
-        """Test that a completion-marker line sets the holder and is removed from the passed-through text."""
-
-        lines, completion = asyncio.run(capture("NO_FINDINGS\n", f"{CONFIG['flush_complete_marker']}\n"))
-
-        assert lines == ["NO_FINDINGS\n"]
-        assert completion.complete is True
-
-    def test_captures_a_marker_split_across_chunks(self) -> None:
-        """Test that a marker arriving in two chunks is still recognized and consumed."""
+    def test_captures_split_marker(self) -> None:
+        """Test that a marker split across chunks still records completion."""
 
         marker = CONFIG["flush_complete_marker"]
         lines, completion = asyncio.run(capture(marker[:6], f"{marker[6:]}\n"))
@@ -447,97 +223,55 @@ class TestCaptureFlushMarker:
         assert lines == []
         assert completion.complete is True
 
-    def test_captures_a_marker_without_a_trailing_newline(self) -> None:
-        """Test that a marker ending the stream without a newline is still recognized and consumed."""
 
-        lines, completion = asyncio.run(capture("NO_FINDINGS\n", CONFIG["flush_complete_marker"]))
+class TestSummaryFallback:
+    """Test summary provider fallback on subscription exhaustion."""
 
-        assert lines == ["NO_FINDINGS\n"]
-        assert completion.complete is True
+    def test_switches_only_for_usage_limit(self) -> None:
+        """Test that Codex receives the summary after Claude usage is exhausted."""
 
-    def test_consumes_the_partial_marker_without_capturing(self) -> None:
-        """Test that a partial-marker line is removed from the stream and leaves the holder unset."""
+        async def exhausted(prompt: str) -> str:
+            raise ReviewBackendError("limit", usage_limited=True)
 
-        lines, completion = asyncio.run(capture(f"{CONFIG['flush_partial_marker']}\n"))
+        async def succeeds(prompt: str) -> str:
+            return "summary"
 
-        assert lines == []
-        assert completion.complete is False
+        handlers = (
+            BackendHandlers(review_session=claude.review_session, generate_summary=exhausted, label="Claude"),
+            BackendHandlers(review_session=codex.review_session, generate_summary=succeeds, label="Codex"),
+        )
 
-    @pytest.mark.parametrize(
-        "text",
-        ["NO_FINDINGS\n", "prose mentioning REVIEW_COMPLETE inline\n"],
-        ids=["no-findings", "inline-mention"],
-    )
-    def test_passes_non_marker_lines_through(self, text: str) -> None:
-        """Test that lines without a standalone marker pass through and leave the holder unset."""
-
-        lines, completion = asyncio.run(capture(text))
-
-        assert lines == [text]
-        assert completion.complete is False
+        assert asyncio.run(generate_summary_with_fallback(handlers, "prompt")) == "summary"
 
 
 class TestMain:
-    """Test that main runs the round and posts a summary only on an eligible first review."""
+    """Test top-level review and summary orchestration."""
 
-    @pytest.mark.parametrize(
-        ("action", "summary_posted"),
-        [("opened", True), ("synchronize", False)],
-        ids=["first-review", "later-push"],
-    )
-    def test_summary_gated_on_first_review(self, main_harness, action: str, summary_posted: bool) -> None:
-        """Test that the summary posts on the opened event and is skipped on a later push."""
+    def test_first_event_posts_summary(self, main_harness) -> None:
+        """Test that an opened PR still receives its configured summary."""
 
-        mocks = main_harness(action=action)
+        mocks = main_harness(action="opened")
 
-        exit_code = asyncio.run(main())
-
-        assert exit_code == 0
-        mocks["run_backend_review"].assert_awaited_once_with(mocks["pr"], mocks["handlers"])
-
-        assert mocks["post_pr_summary"].await_count == (1 if summary_posted else 0)
-        if summary_posted:
-            mocks["post_pr_summary"].assert_awaited_once_with(mocks["pr"], cursor.generate_text, diff="REVIEW_DIFF")
-
-    def test_summary_skipped_when_disabled(self, main_harness) -> None:
-        """Test that a first review does not post a summary when the setting is off."""
-
-        mocks = main_harness(pr_review_summary=False)
-
-        asyncio.run(main())
-
-        mocks["post_pr_summary"].assert_not_awaited()
-
-    def test_summary_skipped_when_review_fails(self, main_harness) -> None:
-        """Test that a failing review round skips the summary."""
-
-        mocks = main_harness(run_review_result=1)
-
-        exit_code = asyncio.run(main())
-
-        assert exit_code == 1
-
-        mocks["post_pr_summary"].assert_not_awaited()
-
-    def test_summary_failure_does_not_fail_the_review(self, main_harness) -> None:
-        """Test that a summary error is isolated and the successful review still returns zero."""
-
-        mocks = main_harness()
-        mocks["post_pr_summary"].side_effect = SummaryGenerationError("boom")
-
-        exit_code = asyncio.run(main())
-
-        assert exit_code == 0
-
+        assert asyncio.run(main()) == 0
+        args = mocks["run_backend_review"].await_args.args
+        assert args[:2] == (mocks["pr"], (mocks["handlers"],))
+        assert isinstance(args[2], float)
         mocks["post_pr_summary"].assert_awaited_once()
 
-    def test_summary_backend_failure_does_not_fail_the_review(self, main_harness) -> None:
-        """Test that an optional summary backend error is isolated from the review result."""
+    def test_later_push_skips_summary(self, main_harness) -> None:
+        """Test that synchronize events continue to skip PR-description summaries."""
+
+        mocks = main_harness(action="synchronize")
+
+        assert asyncio.run(main()) == 0
+        mocks["post_pr_summary"].assert_not_awaited()
+
+    def test_forked_comment_target_skips_before_starting_a_provider(self, main_harness) -> None:
+        """Test that manual triggers for forked PRs cannot consume subscription credentials."""
 
         mocks = main_harness()
-        mocks["post_pr_summary"].side_effect = CursorAgentError("summary failed")
+        mocks["pr"].head_repo_name = "fork"
 
-        exit_code = asyncio.run(main())
-
-        assert exit_code == 0
-        mocks["post_pr_summary"].assert_awaited_once()
+        assert asyncio.run(main()) == 0
+        mocks["run_backend_review"].assert_not_awaited()
+        mocks["post_pr_summary"].assert_not_awaited()

@@ -25,7 +25,7 @@ CONFIG: Final[ReviewConfig] = ReviewConfig(
     summary_marker_close="<!-- code-review:summary:end -->",
     status_check_name="Approval Verdict",
     default_claude_model="claude-opus-4-8",
-    default_cursor_model="composer-2.5",
+    default_codex_model="gpt-5.6-terra",
 )
 
 
@@ -48,12 +48,12 @@ class Settings(BaseSettings):
 
     github_token: str = ""
     resolve_token: str = ""
-    anthropic_api_key: str = ""
-    cursor_api_key: str = ""
+    claude_code_oauth_token: str = ""
+    codex_auth_json: str = ""
     review_model: ReviewModel = ReviewModel.AUTO
-    first_review_model: ReviewModel | None = None
     claude_model: str = CONFIG["default_claude_model"]
-    cursor_model: str = CONFIG["default_cursor_model"]
+    codex_model: str = CONFIG["default_codex_model"]
+    fallback_on_usage_limit: bool = True
     additional_context: str = ""
     approval_include: Annotated[frozenset[Severity], NoDecode] = frozenset({Severity.CRITICAL})
     approval_disable: bool = False
@@ -97,7 +97,6 @@ class Settings(BaseSettings):
 
     @field_validator(
         "review_model",
-        "first_review_model",
         "min_severity",
         "project_rules_severity",
         "simplify_suggest_severity",
@@ -116,6 +115,7 @@ class Settings(BaseSettings):
         "enforce_project_rules",
         "simplify_suggest",
         "simplify_nearby_code",
+        "fallback_on_usage_limit",
         mode="before",
     )
     @classmethod

@@ -7,7 +7,7 @@ class ReviewModel(StrEnum):
 
     AUTO = "auto"
     CLAUDE = "claude"
-    CURSOR = "cursor"
+    CODEX = "codex"
 
     @classmethod
     def parse(cls, value: str) -> Self | None:
@@ -31,4 +31,4 @@ class ReviewConfig(TypedDict):
     summary_marker_close: str
     status_check_name: str
     default_claude_model: str
-    default_cursor_model: str
+    default_codex_model: str

@@ -37,8 +37,9 @@ class TestBooleanFeatureInputs:
             ("enforce-project-rules", "ENFORCE_PROJECT_RULES", "true"),
             ("simplify-suggest", "SIMPLIFY_SUGGEST", "false"),
             ("simplify-nearby-code", "SIMPLIFY_NEARBY_CODE", "false"),
+            ("fallback-on-usage-limit", "FALLBACK_ON_USAGE_LIMIT", "true"),
         ],
-        ids=["pr-review-summary", "enforce-project-rules", "simplify-suggest", "simplify-nearby-code"],
+        ids=["pr-review-summary", "enforce-project-rules", "simplify-suggest", "simplify-nearby-code", "fallback"],
     )
     def test_input_default_and_env_wired(self, input_name: str, env_name: str, default: str) -> None:
         """Test that the input carries its default and passes through as its env var."""
@@ -81,17 +82,17 @@ class TestReviewTimeoutInput:
         assert review_step(action)["env"]["REVIEW_TIMEOUT_MINUTES"] == "${{ inputs.review-timeout-minutes }}"
 
 
-class TestClaudeInputDescriptions:
-    """Test that Claude input descriptions match the current Managed Agents backend."""
+class TestProviderInputs:
+    """Test that provider inputs expose subscription credentials only."""
 
     def test_descriptions_do_not_reference_retired_api_backend(self) -> None:
         """Test that Claude backend descriptions no longer point operators at the old API-only mode."""
 
         inputs = load_action()["inputs"]
 
-        assert "API backend" not in inputs["anthropic-api-key"]["description"]
-        assert "API backend" not in inputs["claude-model"]["description"]
-        assert "Managed Agents" in inputs["claude-model"]["description"]
+        assert "subscription" in inputs["claude-code-oauth-token"]["description"]
+        assert "subscription" in inputs["codex-auth-json"]["description"]
+        assert inputs["codex-model"]["default"] == "gpt-5.6-terra"
 
 
 class TestRoutineInputsRemoved:

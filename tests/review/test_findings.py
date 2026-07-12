@@ -1,33 +1,29 @@
 import asyncio
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import timedelta
 from unittest.mock import AsyncMock
 
 import pytest
 
 from code_review.errors import ReviewBackendError
+from code_review.models.backend import FindingsBackend, FindingsSession
 from code_review.models.findings import Finding, FindingCategory
+from code_review.models.pull_request import PostedFinding, ReviewInputs
+from code_review.models.review import FlushCompletion, RoundFindings
 from code_review.models.severity import DiffSide, Severity
 from code_review.review.findings import (
-    REVIEW_BACKEND_ATTEMPTS,
     collect_round_findings,
     finding_anchors,
     finding_kept,
     flush_budget,
-    flush_reserve,
+    hurry_reserve,
     is_postable,
     low_finding_rank,
-    stream_findings_with_retry,
     total_cap_reached,
 )
 
 ANCHORS_UP_TO_LINE_30 = {"src/app.py": ({10, 20, 30}, set())}
-
-
-async def collect(stream: AsyncIterator[Finding]) -> list[Finding]:
-    """Drain an async finding stream into a list."""
-
-    return [finding async for finding in stream]
 
 
 def posted_titles(post_comment: AsyncMock) -> list[str]:
@@ -39,64 +35,6 @@ def posted_titles(post_comment: AsyncMock) -> list[str]:
         for row in call.args[2].body.splitlines()
         if row.startswith("### ")
     ]
-
-
-class TestStreamFindingsWithRetry:
-    """Test that the streaming backend wrapper retries only before the first finding is produced."""
-
-    def test_retries_before_first_finding(self, flaky_stream_factory, review_inputs_factory, finding_factory) -> None:
-        """Test that a retryable failure before any finding is retried until findings stream."""
-
-        finding = finding_factory()
-        get_findings, calls = flaky_stream_factory(
-            failures=1, error=ReviewBackendError("Bridge request timed out", retryable=True), result=[finding]
-        )
-
-        result = asyncio.run(collect(stream_findings_with_retry(get_findings, review_inputs_factory())))
-
-        assert result == [finding]
-        assert len(calls) == 2
-
-    def test_no_retry_after_a_finding_is_yielded(
-        self, flaky_stream_factory, review_inputs_factory, finding_factory
-    ) -> None:
-        """Test that a retryable failure after a finding has streamed is not retried."""
-
-        get_findings, calls = flaky_stream_factory(
-            failures=1,
-            error=ReviewBackendError("dropped mid-stream", retryable=True),
-            result=[finding_factory()],
-            yield_before_error=True,
-        )
-
-        with pytest.raises(ReviewBackendError):
-            asyncio.run(collect(stream_findings_with_retry(get_findings, review_inputs_factory())))
-
-        assert len(calls) == 1
-
-    def test_raises_after_exhausting_attempts(self, flaky_stream_factory, review_inputs_factory) -> None:
-        """Test that a persistently failing backend gives up after the attempt budget."""
-
-        get_findings, calls = flaky_stream_factory(
-            failures=REVIEW_BACKEND_ATTEMPTS, error=ReviewBackendError("timed out", retryable=True)
-        )
-
-        with pytest.raises(ReviewBackendError):
-            asyncio.run(collect(stream_findings_with_retry(get_findings, review_inputs_factory())))
-
-        assert len(calls) == REVIEW_BACKEND_ATTEMPTS
-
-    def test_non_retryable_error_not_retried(self, flaky_stream_factory, review_inputs_factory) -> None:
-        """Test that a non-retryable backend error surfaces immediately without further attempts."""
-
-        get_findings, calls = flaky_stream_factory(
-            failures=REVIEW_BACKEND_ATTEMPTS, error=ReviewBackendError("unparseable reply", retryable=False)
-        )
-
-        with pytest.raises(ReviewBackendError):
-            asyncio.run(collect(stream_findings_with_retry(get_findings, review_inputs_factory())))
-
-        assert len(calls) == 1
 
 
 class TestFindingKept:
@@ -204,6 +142,7 @@ class TestCollectRoundFindings:
     def test_capped_finding_is_not_current(
         self,
         mock_config,
+        monkeypatch,
         post_comment_mock,
         pull_request_factory,
         review_inputs_factory,
@@ -256,6 +195,129 @@ class TestCollectRoundFindings:
 
         assert result.current_keys == {("src/app.py", "Already posted")}
         assert result.severity_by_key[("src/app.py", "Already posted")] is Severity.HIGH
+
+    def test_usage_fallback_refreshes_comments_and_adds_only_missing_context(
+        self,
+        monkeypatch,
+        post_comment_mock,
+        pull_request_factory,
+        review_inputs_factory,
+        finding_factory,
+    ) -> None:
+        """Test that a replacement provider receives refreshed comments plus only unseen findings."""
+
+        visible = finding_factory(line=10, title="Visible")
+        not_visible = finding_factory(line=20, title="Not visible")
+        captured: list[ReviewInputs] = []
+
+        @asynccontextmanager
+        async def first(inputs: ReviewInputs) -> AsyncIterator[FindingsSession]:
+            async def _findings() -> AsyncIterator[Finding]:
+                yield visible
+                yield not_visible
+                raise ReviewBackendError("limit", usage_limited=True)
+
+            async def _empty() -> AsyncIterator[Finding]:
+                return
+                yield visible
+
+            yield FindingsSession(
+                findings=_findings,
+                flush_findings=_empty,
+                flush_completion=FlushCompletion(),
+            )
+
+        @asynccontextmanager
+        async def second(inputs: ReviewInputs) -> AsyncIterator[FindingsSession]:
+            captured.append(inputs)
+
+            async def _empty() -> AsyncIterator[Finding]:
+                return
+                yield visible
+
+            yield FindingsSession(
+                findings=_empty,
+                flush_findings=_empty,
+                flush_completion=FlushCompletion(),
+            )
+
+        monkeypatch.setattr(
+            "code_review.review.findings.existing_finding_titles",
+            AsyncMock(return_value={"src/app.py": [PostedFinding(severity="high", title="Visible")]}),
+        )
+        backends = (
+            FindingsBackend(label="Claude", reviewer="Claude Test", open_session=first),
+            FindingsBackend(label="Codex", reviewer="Codex Test", open_session=second),
+        )
+
+        asyncio.run(
+            collect_round_findings(
+                pull_request_factory(),
+                "marker",
+                backends,
+                review_inputs_factory(),
+                ANCHORS_UP_TO_LINE_30,
+                set(),
+                set(),
+            )
+        )
+
+        assert len(captured) == 1
+        assert captured[0].provider_handoff is not None
+        assert "Claude reached" in captured[0].provider_handoff
+        assert "Codex provider" in captured[0].provider_handoff
+        assert [finding.title for finding in captured[0].posted_findings["src/app.py"]] == [
+            "Visible",
+            "Not visible",
+        ]
+
+    def test_usage_fallback_covers_session_startup(
+        self, monkeypatch, pull_request_factory, review_inputs_factory
+    ) -> None:
+        """Test that a usage limit raised before streaming still starts the replacement provider."""
+
+        async def empty_findings() -> AsyncIterator[Finding]:
+            return
+            yield
+
+        @asynccontextmanager
+        async def exhausted(inputs: ReviewInputs) -> AsyncIterator[FindingsSession]:
+            raise ReviewBackendError("limit", usage_limited=True)
+            yield FindingsSession(
+                findings=empty_findings,
+                flush_findings=empty_findings,
+                flush_completion=FlushCompletion(),
+            )
+
+        @asynccontextmanager
+        async def replacement(inputs: ReviewInputs) -> AsyncIterator[FindingsSession]:
+            yield FindingsSession(
+                findings=empty_findings,
+                flush_findings=empty_findings,
+                flush_completion=FlushCompletion(),
+            )
+
+        backends = (
+            FindingsBackend(label="Claude", reviewer="Claude Test", open_session=exhausted),
+            FindingsBackend(label="Codex", reviewer="Codex Test", open_session=replacement),
+        )
+        monkeypatch.setattr(
+            "code_review.review.findings.existing_finding_titles", AsyncMock(return_value={})
+        )
+
+        result = asyncio.run(
+            collect_round_findings(
+                pull_request_factory(),
+                "marker",
+                backends,
+                review_inputs_factory(),
+                ANCHORS_UP_TO_LINE_30,
+                set(),
+                set(),
+            )
+        )
+
+        assert result.current_keys == set()
 
 
 class TestDeferredLows:
@@ -429,33 +491,33 @@ class TestDeferredLows:
         assert result.current_keys == {("src/app.py", "Duplicate")}
 
 
-class TestFlushReserve:
-    """Test that the flush reserve caps at three minutes and scales down with short budgets."""
+class TestHurryReserve:
+    """Test that the hurry-up reserve caps at two minutes and scales down with short budgets."""
 
     @pytest.mark.parametrize(
         ("review_timeout", "expected"),
         [
-            (timedelta(minutes=15), timedelta(minutes=3)),
-            (timedelta(minutes=5), timedelta(minutes=1)),
-            (timedelta(minutes=30), timedelta(minutes=3)),
+            (timedelta(minutes=15), timedelta(minutes=2)),
+            (timedelta(minutes=5), timedelta(seconds=40)),
+            (timedelta(minutes=30), timedelta(minutes=2)),
         ],
         ids=["default", "short", "long"],
     )
-    def test_flush_reserve(self, review_timeout: timedelta, expected: timedelta) -> None:
-        """Test that the reserve is a fifth of the budget capped at three minutes."""
+    def test_hurry_reserve(self, review_timeout: timedelta, expected: timedelta) -> None:
+        """Test that the reserve is two fifteenths of the budget capped at two minutes."""
 
-        assert flush_reserve(review_timeout) == expected
+        assert hurry_reserve(review_timeout) == expected
 
     @pytest.mark.parametrize(
         ("review_timeout", "expected"),
         [
-            (timedelta(minutes=15), timedelta(seconds=160)),
-            (timedelta(minutes=1), timedelta(seconds=8)),
+            (timedelta(minutes=15), timedelta(seconds=90)),
+            (timedelta(minutes=1), timedelta(seconds=6)),
         ],
         ids=["default", "one-minute"],
     )
     def test_flush_budget(self, review_timeout: timedelta, expected: timedelta) -> None:
-        """Test that the flush window subtracts a headroom that shrinks with the reserve."""
+        """Test that the flush window reserves time for final publication and cleanup."""
 
         assert flush_budget(review_timeout) == expected
 
@@ -528,6 +590,41 @@ class TestCollectRoundFindingsTimeout:
                 set(),
             )
         )
+
+        assert result.timed_out is True
+        assert state.flush_calls == 1
+        assert ("src/app.py", "Late") in result.current_keys
+
+    def test_absolute_hurry_deadline_is_not_shifted_by_review_setup(
+        self,
+        mock_config,
+        post_comment_mock,
+        pull_request_factory,
+        review_inputs_factory,
+        findings_session_factory,
+        finding_factory,
+    ) -> None:
+        """Test that an externally supplied hurry deadline drives the finish turn without a fresh timeout."""
+
+        open_session, state = findings_session_factory(
+            [finding_factory()], block_after_review=True, flush_findings=[finding_factory(line=20, title="Late")]
+        )
+
+        async def collect_with_absolute_deadline() -> RoundFindings:
+            loop = asyncio.get_running_loop()
+            return await collect_round_findings(
+                pull_request_factory(),
+                "marker",
+                open_session,
+                review_inputs_factory(),
+                ANCHORS_UP_TO_LINE_30,
+                set(),
+                set(),
+                hurry_at=loop.time() + 0.01,
+                model_deadline=loop.time() + 0.1,
+            )
+
+        result = asyncio.run(collect_with_absolute_deadline())
 
         assert result.timed_out is True
         assert state.flush_calls == 1
@@ -610,6 +707,46 @@ class TestCollectRoundFindingsTimeout:
 
         assert result.timed_out is False
         assert state.flush_calls == 1
+
+    def test_usage_limited_flush_switches_to_the_other_provider(
+        self,
+        mock_config,
+        monkeypatch,
+        post_comment_mock,
+        override_review_timeout,
+        zero_flush_headroom,
+        pull_request_factory,
+        review_inputs_factory,
+        findings_session_factory,
+        finding_factory,
+    ) -> None:
+        """Test that a flush usage limit starts the replacement provider with the same round context."""
+
+        override_review_timeout(timedelta(seconds=0.5))
+        monkeypatch.setattr("code_review.review.findings.existing_finding_titles", AsyncMock(return_value={}))
+        primary, primary_state = findings_session_factory(
+            [finding_factory(line=10, title="Streamed")],
+            block_after_review=True,
+            flush_error=ReviewBackendError("limit", usage_limited=True),
+        )
+        fallback, fallback_state = findings_session_factory([finding_factory(line=20, title="Recovered")])
+
+        result = asyncio.run(
+            collect_round_findings(
+                pull_request_factory(),
+                "marker",
+                primary + fallback,
+                review_inputs_factory(),
+                ANCHORS_UP_TO_LINE_30,
+                set(),
+                set(),
+            )
+        )
+
+        assert result.timed_out is True
+        assert primary_state.flush_calls == 1
+        assert fallback_state.opened == 1
+        assert posted_titles(post_comment_mock) == ["Streamed", "Recovered"]
 
     @pytest.mark.parametrize(
         ("session_overrides", "expected_flush_calls"),

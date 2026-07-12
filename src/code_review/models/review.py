@@ -59,6 +59,7 @@ class RoundFindings(BaseModel):
     posted_any: bool = False
     published_count: int = 0
     timed_out: bool = False
+    reviewers: set[str] = Field(default_factory=set)
 
     @property
     def needs_verdict_review(self) -> bool:
@@ -71,6 +72,8 @@ class RoundFindings(BaseModel):
 
         self.current_keys.add(title_key)
         self.severity_by_key[title_key] = finding.severity
+        if finding.reviewer:
+            self.reviewers.add(finding.reviewer)
 
     def track_publication(
         self, finding: Finding, publication: FindingPublication

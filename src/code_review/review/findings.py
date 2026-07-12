@@ -9,12 +9,13 @@ from typing import Final, TypedDict
 from code_review.config import SETTINGS
 from code_review.errors import ReviewBackendError
 from code_review.github import post_comment
-from code_review.models.backend import FindingsSession, GetBackendFindings, GetFindingsSession
+from code_review.models.backend import FindingsBackend, FindingsSession
 from code_review.models.findings import Finding, FindingCategory
-from code_review.models.pull_request import PullRequestContext, ReviewInputs
+from code_review.models.pull_request import PostedFinding, PullRequestContext, ReviewInputs
 from code_review.models.review import FindingPublication, ReviewPhaseStats, RoundFindings
 from code_review.models.severity import DiffSide, Severity
 from code_review.review.comments import build_inline_comment
+from code_review.review.threads import existing_finding_titles
 
 logger = logging.getLogger("code_review.review.findings")
 
@@ -22,20 +23,22 @@ REVIEW_BACKEND_ATTEMPTS: Final[int] = 3
 REVIEW_RETRY_BACKOFF: Final[timedelta] = timedelta(seconds=2)
 
 
-class FlushTiming(TypedDict):
-    """Tuning values for the wrap-up flush reserve and hard budget."""
+class DeadlineTiming(TypedDict):
+    """Tuning values for the shared review deadline."""
 
-    reserve_max: timedelta
-    reserve_fraction: int
-    posting_headroom: timedelta
-    headroom_fraction: int
+    hurry_max: timedelta
+    hurry_fraction: float
+    finalization_max: timedelta
+    finalization_fraction: int
+    cancellation_grace: timedelta
 
 
-FLUSH_TIMING: Final[FlushTiming] = FlushTiming(
-    reserve_max=timedelta(minutes=3),
-    reserve_fraction=5,
-    posting_headroom=timedelta(seconds=20),
-    headroom_fraction=3,
+DEADLINE_TIMING: Final[DeadlineTiming] = DeadlineTiming(
+    hurry_max=timedelta(minutes=2),
+    hurry_fraction=7.5,
+    finalization_max=timedelta(seconds=30),
+    finalization_fraction=30,
+    cancellation_grace=timedelta(seconds=5),
 )
 
 LOW_CATEGORY_PRIORITY: Final[dict[FindingCategory, int]] = {
@@ -59,43 +62,33 @@ class RoundPublishState(TypedDict):
     findings: RoundFindings
     deferred_lows: list[Finding]
     seen_anchor_keys: set[tuple[str, int, DiffSide, str]]
+    observed_findings: list[Finding]
 
 
-async def stream_findings_with_retry(
-    get_findings: GetBackendFindings, inputs: ReviewInputs
-) -> AsyncIterator[Finding]:
-    """Stream the backend's findings, retrying transient failures only before the first one arrives."""
+def hurry_reserve(review_timeout: timedelta) -> timedelta:
+    """Return the portion of a review reserved for the hurry-up turn and final output."""
 
-    for attempt in range(REVIEW_BACKEND_ATTEMPTS):
-        produced = False
-        try:
-            async for finding in get_findings(inputs):
-                produced = True
-                yield finding
-
-            return
-        except ReviewBackendError as exc:
-            if produced or not exc.retryable or attempt == REVIEW_BACKEND_ATTEMPTS - 1:
-                raise
-
-            backoff = REVIEW_RETRY_BACKOFF * (2**attempt)
-            logger.warning("Review backend failed; retrying in %ss: %s", backoff.total_seconds(), exc)
-
-            await asyncio.sleep(backoff.total_seconds())
+    return min(DEADLINE_TIMING["hurry_max"], review_timeout / DEADLINE_TIMING["hurry_fraction"])
 
 
-def flush_reserve(review_timeout: timedelta) -> timedelta:
-    """Return how much of the review budget is held back for the wrap-up flush turn."""
+def finalization_reserve(review_timeout: timedelta) -> timedelta:
+    """Return the time held back for GitHub publication and process cleanup."""
 
-    return min(FLUSH_TIMING["reserve_max"], review_timeout / FLUSH_TIMING["reserve_fraction"])
+    return min(
+        DEADLINE_TIMING["finalization_max"], review_timeout / DEADLINE_TIMING["finalization_fraction"]
+    )
 
 
 def flush_budget(review_timeout: timedelta) -> timedelta:
-    """Return the flush turn's hard window, positive for any configured timeout."""
+    """Return the hurry-up turn's hard window, positive for any configured timeout."""
 
-    reserve = flush_reserve(review_timeout)
+    return hurry_reserve(review_timeout) - finalization_reserve(review_timeout)
 
-    return reserve - min(FLUSH_TIMING["posting_headroom"], reserve / FLUSH_TIMING["headroom_fraction"])
+
+def seconds_remaining(deadline: float) -> float:
+    """Return non-negative seconds remaining before an event-loop deadline."""
+
+    return max(0.0, deadline - asyncio.get_running_loop().time())
 
 
 async def counted_findings(stream: AsyncIterator[Finding], stats: ReviewPhaseStats) -> AsyncIterator[Finding]:
@@ -110,6 +103,13 @@ async def counted_findings(stream: AsyncIterator[Finding], stats: ReviewPhaseSta
             logger.info("First %s finding arrived after %.0fs.", stats.label, elapsed)
 
         yield finding
+
+
+async def attributed_findings(stream: AsyncIterator[Finding], reviewer: str) -> AsyncIterator[Finding]:
+    """Attach the active reviewer to every finding from one provider stream."""
+
+    async for finding in stream:
+        yield finding.model_copy(update={"reviewer": reviewer})
 
 
 def path_allowed(path: str) -> bool:
@@ -216,6 +216,8 @@ async def publish_round_findings(
         if not is_postable(finding, state["anchors"], state["unpatched"]):
             continue
 
+        state["observed_findings"].append(finding)
+
         if title_key in state["posted_keys"]:
             findings.track_current(title_key, finding)
 
@@ -258,19 +260,28 @@ async def publish_deferred_lows(pr: PullRequestContext, marker: str, state: Roun
 
 
 async def flush_round_findings(
-    pr: PullRequestContext, marker: str, session: FindingsSession, budget: timedelta, state: RoundPublishState
+    pr: PullRequestContext,
+    marker: str,
+    session: FindingsSession,
+    reviewer: str,
+    budget: timedelta,
+    state: RoundPublishState,
 ) -> bool:
     """Run the wrap-up flush turn under the remaining hard budget, returning whether the agent reported completion."""
 
     flush_stats = ReviewPhaseStats(label="flush")
+
     try:
         async with asyncio.timeout(budget.total_seconds()):
             await publish_round_findings(
-                pr, marker, counted_findings(session["flush_findings"](), flush_stats), state
+                pr, marker, counted_findings(attributed_findings(session["flush_findings"](), reviewer), flush_stats), state
             )
     except TimeoutError:
         logger.warning("The wrap-up flush hit its hard deadline after %d finding(s).", flush_stats.received)
     except ReviewBackendError as exc:
+        if exc.usage_limited:
+            raise
+
         logger.warning("The wrap-up flush failed; keeping the review-phase findings: %s", exc)
     else:
         logger.info("The wrap-up flush produced %d finding(s).", flush_stats.received)
@@ -283,16 +294,23 @@ async def flush_round_findings(
 async def collect_round_findings(
     pr: PullRequestContext,
     marker: str,
-    open_session: GetFindingsSession,
+    backends: tuple[FindingsBackend, ...],
     inputs: ReviewInputs,
     anchors: dict[str, tuple[set[int], set[int]]],
     unpatched: set[str],
     posted_keys: set[tuple[str, str]],
+    *,
+    hurry_at: float | None = None,
+    model_deadline: float | None = None,
 ) -> RoundFindings:
-    """Run the review phase, and a wrap-up flush on the live session when the soft deadline expires."""
+    """Run review streaming until its shared deadline, then ask the live agent to finish immediately."""
 
     review_timeout = SETTINGS.review_timeout
-    soft_deadline = review_timeout - flush_reserve(review_timeout) if review_timeout is not None else None
+    now = asyncio.get_running_loop().time()
+    if review_timeout is not None and hurry_at is None:
+        hurry_at = now + (review_timeout - hurry_reserve(review_timeout)).total_seconds()
+    if review_timeout is not None and model_deadline is None:
+        model_deadline = now + (review_timeout - finalization_reserve(review_timeout)).total_seconds()
     state = RoundPublishState(
         anchors=anchors,
         unpatched=unpatched,
@@ -300,49 +318,201 @@ async def collect_round_findings(
         findings=RoundFindings(),
         deferred_lows=[],
         seen_anchor_keys=set(),
+        observed_findings=[],
     )
 
     async with AsyncExitStack() as stack:
         live_session: FindingsSession | None = None
+        live_backend_index: int | None = None
 
-        async def open_review_findings(inputs: ReviewInputs) -> AsyncIterator[Finding]:
-            """Open a fresh session on the round's stack, closing any failed prior one, and stream its findings."""
+        async def fallback_inputs(
+            current_inputs: ReviewInputs, previous: str, replacement: str
+        ) -> ReviewInputs:
+            """Refresh posted findings and add only missing in-memory findings for a provider handoff."""
 
-            nonlocal live_session
-            await stack.aclose()
-            live_session = None
+            posted = await existing_finding_titles(
+                current_inputs.pr.repo, current_inputs.pr.number, marker
+            )
+            posted_keys = {
+                (path, finding.title)
+                for path, findings in posted.items()
+                for finding in findings
+            }
+            for finding in state["observed_findings"]:
+                key = (finding.path, finding.title)
+                if key in posted_keys:
+                    continue
 
-            live_session = await stack.enter_async_context(open_session(inputs))
-            async for finding in live_session["findings"]():
-                yield finding
+                posted.setdefault(finding.path, []).append(
+                    PostedFinding(severity=finding.severity.value, title=finding.title)
+                )
+                posted_keys.add(key)
 
-        review_stats = ReviewPhaseStats(label="review")
-        review_stream = counted_findings(
-            stream_findings_with_retry(open_review_findings, inputs), review_stats
-        )
-
-        review_scope = asyncio.timeout(soft_deadline.total_seconds() if soft_deadline is not None else None)
-        try:
-            async with review_scope:
-                await publish_round_findings(pr, marker, review_stream, state)
-        except TimeoutError:
-            if not review_scope.expired():
-                raise
-
-            state["findings"].timed_out = True
-            logger.warning(
-                "Review hit the %s soft deadline with %d finding(s) streamed; interrupting the agent to flush.",
-                soft_deadline,
-                review_stats.received,
+            return current_inputs.model_copy(
+                update={
+                    "posted_findings": posted,
+                    "provider_handoff": (
+                        f"{previous} reached its subscription usage limit during this review, so you are "
+                        f"continuing the same round as the {replacement} provider. The prior-findings list "
+                        "below was refreshed from PR comments and supplemented only with findings that had "
+                        "not become visible there. Re-evaluate the full diff and re-emit every still-valid "
+                        "finding using the exact existing title and severity."
+                    ),
+                }
             )
 
-            if live_session is not None and review_timeout is not None:
-                completed = await flush_round_findings(
-                    pr, marker, live_session, flush_budget(review_timeout), state
-                )
-                if completed:
-                    logger.info("The agent reported the review as complete; concluding with a normal verdict.")
-                    state["findings"].timed_out = False
+        async def review_findings() -> AsyncIterator[Finding]:
+            """Stream providers in fallback order, retrying transient startup failures per provider."""
+
+            nonlocal live_backend_index, live_session
+            current_inputs = inputs
+            last_error: ReviewBackendError | None = None
+
+            for backend_index, backend in enumerate(backends):
+                for attempt in range(REVIEW_BACKEND_ATTEMPTS):
+                    produced = False
+                    await stack.aclose()
+                    live_session = None
+                    live_backend_index = backend_index
+                    try:
+                        live_session = await stack.enter_async_context(
+                            backend["open_session"](current_inputs)
+                        )
+                        logger.info("%s review session is ready.", backend["label"])
+                        async for finding in attributed_findings(
+                            live_session["findings"](), backend["reviewer"]
+                        ):
+                            produced = True
+                            yield finding
+
+                        return
+                    except ReviewBackendError as exc:
+                        last_error = exc
+                        has_fallback = backend_index < len(backends) - 1
+                        if exc.usage_limited and has_fallback:
+                            replacement = backends[backend_index + 1]
+                            logger.warning(
+                                "%s usage is exhausted; continuing the round with %s.",
+                                backend["label"],
+                                replacement["label"],
+                            )
+                            current_inputs = await fallback_inputs(
+                                current_inputs, backend["label"], replacement["label"]
+                            )
+                            break
+
+                        if produced or not exc.retryable or attempt == REVIEW_BACKEND_ATTEMPTS - 1:
+                            raise
+
+                        backoff = REVIEW_RETRY_BACKOFF * (2**attempt)
+                        logger.warning(
+                            "%s failed; retrying in %ss: %s",
+                            backend["label"],
+                            backoff.total_seconds(),
+                            exc,
+                        )
+                        await asyncio.sleep(backoff.total_seconds())
+                else:
+                    continue
+
+            if last_error is not None:
+                raise last_error
+
+        review_stats = ReviewPhaseStats(label="review")
+        if hurry_at is not None:
+            logger.info("Streaming review findings until the shared hurry deadline.")
+        review_task = asyncio.create_task(
+            publish_round_findings(pr, marker, counted_findings(review_findings(), review_stats), state)
+        )
+        try:
+            if hurry_at is None:
+                await review_task
+            else:
+                done, _ = await asyncio.wait({review_task}, timeout=seconds_remaining(hurry_at))
+                if done:
+                    await review_task
+                else:
+                    state["findings"].timed_out = True
+                    logger.warning(
+                        "Review reached its hurry deadline with %d finding(s) streamed; asking the agent to finish.",
+                        review_stats.received,
+                    )
+                    review_task.cancel()
+                    cancellation_wait = DEADLINE_TIMING["cancellation_grace"].total_seconds()
+                    if model_deadline is not None:
+                        cancellation_wait = min(cancellation_wait, seconds_remaining(model_deadline))
+                    done, _ = await asyncio.wait({review_task}, timeout=cancellation_wait)
+                    if not done:
+                        logger.warning("The review stream did not stop within %.0fs; concluding without a flush.", cancellation_wait)
+                    elif live_session is not None and model_deadline is not None:
+                        try:
+                            review_task.result()
+                        except asyncio.CancelledError:
+                            pass
+
+                        budget = timedelta(seconds=seconds_remaining(model_deadline))
+                        if budget > timedelta(0):
+                            logger.info("Sending the hurry-up turn with %.0fs remaining for model output.", budget.total_seconds())
+                            try:
+                                completed = await flush_round_findings(
+                                    pr,
+                                    marker,
+                                    live_session,
+                                    backends[live_backend_index or 0]["reviewer"],
+                                    budget,
+                                    state,
+                                )
+                            except ReviewBackendError as exc:
+                                replacement_index = (live_backend_index or 0) + 1
+                                if not exc.usage_limited or replacement_index >= len(backends):
+                                    raise
+
+                                previous = backends[replacement_index - 1]
+                                replacement = backends[replacement_index]
+                                logger.warning(
+                                    "%s usage is exhausted during the hurry-up turn; continuing with %s.",
+                                    previous["label"],
+                                    replacement["label"],
+                                )
+                                handoff_inputs = await fallback_inputs(
+                                    inputs, previous["label"], replacement["label"]
+                                )
+                                await stack.aclose()
+                                live_session = await stack.enter_async_context(
+                                    replacement["open_session"](handoff_inputs)
+                                )
+                                handoff_stats = ReviewPhaseStats(label="handoff")
+                                try:
+                                    async with asyncio.timeout(budget.total_seconds()):
+                                        await publish_round_findings(
+                                            pr,
+                                            marker,
+                                            counted_findings(
+                                                attributed_findings(
+                                                    live_session["findings"](), replacement["reviewer"]
+                                                ),
+                                                handoff_stats,
+                                            ),
+                                            state,
+                                        )
+                                except TimeoutError:
+                                    logger.warning(
+                                        "The replacement review hit its hard deadline after %d finding(s).",
+                                        handoff_stats.received,
+                                    )
+                                else:
+                                    logger.info(
+                                        "The replacement review produced %d finding(s).", handoff_stats.received
+                                    )
+                                completed = False
+                            if completed:
+                                logger.info("The agent reported the review as complete; concluding with a normal verdict.")
+                                state["findings"].timed_out = False
+                    else:
+                        logger.warning("No live agent session was ready for the hurry-up turn.")
+        finally:
+            if not review_task.done():
+                review_task.cancel()
 
     await publish_deferred_lows(pr, marker, state)
 

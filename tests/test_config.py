@@ -40,8 +40,8 @@ class TestReviewModelParse:
 
     @pytest.mark.parametrize(
         ("raw", "expected"),
-        [("auto", ReviewModel.AUTO), ("CLAUDE", ReviewModel.CLAUDE), ("cursor", ReviewModel.CURSOR), ("", None)],
-        ids=["auto", "claude-upper", "cursor", "empty"],
+        [("auto", ReviewModel.AUTO), ("CLAUDE", ReviewModel.CLAUDE), ("codex", ReviewModel.CODEX), ("", None)],
+        ids=["auto", "claude-upper", "codex", "empty"],
     )
     def test_parse(self, raw: str, expected: ReviewModel | None) -> None:
         """Test that values parse case-insensitively and empty yields None."""
@@ -59,8 +59,9 @@ class TestBooleanSettings:
             ("ENFORCE_PROJECT_RULES", True),
             ("SIMPLIFY_SUGGEST", False),
             ("SIMPLIFY_NEARBY_CODE", False),
+            ("FALLBACK_ON_USAGE_LIMIT", True),
         ],
-        ids=["pr-review-summary", "enforce-project-rules", "simplify-suggest", "simplify-nearby-code"],
+        ids=["pr-review-summary", "enforce-project-rules", "simplify-suggest", "simplify-nearby-code", "fallback"],
     )
     def test_defaults(self, monkeypatch, env_name: str, default: bool) -> None:
         """Test that an unset input falls back to its default."""
@@ -76,8 +77,9 @@ class TestBooleanSettings:
             ("ENFORCE_PROJECT_RULES", "false", False),
             ("SIMPLIFY_SUGGEST", "true", True),
             ("SIMPLIFY_NEARBY_CODE", "true", True),
+            ("FALLBACK_ON_USAGE_LIMIT", "false", False),
         ],
-        ids=["pr-review-summary", "enforce-project-rules", "simplify-suggest", "simplify-nearby-code"],
+        ids=["pr-review-summary", "enforce-project-rules", "simplify-suggest", "simplify-nearby-code", "fallback"],
     )
     def test_parses_env(self, monkeypatch, env_name: str, raw: str, expected: bool) -> None:
         """Test that the string input parses to the expected boolean."""

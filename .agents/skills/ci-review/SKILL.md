@@ -11,11 +11,11 @@ Run the `code-review` skill (included after this section) to review the pull req
 
 The CI runner has already verified eligibility, fetched the diff (embedded in your prompt), and listed previously posted findings (embedded in your prompt); it posts every comment, re-gates the head commit, and resolves stale threads itself. So, overriding the corresponding code-review steps:
 
-- **Skip Step 1 (eligibility) and Step 2 (context fetch).** Do not discover the PR, check whether it is closed / draft / already reviewed, or fetch the diff — it is in your prompt.
-- **Skip Step 5 (re-gate) and Step 6 (posting and thread resolution).** Do not post a review, resolve threads, or write a summary body — the runner does all of that.
+- **Skip Step 1 (PR establishment) and Step 2 (context fetch).** Do not inspect or mutate the worktree, discover the PR, create a branch, commit, push, create a PR, or fetch the diff — the runner has already supplied the review target and diff.
+- **Skip Step 5 (head re-gate) and override Step 6 (chat reporting).** Do not use the manual chat format, post a review, resolve threads, or write a summary body — emit the JSONL contract below and let the runner do all GitHub work.
 - **Never call GitHub.** The repository checkout is read context only: read source files and run local `git blame` / `git log` on the changed lines, but do not use any GitHub tool.
 - In Step 3, **drop the prior-PRs lens** — it needs GitHub history you should not fetch. Keep the rules, bugs, history, and comments lenses.
-- In Step 4, **do not fetch existing comments** — the prompt already lists prior findings, so re-report any that still apply with the same path and title. **Do not cap or drop low findings yourself** — emit every finding that clears the severity bar and let the runner apply the low-findings cap.
+- In Step 4, the prompt already lists prior findings, so re-report any that still apply with the same path and title. **Do not cap or drop low findings yourself** — emit every finding that clears the severity bar and let the runner apply the low-findings cap.
 
 ## Run the core review yourself, file by file
 
@@ -25,6 +25,6 @@ The one exception is a separate code-simplification pass: when the runner enable
 
 ## Emit findings incrementally as JSONL
 
-The runner posts the review from the JSONL you stream (the exact line format follows this skill), not from inline comments. So, replacing code-review's single validate-then-post pass:
+The runner posts the review from the JSONL you stream (the exact line format follows this skill), not from inline comments. Replace code-review's manual chat report with this output behavior:
 
 - Emit each finding the moment you validate it — as you finish each file, emit its findings on their own lines and move to the next file. **Never** hold findings for a global ranking, sort, or dedup pass, and never wait until the review is complete to emit the first one. The runner deduplicates, orders, and caps, so partial progress is never wasted — if the run is cut off, every finding you already emitted is kept.

@@ -491,7 +491,7 @@ return next(
 
 ## Docstrings
 
-- Every **function**, **method**, and **class** should have a one-line docstring (purpose or role). Include `main()` and private helpers (`_foo`) the same way unless the file’s existing style omits docstrings on tiny locals—when in doubt, add one line.
+- Every **function**, **method**, and **class** should have a one-line docstring (purpose or role). Include `main()` and nested helpers the same way unless the file’s existing style omits docstrings on tiny locals—when in doubt, add one line.
 - Keep docstrings to a single line. Do not include Args, Returns, or Raises sections.
 - Class docstrings go directly after the class definition.
 - Docstrings describe current behavior only — never reference what the code replaces, used to do, or PR/migration history. The docstring must read the same to a new reader who never saw the prior version.

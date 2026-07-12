@@ -60,7 +60,14 @@ class TestBuildInlineComment:
     def test_render(self, finding_factory) -> None:
         """Test that the request carries the commit id, path, line, side, and severity body."""
 
-        finding = finding_factory(path="src/app.py", line=12, side=DiffSide.RIGHT, title="Leak", severity=Severity.CRITICAL)
+        finding = finding_factory(
+            path="src/app.py",
+            line=12,
+            side=DiffSide.RIGHT,
+            title="Leak",
+            severity=Severity.CRITICAL,
+            reviewer="Codex GPT 5.6 Terra",
+        )
         request = build_inline_comment("sha1", finding, MARKER)
 
         assert request.commit_id == "sha1"
@@ -75,6 +82,7 @@ class TestBuildInlineComment:
         assert request.body.index(category) < request.body.index("The loop overruns the array.")
         assert request.body.index("The loop overruns the array.") < request.body.index(CONFIG["untrusted_input_close"])
         assert request.body.index(CONFIG["untrusted_input_close"]) < request.body.index(DISCLAIMER)
+        assert "Model: Codex GPT 5.6 Terra" in request.body
         assert request.body.rstrip().endswith(MARKER)
 
 
@@ -86,7 +94,9 @@ class TestBuildVerdictReview:
 
         out_of_bounds = [finding_factory(path="big.txt", line=1, title="Big", body="Too large to anchor.")]
 
-        payload = build_verdict_review("sha1", out_of_bounds, "COMMENT", "Found 1 issue.", MARKER)
+        payload = build_verdict_review(
+            "sha1", out_of_bounds, "COMMENT", "Found 1 issue.", MARKER, {"Codex GPT 5.6 Terra"}
+        )
 
         assert payload.comments == []
         assert payload.commit_id == "sha1"
@@ -99,12 +109,15 @@ class TestBuildVerdictReview:
         assert CONFIG["untrusted_input_open"] in payload.body
         assert CONFIG["untrusted_input_close"] in payload.body
         assert DISCLAIMER in payload.body
+        assert "Model: Codex GPT 5.6 Terra" in payload.body
         assert payload.body.rstrip().endswith(MARKER)
 
     def test_summary_only_without_out_of_bounds(self) -> None:
         """Test that with no out-of-bounds findings the body is just the summary."""
 
-        payload = build_verdict_review("sha1", [], "APPROVE", "No unresolved issues — approving.", MARKER)
+        payload = build_verdict_review(
+            "sha1", [], "APPROVE", "No unresolved issues — approving.", MARKER, {"Codex GPT 5.6 Terra"}
+        )
 
         assert "On files too large to anchor inline:" not in payload.body
         assert "No unresolved issues — approving." in payload.body
