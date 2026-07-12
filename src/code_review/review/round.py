@@ -21,7 +21,7 @@ from code_review.models.findings import ReviewPayload
 from code_review.models.pull_request import PullRequestContext, ReviewInputs
 from code_review.models.review import CheckConclusion, ReviewRoundResult
 from code_review.review.comments import build_verdict_review, compute_verdict, verdict_summary
-from code_review.review.findings import collect_round_findings
+from code_review.review.findings import collect_round_findings, finalization_reserve, hurry_reserve
 from code_review.review.threads import classify_threads, existing_finding_titles, extract_posted_keys
 
 logger = logging.getLogger("code_review.review")
@@ -71,9 +71,16 @@ async def note_diff_too_large(pr: PullRequestContext, marker: str) -> ReviewRoun
 
 
 async def run_review_round(
-    pr: PullRequestContext, marker: str, backends: tuple[FindingsBackend, ...]
+    pr: PullRequestContext, marker: str, backends: tuple[FindingsBackend, ...], deadline: float | None = None
 ) -> ReviewRoundResult:
     """Stream a backend's findings, post review comments, and record the verdict."""
+
+    loop = asyncio.get_running_loop()
+    review_timeout = SETTINGS.review_timeout
+    if deadline is None and review_timeout is not None:
+        deadline = loop.time() + review_timeout.total_seconds()
+    if deadline is not None:
+        logger.info("Review has %.0fs of total runtime budget.", max(0.0, deadline - loop.time()))
 
     already = (
         await already_reviewed(pr.repo, pr.number, pr.head_sha, marker)
@@ -99,8 +106,6 @@ async def run_review_round(
 
     check_id = None if SETTINGS.approval_disable else await start_check_run(pr.repo, pr.head_sha)
     concluded = False
-    review_timeout = SETTINGS.review_timeout
-    loop = asyncio.get_running_loop()
     review_task = asyncio.current_task()
 
     def _cancel_on_signal() -> None:
@@ -111,7 +116,7 @@ async def run_review_round(
         loop.add_signal_handler(cancel_signal, _cancel_on_signal)
 
     try:
-        async with asyncio.timeout(review_timeout.total_seconds() if review_timeout is not None else None):
+        async with asyncio.timeout_at(deadline):
             if await current_head_sha(pr.repo, pr.number) != pr.head_sha:
                 logger.info("Head moved before review; skipping (the new commit reviews next).")
                 await complete_check_run(
@@ -126,8 +131,12 @@ async def run_review_round(
             posted_keys = extract_posted_keys(threads, marker)
 
             try:
+                hurry_at = None if deadline is None or review_timeout is None else deadline - hurry_reserve(review_timeout).total_seconds()
+                model_deadline = (
+                    None if deadline is None or review_timeout is None else deadline - finalization_reserve(review_timeout).total_seconds()
+                )
                 findings = await collect_round_findings(
-                    pr, marker, backends, inputs, anchors, unpatched, posted_keys
+                    pr, marker, backends, inputs, anchors, unpatched, posted_keys, hurry_at=hurry_at, model_deadline=model_deadline
                 )
             except ReviewBackendError as exc:
                 logger.error("Review backend failed: %s", exc)

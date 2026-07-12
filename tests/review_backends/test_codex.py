@@ -170,3 +170,20 @@ class TestTurnText:
 
         with pytest.raises(ReviewBackendError, match="transport failed"):
             asyncio.run(collect(client.turn_text("review")))
+
+
+class TestStopProcess:
+    """Test bounded Codex app-server cleanup."""
+
+    def test_kills_an_app_server_that_ignores_stdin_close(self) -> None:
+        """Test that cleanup kills and waits for a process that does not exit normally."""
+
+        process = MagicMock()
+        process.returncode = None
+        process.wait = AsyncMock(side_effect=[TimeoutError, None])
+
+        asyncio.run(codex.stop_process(process))
+
+        process.stdin.close.assert_called_once()
+        process.kill.assert_called_once()
+        assert process.wait.await_count == 2

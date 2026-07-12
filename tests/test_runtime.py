@@ -237,7 +237,9 @@ class TestMain:
         mocks = main_harness(action="opened")
 
         assert asyncio.run(main()) == 0
-        mocks["run_backend_review"].assert_awaited_once_with(mocks["pr"], (mocks["handlers"],))
+        args = mocks["run_backend_review"].await_args.args
+        assert args[:2] == (mocks["pr"], (mocks["handlers"],))
+        assert isinstance(args[2], float)
         mocks["post_pr_summary"].assert_awaited_once()
 
     def test_later_push_skips_summary(self, main_harness) -> None:

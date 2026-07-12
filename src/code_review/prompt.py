@@ -130,7 +130,7 @@ def flush_prompt() -> str:
     """Compose the wrap-up turn that makes the agent emit its unemitted findings immediately."""
 
     return (
-        "Time is up. Stop reviewing immediately — no further investigation, no tool calls, no "
+        "About 90 seconds remain. Stop reviewing immediately — no further investigation, no tool calls, no "
         "commentary. Emit now, as JSONL lines only (one finding per physical line, exactly the "
         "schema already given), every finding you have already identified but not yet emitted. "
         f"If you have none, output exactly `{CONFIG['no_findings_marker']}` on its own line. "

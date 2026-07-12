@@ -17,7 +17,7 @@ from code_review.review.findings import (
     finding_anchors,
     finding_kept,
     flush_budget,
-    flush_reserve,
+    hurry_reserve,
     is_postable,
     low_finding_rank,
     total_cap_reached,
@@ -491,33 +491,33 @@ class TestDeferredLows:
         assert result.current_keys == {("src/app.py", "Duplicate")}
 
 
-class TestFlushReserve:
-    """Test that the flush reserve caps at three minutes and scales down with short budgets."""
+class TestHurryReserve:
+    """Test that the hurry-up reserve caps at two minutes and scales down with short budgets."""
 
     @pytest.mark.parametrize(
         ("review_timeout", "expected"),
         [
-            (timedelta(minutes=15), timedelta(minutes=3)),
-            (timedelta(minutes=5), timedelta(minutes=1)),
-            (timedelta(minutes=30), timedelta(minutes=3)),
+            (timedelta(minutes=15), timedelta(minutes=2)),
+            (timedelta(minutes=5), timedelta(seconds=40)),
+            (timedelta(minutes=30), timedelta(minutes=2)),
         ],
         ids=["default", "short", "long"],
     )
-    def test_flush_reserve(self, review_timeout: timedelta, expected: timedelta) -> None:
-        """Test that the reserve is a fifth of the budget capped at three minutes."""
+    def test_hurry_reserve(self, review_timeout: timedelta, expected: timedelta) -> None:
+        """Test that the reserve is two fifteenths of the budget capped at two minutes."""
 
-        assert flush_reserve(review_timeout) == expected
+        assert hurry_reserve(review_timeout) == expected
 
     @pytest.mark.parametrize(
         ("review_timeout", "expected"),
         [
-            (timedelta(minutes=15), timedelta(seconds=160)),
-            (timedelta(minutes=1), timedelta(seconds=8)),
+            (timedelta(minutes=15), timedelta(seconds=90)),
+            (timedelta(minutes=1), timedelta(seconds=6)),
         ],
         ids=["default", "one-minute"],
     )
     def test_flush_budget(self, review_timeout: timedelta, expected: timedelta) -> None:
-        """Test that the flush window subtracts a headroom that shrinks with the reserve."""
+        """Test that the flush window reserves time for final publication and cleanup."""
 
         assert flush_budget(review_timeout) == expected
 
@@ -590,6 +590,41 @@ class TestCollectRoundFindingsTimeout:
                 set(),
             )
         )
+
+        assert result.timed_out is True
+        assert state.flush_calls == 1
+        assert ("src/app.py", "Late") in result.current_keys
+
+    def test_absolute_hurry_deadline_is_not_shifted_by_review_setup(
+        self,
+        mock_config,
+        post_comment_mock,
+        pull_request_factory,
+        review_inputs_factory,
+        findings_session_factory,
+        finding_factory,
+    ) -> None:
+        """Test that an externally supplied hurry deadline drives the finish turn without a fresh timeout."""
+
+        open_session, state = findings_session_factory(
+            [finding_factory()], block_after_review=True, flush_findings=[finding_factory(line=20, title="Late")]
+        )
+
+        async def collect_with_absolute_deadline() -> RoundFindings:
+            loop = asyncio.get_running_loop()
+            return await collect_round_findings(
+                pull_request_factory(),
+                "marker",
+                open_session,
+                review_inputs_factory(),
+                ANCHORS_UP_TO_LINE_30,
+                set(),
+                set(),
+                hurry_at=loop.time() + 0.01,
+                model_deadline=loop.time() + 0.1,
+            )
+
+        result = asyncio.run(collect_with_absolute_deadline())
 
         assert result.timed_out is True
         assert state.flush_calls == 1

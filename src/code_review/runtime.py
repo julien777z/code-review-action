@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 from collections.abc import AsyncIterator
@@ -89,7 +90,7 @@ async def backend_findings_session(
 
 
 async def run_backend_review(
-    pr: PullRequestContext, handlers: tuple[BackendHandlers, ...]
+    pr: PullRequestContext, handlers: tuple[BackendHandlers, ...], deadline: float | None = None
 ) -> ReviewRoundResult:
     """Run a PR review through the shared backend policy."""
 
@@ -101,7 +102,7 @@ async def run_backend_review(
         for backend in handlers
     )
 
-    return await run_review_round(pr, CONFIG["review_marker"], backends)
+    return await run_review_round(pr, CONFIG["review_marker"], backends, deadline)
 
 
 def load_event() -> tuple[str, GithubEvent]:
@@ -243,6 +244,11 @@ async def generate_summary_with_fallback(
 async def main() -> int:
     """Resolve the event, pick a backend, and run one review round."""
 
+    review_timeout = SETTINGS.review_timeout
+    deadline = (
+        None if review_timeout is None else asyncio.get_running_loop().time() + review_timeout.total_seconds()
+    )
+
     event_name, event = load_event()
     if not is_eligible(event_name, event):
         logger.info("Event %s (%s) is not eligible for review; skipping.", event_name, event.action)
@@ -263,7 +269,13 @@ async def main() -> int:
         return 0
 
     repo = os.environ.get("GITHUB_REPOSITORY", "")
-    pr = await fetch_pull_request(repo, pr_number)
+    try:
+        async with asyncio.timeout_at(deadline):
+            pr = await fetch_pull_request(repo, pr_number)
+    except TimeoutError:
+        logger.error("The review deadline expired before the pull request could be loaded.")
+
+        return 1
     if pr.state != "OPEN":
         logger.info("PR #%s is %s, not open; skipping.", pr_number, pr.state)
 
@@ -285,13 +297,16 @@ async def main() -> int:
 
     try:
         handlers = tuple(BACKENDS[backend] for backend in backends)
-        result = await run_backend_review(pr, handlers)
+        result = await run_backend_review(pr, handlers, deadline)
         exit_code = result.exit_code
         if exit_code == 0 and first_review and SETTINGS.pr_review_summary:
             try:
-                await post_pr_summary(
-                    pr, partial(generate_summary_with_fallback, handlers), diff=result.diff
-                )
+                async with asyncio.timeout_at(deadline):
+                    await post_pr_summary(
+                        pr, partial(generate_summary_with_fallback, handlers), diff=result.diff
+                    )
+            except TimeoutError:
+                logger.warning("The review deadline expired before the PR summary could finish.")
             except SUMMARY_BASE_ERRORS as exc:
                 logger.error("Could not post the PR summary; the review still succeeded: %s", exc)
 

@@ -1,6 +1,6 @@
 import re
 
-from code_review.prompt import fence_untrusted
+from code_review.prompt import fence_untrusted, flush_prompt
 
 
 class TestFenceUntrusted:
@@ -35,3 +35,15 @@ class TestFenceUntrusted:
         assert f"</untrusted_diff {boundary}>" not in injected
         assert fenced.count(f"</untrusted_diff {boundary}>") == 1
         assert fenced.endswith(f"</untrusted_diff {boundary}>")
+
+
+class TestFlushPrompt:
+    """Test the deadline message sent to a live review session."""
+
+    def test_asks_the_agent_to_finish_with_ninety_seconds_remaining(self) -> None:
+        """Test that the finish turn communicates the remaining time and forbids more investigation."""
+
+        prompt = flush_prompt()
+
+        assert "About 90 seconds remain" in prompt
+        assert "no further investigation" in prompt

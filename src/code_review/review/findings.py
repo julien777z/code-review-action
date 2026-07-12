@@ -23,20 +23,22 @@ REVIEW_BACKEND_ATTEMPTS: Final[int] = 3
 REVIEW_RETRY_BACKOFF: Final[timedelta] = timedelta(seconds=2)
 
 
-class FlushTiming(TypedDict):
-    """Tuning values for the wrap-up flush reserve and hard budget."""
+class DeadlineTiming(TypedDict):
+    """Tuning values for the shared review deadline."""
 
-    reserve_max: timedelta
-    reserve_fraction: int
-    posting_headroom: timedelta
-    headroom_fraction: int
+    hurry_max: timedelta
+    hurry_fraction: float
+    finalization_max: timedelta
+    finalization_fraction: int
+    cancellation_grace: timedelta
 
 
-FLUSH_TIMING: Final[FlushTiming] = FlushTiming(
-    reserve_max=timedelta(minutes=3),
-    reserve_fraction=5,
-    posting_headroom=timedelta(seconds=20),
-    headroom_fraction=3,
+DEADLINE_TIMING: Final[DeadlineTiming] = DeadlineTiming(
+    hurry_max=timedelta(minutes=2),
+    hurry_fraction=7.5,
+    finalization_max=timedelta(seconds=30),
+    finalization_fraction=30,
+    cancellation_grace=timedelta(seconds=5),
 )
 
 LOW_CATEGORY_PRIORITY: Final[dict[FindingCategory, int]] = {
@@ -63,18 +65,30 @@ class RoundPublishState(TypedDict):
     observed_findings: list[Finding]
 
 
-def flush_reserve(review_timeout: timedelta) -> timedelta:
-    """Return how much of the review budget is held back for the wrap-up flush turn."""
+def hurry_reserve(review_timeout: timedelta) -> timedelta:
+    """Return the portion of a review reserved for the hurry-up turn and final output."""
 
-    return min(FLUSH_TIMING["reserve_max"], review_timeout / FLUSH_TIMING["reserve_fraction"])
+    return min(DEADLINE_TIMING["hurry_max"], review_timeout / DEADLINE_TIMING["hurry_fraction"])
+
+
+def finalization_reserve(review_timeout: timedelta) -> timedelta:
+    """Return the time held back for GitHub publication and process cleanup."""
+
+    return min(
+        DEADLINE_TIMING["finalization_max"], review_timeout / DEADLINE_TIMING["finalization_fraction"]
+    )
 
 
 def flush_budget(review_timeout: timedelta) -> timedelta:
-    """Return the flush turn's hard window, positive for any configured timeout."""
+    """Return the hurry-up turn's hard window, positive for any configured timeout."""
 
-    reserve = flush_reserve(review_timeout)
+    return hurry_reserve(review_timeout) - finalization_reserve(review_timeout)
 
-    return reserve - min(FLUSH_TIMING["posting_headroom"], reserve / FLUSH_TIMING["headroom_fraction"])
+
+def seconds_remaining(deadline: float) -> float:
+    """Return non-negative seconds remaining before an event-loop deadline."""
+
+    return max(0.0, deadline - asyncio.get_running_loop().time())
 
 
 async def counted_findings(stream: AsyncIterator[Finding], stats: ReviewPhaseStats) -> AsyncIterator[Finding]:
@@ -272,11 +286,18 @@ async def collect_round_findings(
     anchors: dict[str, tuple[set[int], set[int]]],
     unpatched: set[str],
     posted_keys: set[tuple[str, str]],
+    *,
+    hurry_at: float | None = None,
+    model_deadline: float | None = None,
 ) -> RoundFindings:
-    """Run the review phase, and a wrap-up flush on the live session when the soft deadline expires."""
+    """Run review streaming until its shared deadline, then ask the live agent to finish immediately."""
 
     review_timeout = SETTINGS.review_timeout
-    soft_deadline = review_timeout - flush_reserve(review_timeout) if review_timeout is not None else None
+    now = asyncio.get_running_loop().time()
+    if review_timeout is not None and hurry_at is None:
+        hurry_at = now + (review_timeout - hurry_reserve(review_timeout)).total_seconds()
+    if review_timeout is not None and model_deadline is None:
+        model_deadline = now + (review_timeout - finalization_reserve(review_timeout)).total_seconds()
     state = RoundPublishState(
         anchors=anchors,
         unpatched=unpatched,
@@ -344,6 +365,7 @@ async def collect_round_findings(
                         live_session = await stack.enter_async_context(
                             backend["open_session"](current_inputs)
                         )
+                        logger.info("%s review session is ready.", backend["label"])
                         async for finding in live_session["findings"]():
                             produced = True
                             yield finding
@@ -382,62 +404,88 @@ async def collect_round_findings(
                 raise last_error
 
         review_stats = ReviewPhaseStats(label="review")
-        review_stream = counted_findings(review_findings(), review_stats)
-
-        review_scope = asyncio.timeout(soft_deadline.total_seconds() if soft_deadline is not None else None)
+        if hurry_at is not None:
+            logger.info("Streaming review findings until the shared hurry deadline.")
+        review_task = asyncio.create_task(
+            publish_round_findings(pr, marker, counted_findings(review_findings(), review_stats), state)
+        )
         try:
-            async with review_scope:
-                await publish_round_findings(pr, marker, review_stream, state)
-        except TimeoutError:
-            if not review_scope.expired():
-                raise
-
-            state["findings"].timed_out = True
-            logger.warning(
-                "Review hit the %s soft deadline with %d finding(s) streamed; interrupting the agent to flush.",
-                soft_deadline,
-                review_stats.received,
-            )
-
-            if live_session is not None and review_timeout is not None:
-                budget = flush_budget(review_timeout)
-                try:
-                    completed = await flush_round_findings(pr, marker, live_session, budget, state)
-                except ReviewBackendError as exc:
-                    replacement_index = (live_backend_index or 0) + 1
-                    if not exc.usage_limited or replacement_index >= len(backends):
-                        raise
-
-                    previous = backends[replacement_index - 1]
-                    replacement = backends[replacement_index]
+            if hurry_at is None:
+                await review_task
+            else:
+                done, _ = await asyncio.wait({review_task}, timeout=seconds_remaining(hurry_at))
+                if done:
+                    await review_task
+                else:
+                    state["findings"].timed_out = True
                     logger.warning(
-                        "%s usage is exhausted during the flush; continuing with %s.",
-                        previous["label"],
-                        replacement["label"],
+                        "Review reached its hurry deadline with %d finding(s) streamed; asking the agent to finish.",
+                        review_stats.received,
                     )
-                    handoff_inputs = await fallback_inputs(inputs, previous["label"], replacement["label"])
-                    await stack.aclose()
-                    live_session = await stack.enter_async_context(replacement["open_session"](handoff_inputs))
-                    handoff_stats = ReviewPhaseStats(label="handoff")
-                    try:
-                        async with asyncio.timeout(budget.total_seconds()):
-                            await publish_round_findings(
-                                pr,
-                                marker,
-                                counted_findings(live_session["findings"](), handoff_stats),
-                                state,
-                            )
-                    except TimeoutError:
-                        logger.warning(
-                            "The replacement review hit its hard deadline after %d finding(s).",
-                            handoff_stats.received,
-                        )
+                    review_task.cancel()
+                    cancellation_wait = DEADLINE_TIMING["cancellation_grace"].total_seconds()
+                    if model_deadline is not None:
+                        cancellation_wait = min(cancellation_wait, seconds_remaining(model_deadline))
+                    done, _ = await asyncio.wait({review_task}, timeout=cancellation_wait)
+                    if not done:
+                        logger.warning("The review stream did not stop within %.0fs; concluding without a flush.", cancellation_wait)
+                    elif live_session is not None and model_deadline is not None:
+                        try:
+                            review_task.result()
+                        except asyncio.CancelledError:
+                            pass
+
+                        budget = timedelta(seconds=seconds_remaining(model_deadline))
+                        if budget > timedelta(0):
+                            logger.info("Sending the hurry-up turn with %.0fs remaining for model output.", budget.total_seconds())
+                            try:
+                                completed = await flush_round_findings(pr, marker, live_session, budget, state)
+                            except ReviewBackendError as exc:
+                                replacement_index = (live_backend_index or 0) + 1
+                                if not exc.usage_limited or replacement_index >= len(backends):
+                                    raise
+
+                                previous = backends[replacement_index - 1]
+                                replacement = backends[replacement_index]
+                                logger.warning(
+                                    "%s usage is exhausted during the hurry-up turn; continuing with %s.",
+                                    previous["label"],
+                                    replacement["label"],
+                                )
+                                handoff_inputs = await fallback_inputs(
+                                    inputs, previous["label"], replacement["label"]
+                                )
+                                await stack.aclose()
+                                live_session = await stack.enter_async_context(
+                                    replacement["open_session"](handoff_inputs)
+                                )
+                                handoff_stats = ReviewPhaseStats(label="handoff")
+                                try:
+                                    async with asyncio.timeout(budget.total_seconds()):
+                                        await publish_round_findings(
+                                            pr,
+                                            marker,
+                                            counted_findings(live_session["findings"](), handoff_stats),
+                                            state,
+                                        )
+                                except TimeoutError:
+                                    logger.warning(
+                                        "The replacement review hit its hard deadline after %d finding(s).",
+                                        handoff_stats.received,
+                                    )
+                                else:
+                                    logger.info(
+                                        "The replacement review produced %d finding(s).", handoff_stats.received
+                                    )
+                                completed = False
+                            if completed:
+                                logger.info("The agent reported the review as complete; concluding with a normal verdict.")
+                                state["findings"].timed_out = False
                     else:
-                        logger.info("The replacement review produced %d finding(s).", handoff_stats.received)
-                    completed = False
-                if completed:
-                    logger.info("The agent reported the review as complete; concluding with a normal verdict.")
-                    state["findings"].timed_out = False
+                        logger.warning("No live agent session was ready for the hurry-up turn.")
+        finally:
+            if not review_task.done():
+                review_task.cancel()
 
     await publish_deferred_lows(pr, marker, state)
 

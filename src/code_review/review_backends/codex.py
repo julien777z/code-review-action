@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import os
 import shutil
 import stat
@@ -16,6 +17,8 @@ from code_review.models.backend import ReviewSessionStreams
 from code_review.models.codex import CodexRpcMessage, CodexRpcRequest, CodexThread, CodexTurn
 from code_review.models.pull_request import PullRequestContext, ReviewInputs
 from code_review.prompt import flush_prompt, pull_request_message, review_instructions
+
+logger = logging.getLogger("code_review.review_backends.codex")
 
 
 def mapping(value: JsonValue, label: str) -> dict[str, JsonValue]:
@@ -208,6 +211,25 @@ class CodexAppServer:
                     )
 
 
+async def stop_process(process: asyncio.subprocess.Process) -> None:
+    """Stop an app-server subprocess without allowing cleanup to consume the review deadline."""
+
+    if process.stdin is not None:
+        process.stdin.close()
+    if process.returncode is not None:
+        return
+
+    try:
+        await asyncio.wait_for(process.wait(), timeout=5)
+    except TimeoutError:
+        logger.warning("Codex app-server did not exit after stdin closed; killing it.")
+        process.kill()
+        try:
+            await asyncio.wait_for(process.wait(), timeout=5)
+        except TimeoutError:
+            logger.error("Codex app-server did not exit after being killed.")
+
+
 @asynccontextmanager
 async def app_server(*, reviewing: bool = True) -> AsyncIterator[CodexAppServer]:
     """Create an authenticated Codex app-server and clean it up after use."""
@@ -243,13 +265,7 @@ async def app_server(*, reviewing: bool = True) -> AsyncIterator[CodexAppServer]
             await client.initialize(reviewing=reviewing)
             yield client
         finally:
-            if process.stdin is not None:
-                process.stdin.close()
-            try:
-                await asyncio.wait_for(process.wait(), timeout=5)
-            except TimeoutError:
-                process.kill()
-                await process.wait()
+            await stop_process(process)
 
 
 @asynccontextmanager

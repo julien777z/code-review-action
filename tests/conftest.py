@@ -167,7 +167,7 @@ def review_session_opener_factory() -> Callable[..., "OpenReviewSession"]:
 def zero_flush_headroom(monkeypatch) -> None:
     """Remove the flush posting headroom so short test budgets still fund a flush window."""
 
-    monkeypatch.setitem(findings.FLUSH_TIMING, "posting_headroom", timedelta(0))
+    monkeypatch.setitem(findings.DEADLINE_TIMING, "finalization_max", timedelta(0))
 
 
 @pytest.fixture
