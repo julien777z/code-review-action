@@ -29,7 +29,7 @@ def claude_options(*, reviewing: bool = True) -> ClaudeAgentOptions:
         env=environment,
         include_partial_messages=True,
         permission_mode="dontAsk",
-        setting_sources=["project"] if reviewing else [],
+        setting_sources=["project"] if reviewing and SETTINGS.loads_project_rules else [],
     )
 
 

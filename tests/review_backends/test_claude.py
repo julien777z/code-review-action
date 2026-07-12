@@ -65,6 +65,22 @@ def claude_client(*responses: list[ClaudeMessage]) -> MagicMock:
 class TestClaudeOptions:
     """Test that Claude Code runs with subscription auth and read-only tools."""
 
+    @pytest.mark.parametrize(
+        ("overrides", "expected_sources"),
+        [
+            ({}, ["project"]),
+            ({"enforce_project_rules": False}, []),
+            ({"enforce_project_rules": False, "simplify_nearby_code": True}, ["project"]),
+        ],
+        ids=["rules-enabled", "rules-disabled", "nearby-code-needs-rules"],
+    )
+    def test_loads_project_settings_only_when_needed(self, mock_config, overrides, expected_sources) -> None:
+        """Test that project settings respect the repository-rules inputs."""
+
+        mock_config(**overrides)
+
+        assert claude.claude_options().setting_sources == expected_sources
+
     def test_uses_oauth_and_disables_mutating_tools(self, mock_config, monkeypatch) -> None:
         """Test that Claude options carry OAuth while denying shell and write tools."""
 

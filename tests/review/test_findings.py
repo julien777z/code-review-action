@@ -10,7 +10,7 @@ from code_review.errors import ReviewBackendError
 from code_review.models.backend import FindingsBackend, FindingsSession
 from code_review.models.findings import Finding, FindingCategory
 from code_review.models.pull_request import PostedFinding, ReviewInputs
-from code_review.models.review import FlushCompletion
+from code_review.models.review import FlushCompletion, RoundFindings
 from code_review.models.severity import DiffSide, Severity
 from code_review.review.findings import (
     collect_round_findings,
