@@ -1,9 +1,9 @@
 ---
 name: code-simplify
 description: Code-simplify code quality audit (maintainability, structure, 1k-line rule, spaghetti, code-judo). Invoked via Task after a parent gathers diff and file contents. Uses the `code-simplify` skill as the complete rubric.
+model: sonnet
 skills:
 - code-simplify
-model: sonnet
 ---
 
 # Code Simplify Review
