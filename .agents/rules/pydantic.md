@@ -4,20 +4,43 @@ alwaysApply: true
 
 # Pydantic Rules
 
-## Prefer Pydantic Over Dataclasses
+## Model Design
 
 - Never use `@dataclass` decorator from `dataclasses` module.
 - Use Pydantic `BaseModel` for all class definitions that hold data.
 - Do not use `NamedTuple` for application or script data models; use an explicit `BaseModel` subclass instead.
 - Pydantic provides validation, serialization, and type coercion out of the box.
 
-## Pydantic V2
+- Expose zero-argument boolean accessors as `@property` instead of methods when they describe model state or capability.
+- Prefer property names such as `can_access_xyz` over `can_access_xyz()`.
+
+```python
+class AccessPolicy(BaseModel):
+    role: str
+
+    @property
+    def can_access_admin(self) -> bool:
+        return self.role == "admin"
+
+
+policy = AccessPolicy(role="member")
+
+if not policy.can_access_admin:
+    raise PermissionError("Admin access required")
+```
+
+- Never use `Protocol` for data models that hold data.
+- Use `Protocol` only for structural typing of interfaces (callbacks, duck typing).
+
+- Create response models with `from_orm_model` class method for ORM conversion.
+- Use `Self` return type for class methods.
+
+## Validation and Configuration
 
 - Use `model_config = ConfigDict(...)` for model configuration.
 - Use `model_dump()` instead of deprecated `dict()`.
 - Use `model_validator` decorator for custom validation.
 - Do not add `field_validator` or `model_validator` just to coerce enum strings that should be represented by the enum itself; update the enum values to match the real contract instead.
-- Use `Self` from `typing` for class method return types.
 - Do not define `__init__` on `BaseModel` subclasses; use fields, validators, `model_post_init`, or factory/class methods instead.
 - Never use `pydantic.create_model`; define an explicit `BaseModel` subclass instead.
   If `create_model` feels necessary, the design is probably too dynamic or too clever; refactor toward a named model class.
@@ -42,37 +65,7 @@ class TShirtOrderBad(BaseModel):
         return value.upper()
 ```
 
-## Boolean Properties
-
-- Expose zero-argument boolean accessors as `@property` instead of methods when they describe model state or capability.
-- Prefer property names such as `can_access_xyz` over `can_access_xyz()`.
-
-```python
-class AccessPolicy(BaseModel):
-    role: str
-
-    @property
-    def can_access_admin(self) -> bool:
-        return self.role == "admin"
-
-
-policy = AccessPolicy(role="member")
-
-if not policy.can_access_admin:
-    raise PermissionError("Admin access required")
-```
-
-## Protocol vs BaseModel
-
-- Never use `Protocol` for data models that hold data.
-- Use `Protocol` only for structural typing of interfaces (callbacks, duck typing).
-
-## Response Models
-
-- Create response models with `from_orm_model` class method for ORM conversion.
-- Use `Self` return type for class methods.
-
-## Field Usage
+## Fields and Serialization
 
 - Do not use `Field(...)` when only providing a description; field names should be self-explanatory.
 - Only use `Field(...)` when applying actual constraints (for example, `min_length`, `max_length`, `ge`, `le`, `pattern`).
