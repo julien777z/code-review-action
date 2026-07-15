@@ -5,6 +5,10 @@ description: Run code-review repeatedly on its complete selected review target, 
 
 # Code Review Loop
 
+## Dependencies
+
+- `code-review` — performs each complete review pass in the loop.
+
 Drive the branch or session-derived review target to a clean functional result. Use `code-review` for every review pass so target selection, branch/PR creation when needed, review lenses, severity, and chat-only reporting stay consistent.
 
 ## No-functional-finding stabilization rounds
@@ -25,8 +29,7 @@ Track `noFunctionalFindingRounds`, initially `0`, separately from the total revi
    - Never dismiss a finding merely because the fix is inconvenient or expands the changed-file set.
 3. Update `noFunctionalFindingRounds`: reset it to `0` if this round has a functional finding; otherwise increment it, including when the round is clean. Apply the smallest complete fixes while preserving the requested behavior and unrelated worktree changes.
 4. Run focused tests, typechecks, builds, or other checks appropriate to the fixes. Do not hide failures; distinguish new failures from verified pre-existing ones.
-5. Stage only the intended task changes and review fixes, commit them, and push the current PR branch. If the initial target was session commits already on the default branch and fixes are needed, first create a `codex/<short-slug>` branch from the current default-branch head, then push it and create a draft PR for the fixes.
-   - Never stage or commit generated artifacts such as `dist` directories, build output, caches, coverage output, or compiler metadata. Generated files already tracked on the base branch must be restored after local validation unless an applicable repository rule explicitly requires committing them.
+5. Stage only the intended task changes and review fixes, commit them, and push the current PR branch. If the initial target was session commits already on the default branch and fixes are needed, first create a new branch from the current default-branch head, then push it and create a draft PR for the fixes.
 6. Run `code-review` again on the complete updated target, supplying the dismissal ledger to the reviewers.
 7. Repeat steps 2–6 until either:
    - `noFunctionalFindingRounds` reaches `2` on a clean second round; or

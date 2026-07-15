@@ -11,6 +11,42 @@ alwaysApply: true
 - Before deleting newly added code, verify it is not part of the branch objective by checking nearby tests/call sites and the active user request.
 - If style-cleanup instructions conflict with clear feature intent, preserve behavior first and ask a clarifying question instead of removing the feature code.
 
+## Dead Code
+
+- Application code (a function, method, property, class, constant, or field) with **zero non-test consumers** is dead code and must be deleted, along with the tests that only exist to exercise it.
+- **Tests do not justify keeping otherwise-unused application code.** A test that asserts a symbol no other application code reads is testing a fabricated contract; delete the symbol and that test together rather than preserving the symbol "because it's covered".
+- "Consumer" means live application/library code that reads the symbol — call sites, internal use by another live symbol, serialization, or a public package export in `__all__` that external packages import. Test modules are not consumers.
+- A symbol reached only indirectly through another symbol that is itself dead is also dead; remove the whole unused chain.
+- **Config fields that populate environment variables consumed by a third-party library are not dead code**, even when no application code reads the field directly. If a dependency we rely on reads an env var at runtime (for example a library whose `Settings` reads `ENCRYPTION_METHOD`/`ENCRYPTION_KEY`), the field must stay on `CONFIG` so the application sets that env var — the library is the consumer. Keep such fields and validate them where the environment requires it.
+- This does not override **Refactor/Deslop Safety**: confirm a symbol is genuinely unused (grep app + library code, check `__all__` exports) before deleting, and do not remove feature code that the current branch objective is actively building toward.
+
+## Banned Terminology
+
+- Never use vague, cute, or placeholder terminology in identifiers, docstrings, comments, or test names. Name things for the behavior they actually have. This applies to **new and pre-existing code** — if you touch a file that still uses a banned term, rename it.
+- Banned terms and what to use instead:
+  - **"best effort"** — state the real contract. A function that swallows failures and reports the outcome should say so: name it `try_<verb>` (for example `try_send_email`) and document it as "returning whether it succeeded", not "best-effort".
+  - **"seed" / "seeds" / "seeding"** (for test data or sample records) — name the helper for what it builds: a `<noun>_*_factory` fixture, `create_*`, or "sample data". Do not call setup data a "seed".
+- If you reach for a placeholder-ish term a future reader could not decode from the name alone, pick a more intuitive name instead of adding it to this list.
+
+## Module Naming
+
+- Never name a module by joining two different concepts with an underscore — `resource_export.py` is "resource" + "export". Create a package for the entity and a topic module inside it: `resource/export.py`. The same applies when adding a second module for an entity that already has one (`resource.py` + `resource_access.py` must become the package `resource/` with `resource.py` and `access.py` inside).
+- Inside an entity package, do not repeat the entity in module names: `resource/sync.py`, never `resource/resource_sync.py`.
+- Compound nouns that name a single concept are one entity, not two — `access_control.py`, `request_metadata.py`, and `audit_trail.py` are all fine.
+- When the entity package needs a module for its primary/orchestration surface, name it after the package (`resource/resource.py`) with an empty `__init__.py`; consumers import the specific submodule.
+
+## Utility Placement
+
+- Place generic, stateless, cross-cutting helpers in a `utils.py` module or `utils/` package.
+- Use a `utils.py` module for a small cohesive set of utilities; use a `utils/` package when separate focused utility modules are warranted.
+- Keep domain and orchestration behavior in their owning modules. Do not use utilities as a dumping ground.
+
+## Model Placement
+
+- Define Pydantic `BaseModel` classes and other application data models under the package's `models/` directory.
+- Split models into intuitively named files by concept, such as `models/configuration.py` or `models/submission.py`.
+- Do not place models beside operational code or collect unrelated models in a catch-all `models.py` module.
+
 ## Modern Syntax
 
 - Use modern type hints: `str | None` instead of `Optional[str]`.
@@ -21,7 +57,7 @@ alwaysApply: true
 
 ## Typed Data Shapes
 
-- Never pass around arbitrary inline dictionaries for structured payloads (for example, job records or message envelopes).
+- Never pass around arbitrary inline dictionaries for structured payloads (for example, queued work or message envelopes).
 - Use `TypedDict` for lightweight typed mappings when a dict shape is required.
 - Use `BaseModel` when validation or serialization is needed.
 - Never use `Any` in application or test type annotations; use the exact type (or a precise union) instead.
@@ -40,70 +76,95 @@ from typing import TypedDict
 from pydantic import BaseModel
 
 # Bad: implicit, untyped payload shape
-payload = {"account_id": envelope.account_id, "status": "queued"}
+payload = {"resource_id": message.resource_id, "state": "pending"}
 
 # Good: TypedDict for mapping payloads
-class JobPayload(TypedDict):
-    account_id: str
-    status: str
+class ResourcePayload(TypedDict):
+    resource_id: str
+    state: str
 
-payload_typed: JobPayload = {
-    "account_id": envelope.account_id,
-    "status": "queued",
+payload_typed: ResourcePayload = {
+    "resource_id": message.resource_id,
+    "state": "pending",
 }
 
 # Good: BaseModel when validation/serialization is useful
-class JobPayloadModel(BaseModel):
-    account_id: str
-    status: str
+class ResourcePayloadModel(BaseModel):
+    resource_id: str
+    state: str
 
-payload_for_insert = JobPayloadModel(
-    account_id=envelope.account_id,
-    status="queued",
+payload_for_insert = ResourcePayloadModel(
+    resource_id=message.resource_id,
+    state="pending",
 ).model_dump()
 
 # Good: dedicated TypedDict for DB payloads, constructed inline at the call site
-class JobUpsertPayload(TypedDict):
-    account_id: str
-    user_id: str
-    status: str
+class ResourceUpdatePayload(TypedDict):
+    resource_id: str
+    owner_id: str
+    state: str
 
-payload_for_upsert = JobUpsertPayload(
-    account_id=envelope.account_id,
-    user_id=envelope.user_id,
-    status="queued",
+payload_for_update = ResourceUpdatePayload(
+    resource_id=message.resource_id,
+    owner_id=message.owner_id,
+    state="pending",
 )
 
 # Bad: free-floating builder whose only role is constructing the payload
-def build_job_upsert_payload(*, account_id: str, user_id: str) -> JobUpsertPayload:
-    return JobUpsertPayload(
-        account_id=account_id,
-        user_id=user_id,
-        status="queued",
+def build_resource_update_payload(*, resource_id: str, owner_id: str) -> ResourceUpdatePayload:
+    return ResourceUpdatePayload(
+        resource_id=resource_id,
+        owner_id=owner_id,
+        state="pending",
     )
 
 # Bad: object hides the real field type contract
-class SubscriberSyncPayloadBad(TypedDict):
-    subscriber_id: object
-    is_active: object
-    tags: object
+class SyncPayloadBad(TypedDict):
+    identifier: object
+    enabled: object
+    labels: object
 
 # Good: use exact types (or precise unions)
-class SubscriberSyncPayload(TypedDict):
-    subscriber_id: str
-    is_active: bool
-    tags: list[str]
+class SyncPayload(TypedDict):
+    identifier: str
+    enabled: bool
+    labels: list[str]
 
-class SubscriberSyncBody(BaseModel):
-    subscriber_id: str
-    is_active: bool
-    tags: list[str]
+class SyncBody(BaseModel):
+    identifier: str
+    enabled: bool
+    labels: list[str]
 
-payload_from_model: SubscriberSyncPayload = SubscriberSyncBody(
-    subscriber_id="sub_123",
-    is_active=True,
-    tags=["priority"],
+payload_from_model: SyncPayload = SyncBody(
+    identifier="resource-123",
+    enabled=True,
+    labels=["primary"],
 ).model_dump()
+```
+
+## Group Related Parameters
+
+- When a function takes multiple parameters that always travel together and describe one concept, group them into a single typed object (a `TypedDict`, or a `BaseModel` when validation is needed) instead of passing them as separate arguments.
+- Pass and forward that one object; do not thread the individual fields through each call site.
+- This keeps the signature stable as the group grows and makes the shared concept explicit.
+
+```python
+from typing import TypedDict
+
+
+class RequestContext(TypedDict):
+    source_address: str | None
+    client_name: str | None
+
+
+# Bad: related values threaded as separate arguments
+def record_event(event: Event, source_address: str | None, client_name: str | None) -> None:
+    ...
+
+
+# Good: one typed object describing the shared concept
+def record_event(event: Event, request_context: RequestContext) -> None:
+    ...
 ```
 
 ## Date & Time
@@ -115,10 +176,11 @@ payload_from_model: SubscriberSyncPayload = SubscriberSyncBody(
 
 ## Imports
 
+- Do not start Python files with module docstrings. Begin with imports, or leave package `__init__.py` files empty when they have no public surface.
 - Keep ALL imports at the top of the file.
 - Never import inside functions, methods, or test cases.
 - Group imports: stdlib, third-party, local (separated by blank lines).
-- Prefer **absolute imports** from the top-level package (for example `from myapp.routes.users import router`) over **relative imports** with parent segments (for example `from ....routes.users import router`). Absolute imports are stable when modules move, easier to grep, and avoid brittle `..` depth. Same rule applies to other installable packages: always anchor imports on the package name, not on the file’s directory depth.
+- Prefer **absolute imports** from the top-level package (for example `from application.routes.resources import router`) over **relative imports** with parent segments (for example `from ....routes.resources import router`). Absolute imports are stable when modules move, easier to grep, and avoid brittle `..` depth. Same rule applies to other installable packages: always anchor imports on the package name, not on the file’s directory depth.
 - Never use import aliases for project modules; import the canonical symbol/module name and update call sites to that name instead of aliasing.
 - Use `__all__` exports in module `__init__.py` files.
 - Never define variables or call functions in between import statements; all imports must be contiguous at the top of the file.
@@ -153,6 +215,8 @@ config = third_party_package.Config(
 
 - Define constants at the top of the file, after imports.
 - Place module-level constants and enums (including type aliases like `AllowedApiClient`) directly after imports.
+- Compile regular expressions once at module scope directly after imports, then call methods on the compiled pattern.
+- Do not pass regex patterns inline to functions such as `re.match`, `re.search`, `re.fullmatch`, `re.sub`, or similar helpers.
 - Use `Final[T]` type annotation from `typing` for constants.
 - When a mutable object is annotated with `Final`, complete any setup-time mutation in the same expression as initialization instead of binding it first and mutating it on the next line.
 - Use UPPER_SNAKE_CASE naming convention for constants.
@@ -165,30 +229,31 @@ config = third_party_package.Config(
 - A group of related **configuration values** (API hosts, endpoint paths, protocol versions, header tokens, feature markers, default model names, timeouts) is not a set of constants — collect it into a **single typed config map**, not one `Final` per value.
 - Model the map with a `TypedDict` and build it by **calling** the constructor with keyword arguments (`CONFIG: Final[ReviewConfig] = ReviewConfig(...)`), then read values by key (`CONFIG["routine_host"]`). Do not annotate a plain dict literal.
 - Reserve standalone `Final` constants for genuinely single, unrelated constants — a compiled regex, a file path, a sentinel — that do not belong to a config group.
+- Logger instances are runtime collaborators, not constants. Name them `logger`, never `LOGGER`, and do not annotate them as `Final`.
 - This is about grouping; it does not override the **Configuration** section below. Environment-backed values, or values that belong in the repository's central settings layer, still go there — not in a module-level map.
 
 ```python
 from typing import Final, TypedDict
 
 # Bad: one config group spread across many individual constants
-ROUTINE_HOST: Final[str] = "https://api.anthropic.com/v1/claude_code/routines"
-ANTHROPIC_VERSION: Final[str] = "2023-06-01"
-ROUTINE_BETA: Final[str] = "experimental-cc-routine-2026-04-01"
-REVIEW_MARKER: Final[str] = "<!-- code-review:cursor -->"
+SERVICE_BASE_URL: Final[str] = "https://api.example.com/v1"
+API_VERSION: Final[str] = "2026-01-01"
+FEATURE_TOKEN: Final[str] = "example-feature"
+REQUEST_MARKER: Final[str] = "<!-- request-marker -->"
 
 # Good: one typed config map, built by calling the TypedDict constructor
-class ReviewConfig(TypedDict):
-    routine_host: str
-    anthropic_version: str
-    routine_beta: str
-    review_marker: str
+class ServiceConfig(TypedDict):
+    base_url: str
+    api_version: str
+    feature_token: str
+    request_marker: str
 
 
-CONFIG: Final[ReviewConfig] = ReviewConfig(
-    routine_host="https://api.anthropic.com/v1/claude_code/routines",
-    anthropic_version="2023-06-01",
-    routine_beta="experimental-cc-routine-2026-04-01",
-    review_marker="<!-- code-review:cursor -->",
+CONFIG: Final[ServiceConfig] = ServiceConfig(
+    base_url="https://api.example.com/v1",
+    api_version="2026-01-01",
+    feature_token="example-feature",
+    request_marker="<!-- request-marker -->",
 )
 ```
 
@@ -200,22 +265,32 @@ CONFIG: Final[ReviewConfig] = ReviewConfig(
 - This rule does not govern Python dunders (`__init__`, `__enter__`, …) or single-underscore names owned by third-party/stdlib code.
 
 ```python
-def build_report(rows: list[Row]) -> Report:
-    def _format_row(row: Row) -> str:
-        return f"{row.id}: {row.name}"
+class Report(BaseModel):
+    @classmethod
+    def from_rows(cls, rows: list[Row]) -> Self:
+        def _format_row(row: Row) -> str:
+            return f"{row.id}: {row.name}"
 
-    return Report(lines=[_format_row(row) for row in rows])
+        return cls(lines=[_format_row(row) for row in rows])
 ```
 
 ## Configuration
 
-- Configuration settings (allowed environments, feature flags, API hosts, limits, etc.) should live in the repository's typed configuration layer, not as scattered module-level constants in service files.
-- Avoid large piles of module-level constants. If a value is configurable, add it to the project's central config model or settings layer.
+- Only **environment-backed or deployment-tunable** values (allowed environments, feature flags, limits, timeouts an operator may change) belong in the repository's typed configuration layer.
+- Fixed third-party endpoint URLs and values fully derived from existing config (for example a from-address derived from `CONFIG.DOMAIN`) are **module-level `Final` constants** in the module that uses them, not config fields.
+- API keys and secrets must be **required** config fields with **no defaults** (no `= ""` or `| None = None` escape hatches); optionality is reserved for credentials with a documented ambient fallback (for example AWS IAM role credentials).
+- Avoid large piles of module-level constants. If a value is genuinely operator-tunable, add it to the project's central config model or settings layer.
 - Do not add useless config values like `DEFAULT_ENVIRONMENT`.
 - Do not add helper functions like `_get_environment` when the value already exists on `CONFIG`.
 - Do not read environment variables directly with `os.getenv`, `os.environ`, or `os.environ.get` in application/service/library code.
 - Always read environment-backed values from the typed config object so defaults, validation, and normalization live in one place.
 - Exception: one-off scripts may read from `os` when introducing a `CONFIG` model would be unnecessary overhead.
+
+## Secrets and Environment Handling
+
+- **Never commit development or test secret values into application or library code** — not even to compare against them. Embedding a known dev key (or its hash) so the code can reject it just moves the secret *into* the codebase, which is the opposite of the goal. Real secrets live in the secrets manager; test secrets live in test configuration (`pyproject.toml` env), never in `.py` source.
+- **Do not branch on the environment in application code to relax or vary security posture** (`if ENVIRONMENT == "development": allow the weaker cipher / skip the check`). Which crypto backend, keys, and credentials are used is a deployment concern: production sets the real backend and secrets, tests set test values via test config. Application code states the single required contract (for example "encryption is AWS/KMS") and lets it hold everywhere.
+- **Let the owning library validate its own contract; do not duplicate it behind an environment gate.** If a third-party SDK already requires a key for its selected method, do not re-implement that check in our config with environment branches — that is redundant and drifts.
 
 ## Helper Functions
 
@@ -255,21 +330,21 @@ def get_auth_secret(config: Settings | None = None) -> str:
 ```python
 # Bad: speculative fallback for a "maybe async, maybe sync" SDK shape
 try:
-    memberships = await sdk.memberships.list_async(
-        org_id=org_id,
-        user_id=[user_id],
+    resources = await sdk.resources.list_async(
+        scope_id=scope_id,
+        resource_id=[resource_id],
         limit=1,
     )
 except AttributeError:
-    membership = sdk.memberships.get(
-        org_id=org_id,
-        user_id=user_id,
+    resource = sdk.resources.get(
+        scope_id=scope_id,
+        resource_id=resource_id,
     )
 
 # Good: call the expected method directly
-memberships = await sdk.memberships.list_async(
-    org_id=org_id,
-    user_id=[user_id],
+resources = await sdk.resources.list_async(
+    scope_id=scope_id,
+    resource_id=[resource_id],
     limit=1,
 )
 ```
@@ -289,19 +364,19 @@ memberships = await sdk.memberships.list_async(
 
 ```python
 # Bad: backward-compatible branch for an unsupported secondary shape
-async def get_external_id_from_db(session: AsyncSession, user_id: UUID | str) -> str | None:
-    resolved_user_id = UUID(user_id) if isinstance(user_id, str) else user_id
-    user = await User.get_one(session, where=User.id == resolved_user_id)
+async def get_source_id(session: AsyncSession, resource_id: UUID | str) -> str | None:
+    resolved_resource_id = UUID(resource_id) if isinstance(resource_id, str) else resource_id
+    resource = await Resource.get_one(session, where=Resource.id == resolved_resource_id)
     ...
 
 # Good: single, complete implementation aligned to DB contract
-async def get_external_id_from_db(session: AsyncSession, user_id: UUID) -> str | None:
-    user = await User.get_one(session, where=User.id == user_id)
+async def get_source_id(session: AsyncSession, resource_id: UUID) -> str | None:
+    resource = await Resource.get_one(session, where=Resource.id == resource_id)
     ...
 
 # Good call site: convert once at boundary
-raw_user_id = response.json()["data"]["user_id"]
-external_id = await get_external_id_from_db(session, UUID(raw_user_id))
+raw_resource_id = response.json()["data"]["resource_id"]
+source_id = await get_source_id(session, UUID(raw_resource_id))
 ```
 
 ## No Silent Fallbacks (Use Canonical Sources)
@@ -327,7 +402,7 @@ variant = pick_variant(catalog)
 ## Caching Runtime Data
 
 - Never use plain dictionaries (module-level, class-level, or any other in-process container) as caches for data that must stay correct across requests, workers, or deployments. In-process dict caches silently go stale, diverge between workers, and cannot be invalidated remotely.
-- For cross-request or cross-process caching, use Redis (for example `ResponseCache` from the shared caching layer) or another distributed caching library, and always set an explicit TTL.
+- For cross-request or cross-process caching, use a distributed caching library and always set an explicit TTL.
 - Pair every cache write path with an explicit invalidation path for mutations that change the cached value.
 - Request-scoped memoization is the only acceptable dict-shaped cache: it must be held in a `ContextVar`, reset at the start of every request, and invalidated on writes within the request.
 ## Caching Deterministic Builders
@@ -355,14 +430,14 @@ def build_classification_agent() -> Agent[None, ClassificationResult]:
 from enum import StrEnum
 
 
-class JobHandlerKey(StrEnum):
-    EXPORT_REPORT = "export_report"
+class TaskHandlerKey(StrEnum):
+    PROCESS_RESOURCE = "process_resource"
 
 # Good: explicit durable key
-register_job(job_type=JobType.REPORT_EXPORT, handler_name=JobHandlerKey.EXPORT_REPORT.value)
+register_task(task_type=TaskType.PROCESS_RESOURCE, handler_name=TaskHandlerKey.PROCESS_RESOURCE.value)
 
 # Bad: fragile runtime-derived key
-register_job(job_type=JobType.REPORT_EXPORT, handler_name=handler.__name__)
+register_task(task_type=TaskType.PROCESS_RESOURCE, handler_name=handler.__name__)
 ```
 
 ## Entry Point Design
@@ -387,6 +462,9 @@ if __name__ == "__main__":
   - gateway module (external/internal API client calls)
   - domain helper modules (policy/state decisions, AI resolution, etc.)
 - Keep public service function signatures stable while refactoring internals.
+- **No upward imports**: `lib/` must never import from `services/`. Shared infrastructure both tiers need (client factories, session wiring, config) lives in `core/`, which either tier may import.
+- **Orchestration does not live under `lib/`**: a module whose functions are route-facing entry points (they accept request-shaped inputs and return response models) belongs in `services/`, even if it started life as a helper. Keep the pure helpers (query builders, row/CSV machinery, mappers) in `lib/` and move only the orchestrator.
+- **A transport-only "service" is a gateway**: a `services/` module whose functions only wrap internal-service or external API calls belongs in `lib/<domain>/gateway.py`; keeping it under `services/` invites upward imports from other lib modules.
 
 ## Shared Derived-State Helpers
 
@@ -396,7 +474,7 @@ if __name__ == "__main__":
 ## Test Seams for Refactors
 
 - Keep explicit wrapper/helper functions for external dependencies so tests can patch clear module boundaries.
-- Prefer patching module-level seams (for example `payment_service.charge_card`) over patching deep nested internals.
+- Prefer patching module-level seams (for example `resource_gateway.fetch_resource`) over patching deep nested internals.
 
 ## Formatting
 
@@ -404,22 +482,62 @@ if __name__ == "__main__":
 - Never add decorative separator comments (for example, `# -----` headers).
 - Add a blank line after multi-line statements (function calls, context managers, etc.) before the next statement.
 - Add a blank line before terminating statements (`sys.exit()`, `return`, `raise`) to visually separate them from preceding code.
-- Add blank lines between logically unrelated code, but for short/compact blocks (2-3 lines), the separation is not needed.
-- When consecutive lines switch to a different statement kind (for example `assert` to a mock-verification call, or `setattr(...)` to an assignment), insert a blank line at the transition.
+- Use blank lines as logical phase boundaries. Keep consecutive assignments or calculations together only when they jointly prepare one check, transformation, or result.
+- Insert a blank line whenever adjacent statements advance to a different responsibility, even when both are short. In particular, separate an action from logging or other reporting; separate construction of an object from configuring or using it; and separate each independently configured parser or command group from the next.
+- At module scope, separate runtime collaborators such as loggers from subsequent constants, type aliases, enum declarations, or configuration data. Keep the declarations together only when they form their own cohesive group.
+- A short compact block (2–3 lines) may stay together only when every line directly contributes to the same operation. Do not use compactness alone as a reason to remove a logical boundary.
+- When consecutive lines switch to a different statement kind (for example `assert` to a mock-verification call, or `setattr(...)` to an unrelated assignment), insert a blank line when the new statement begins a new logical group.
 - Add a blank line after setup/initialization code before the main logic begins.
 
 ```python
 # Good: blank line separates setup from main logic
-versions_dir = tmp_path / "versions"
-versions_dir.mkdir()
+artifacts_dir = tmp_path / "artifacts"
+artifacts_dir.mkdir()
 
-create_migration_file(versions_dir, "rev1", None)
-create_migration_file(versions_dir, "rev2", "rev1")
+create_artifact(artifacts_dir, "first", None)
+create_artifact(artifacts_dir, "second", "first")
 
 # Bad: no separation between setup and main logic
-versions_dir = tmp_path / "versions"
-versions_dir.mkdir()
-create_migration_file(versions_dir, "rev1", None)
+artifacts_dir = tmp_path / "artifacts"
+artifacts_dir.mkdir()
+create_artifact(artifacts_dir, "first", None)
+```
+
+```python
+# Good: related setup stays together, then one blank line introduces validation
+start_marker = FORMAT["start_marker"]
+end_marker = FORMAT["end_marker"]
+start_count = content.count(start_marker)
+end_count = content.count(end_marker)
+
+if start_count != end_count:
+    raise ValueError("Managed markers are malformed")
+```
+
+```python
+# Good: action and reporting are separate responsibilities
+perform_update(records)
+
+logger.info("Update complete")
+
+# Good: keep construction separate from later setup and use
+parser = argparse.ArgumentParser()
+
+subparsers = parser.add_subparsers(dest="command", required=True)
+
+create_parser = subparsers.add_parser("create")
+create_parser.add_argument("--dry-run", action="store_true")
+
+validate_parser = subparsers.add_parser("validate")
+validate_parser.set_defaults(dry_run=False)
+
+parsed_arguments = parser.parse_args(arguments)
+
+# Good: a runtime collaborator is separate from module declarations
+logger = logging.getLogger(__name__)
+
+MAX_ITEMS: Final[int] = 20
+ALLOWED_STATES: Final[frozenset[str]] = frozenset({"ready", "complete"})
 ```
 
 - Add a blank line before multi-line assert statements.
@@ -432,15 +550,15 @@ create_migration_file(versions_dir, "rev1", None)
 
 ```python
 # Good: combined conditions in one branch
-if not current_user.account_id or current_user.account_id != account_id:
-    raise PermissionError("User is not in the account")
+if not principal.scope_id or principal.scope_id != scope_id:
+    raise PermissionError("Principal cannot access this scope")
 
 # Bad: separate branches with identical bodies
-if not current_user.account_id:
-    raise PermissionError("User is not in the account")
+if not principal.scope_id:
+    raise PermissionError("Principal cannot access this scope")
 
-if current_user.account_id != account_id:
-    raise PermissionError("User is not in the account")
+if principal.scope_id != scope_id:
+    raise PermissionError("Principal cannot access this scope")
 ```
 
 ```python
@@ -491,17 +609,18 @@ return next(
 
 ## Docstrings
 
-- Every **function**, **method**, and **class** should have a one-line docstring (purpose or role). Include `main()` and private helpers (`_foo`) the same way unless the file’s existing style omits docstrings on tiny locals—when in doubt, add one line.
+- Every **function**, **method**, and **class** should have a one-line docstring (purpose or role). Include `main()` and nested helpers the same way unless the file’s existing style omits docstrings on tiny locals—when in doubt, add one line.
 - Keep docstrings to a single line. Do not include Args, Returns, or Raises sections.
 - Class docstrings go directly after the class definition.
 - Docstrings describe current behavior only — never reference what the code replaces, used to do, or PR/migration history. The docstring must read the same to a new reader who never saw the prior version.
 
 ## Comments
 
-- Default to writing no comments. Only add one when the WHY is non-obvious: a hidden constraint, a subtle invariant, a workaround for a specific bug, or behavior that would surprise a reader.
-- Comments describe current behavior only — never reference what the code replaces, used to do, what was deleted, or PR/migration history. Phrases like "previously…", "was the…", "legacy…", "replaces the hand-built…", "now uses X instead of Y" do not belong in source. They rot the moment the comparison ages out.
-- A comment should read the same to someone who never saw the prior version of the file. If you find yourself explaining a transition, put that in the PR description, not the code.
-- Don't explain WHAT the code does — well-named identifiers already do that. Don't reference the current task, fix, or callers ("used by X", "added for the Y flow", "handles the case from issue #123") since those belong in the PR description.
+- **Comments are only for third-party quirks** — an SDK bug, a library's surprising contract, a spec oddity, a protocol requirement — that a reader could not infer from our own code. If the reason lives in code you control, it is not a comment.
+- **If your own code needs a comment to be understood, the code is too complex — refactor it instead.** Rename the identifier, extract a well-named helper, split the function, or restructure until the intent is obvious without prose. Reach for a comment only after the code cannot be made clearer and the remaining "why" is genuinely external.
+- **Never explain behavior in a comment — tests assert behavior.** Do not narrate what a branch, guard, ordering, or invariant does or protects against; encode that in a test that fails when it regresses. The test is the durable, executable specification; the comment is not.
+- **Keep any comment to 1–2 lines**, factual, and about the external quirk only. A comment that runs longer is a signal the code (or the abstraction) needs restructuring, not more prose.
+- Comments describe the current external quirk only — never reference what the code replaces, used to do, what was deleted, the current task/fix/PR, or callers ("previously…", "legacy…", "now uses X instead of Y", "added for the Y flow", "used by X"). Those belong in the PR description, not the source.
 
 ## HTTP Status Codes
 
@@ -554,11 +673,11 @@ except Exception as exc:
 from enum import StrEnum
 
 # Good: string enum
-class ReportType(StrEnum):
-    DAILY_SUMMARY = "daily-summary"
-    MONTHLY_INVOICE = "monthly-invoice"
+class OutputFormat(StrEnum):
+    COMPACT = "compact"
+    EXPANDED = "expanded"
 
 # Bad: loose string constants spread across modules
-DAILY_SUMMARY = "daily-summary"
-MONTHLY_INVOICE = "monthly-invoice"
+COMPACT = "compact"
+EXPANDED = "expanded"
 ```
