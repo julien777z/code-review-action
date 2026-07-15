@@ -13,9 +13,8 @@ from agent_sync.providers import (
     generate_hook_outputs,
     generate_settings_outputs,
 )
-from agent_sync.rules import assemble_agents_instructions, generate_rule_outputs
+from agent_sync.rules import assemble_universal_agent_instructions, generate_rule_outputs
 from agent_sync.skills import generate_skill_outputs
-from agent_sync.storage import read_text
 from agent_sync.validation import run_validations
 
 __all__ = ["generate_outputs"]
@@ -35,37 +34,50 @@ def generate_outputs(
         *generate_command_outputs(workspace),
         *generate_agent_outputs(workspace, settings, model_overrides),
         *generate_rule_outputs(workspace),
-        *generate_codex_instruction_outputs(workspace, settings),
+        *generate_universal_agent_instruction_outputs(workspace),
+        *generate_codex_settings_outputs(workspace, settings),
         *generate_hook_outputs(workspace),
         *generate_settings_outputs(workspace, settings),
     ]
 
 
-def generate_codex_instruction_outputs(
+def generate_universal_agent_instruction_outputs(workspace: Workspace) -> list[OutputFile]:
+    """Generate Universal Agent Instructions from canonical rules."""
+
+    rules_dir = workspace.agents / "rules"
+
+    if not rules_dir.exists():
+        return []
+
+    return [
+        OutputFile(
+            target_path=workspace.root / "AGENTS.md",
+            content=assemble_universal_agent_instructions(workspace),
+            kind=OutputKind.UNIVERSAL_AGENT_INSTRUCTIONS,
+            slug="universal-agent-instructions",
+            source_path=rules_dir,
+        )
+    ]
+
+
+def generate_codex_settings_outputs(
     workspace: Workspace,
     settings: AgentSyncSettings,
 ) -> list[OutputFile]:
-    """Generate Codex project instructions and managed configuration."""
+    """Generate canonical and provider Codex settings."""
 
     if settings.codex is None:
         return []
 
-    agents_content = assemble_agents_instructions(workspace)
+    agents_content = assemble_universal_agent_instructions(workspace)
     source_path = workspace.settings / "codex.json"
     synchronized_settings = settings.codex.model_copy(
         update={"project_doc_max_bytes": len(agents_content.encode("utf-8"))}
     )
     config_path = workspace.root / ".codex" / "config.toml"
-    config_content = generate_codex_config(synchronized_settings, read_text(config_path))
+    config_content = generate_codex_config(synchronized_settings)
 
     outputs = [
-        OutputFile(
-            target_path=workspace.root / "AGENTS.md",
-            content=agents_content,
-            kind=OutputKind.CODEX_INSTRUCTIONS,
-            slug=Provider.CODEX.value,
-            source_path=source_path,
-        ),
         OutputFile(
             target_path=config_path,
             content=config_content,
