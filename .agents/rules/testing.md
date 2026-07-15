@@ -4,13 +4,11 @@ alwaysApply: true
 
 # Testing Rules
 
-## Directory Structure
+## Test Organization
 
 - Test directories should mirror the source code structure.
 - If the source has `core/`, `models/`, `routes/`, or `services/`, keep the corresponding `unit/` and `integration/` folders aligned with those boundaries.
 - Place tests next to the source subdomain they verify, not in a loosely related folder.
-
-## Test Structure
 
 - Use pytest async tests (`async def test_...`).
 - Group tests in classes named `TestXxx`.
@@ -20,19 +18,15 @@ alwaysApply: true
 - Test docstrings must start with `Test that ...` (example: `"""Test that when no credentials are provided an exception is raised"""`).
 - Do not include numeric HTTP status codes in test function names; use semantic status names instead (for example, `bad_request`, `not_found`, `forbidden`).
 
-## Imports
-
 - Keep ALL imports at the top of test files.
 - Never import inside test functions or methods.
 
-## Helper Functions
+## Fixtures and Test Data
 
 - Define test helper functions at module level.
 - Keep helper docstrings to a single line.
 - **Builders belong in `conftest.py`, not in test files.** A "builder" is any helper whose job is to construct a domain object (Pydantic model, ORM row, request/response payload, mock with structured fields, file/path artifact, etc.) for use in tests. Common forms — `make_*`, `build_*`, `insert_*`, `create_*`, `fake_*` — must be promoted to `<noun>_*_factory` fixtures in the nearest shared `conftest.py`.
 - Module-level helpers are allowed only for trivial, non-construction utilities scoped to one file (predicates, small formatters, `to_comparable_string`-style assertion adapters). When in doubt, move it to `conftest.py`.
-
-## Request Payload Construction
 
 - For HTTP endpoint tests, build request payloads from the same request models used by application routes/services, then serialize with `model_dump(...)`.
 - Prefer `model_dump(mode="json", exclude_unset=True, exclude_none=True)` unless the endpoint contract needs different dump options.
@@ -40,8 +34,6 @@ alwaysApply: true
 - For mocked HTTP response bodies, prefer application response models (or shared contract response models) and serialize them with `model_dump(...)` instead of hand-rolled response dictionaries.
 - Use enum members in model payloads instead of hardcoded enum strings.
 - For invalid-request tests, derive from a valid model payload and then mutate/remove fields intentionally to assert validation behavior.
-
-## Test Fixtures
 
 - Do not create module-level helper factories inside test files for reusable objects. This includes the first invocation — even a one-off "I'll just put it here for now" builder belongs in `conftest.py` from day one.
 - Follow the canonical factory shape: a `@pytest.fixture` named `<noun>_*_factory` (for example `order_factory`, `customer_factory`, `payment_payload_factory`, `task_factory`) that returns an inner `_build(**overrides) -> Noun` closure. Use the `*_orm_factory` suffix specifically for SQLAlchemy ORM rows.
@@ -110,8 +102,6 @@ async def test_extracts_tenant_from_token(mock_config):
     # ...
 ```
 
-## Parametrize
-
 - Combine similar test cases with `@pytest.mark.parametrize` instead of duplicating tests.
 - Tests that follow the same pattern with different inputs (for example, authorization error tests, not-found vs invalid-id, different name formats) must use `@pytest.mark.parametrize` instead of separate test methods.
 - Use `@pytest.mark.parametrize` for same-shape scenarios with different inputs.
@@ -132,8 +122,6 @@ def test_lookup_region(postal_code: str, expected_region: str) -> None:
     assert result.region == expected_region
 ```
 
-## Test-Only Models
-
 - Do not use `SimpleNamespace` for domain or API-shaped test objects; use real application models/factory fixtures or test-only `BaseModel` classes that mirror the contract.
 
 ```python
@@ -141,22 +129,6 @@ class TreeNode(BaseModel):
     name: str
     children: list["TreeNode"] = Field(default_factory=list)
 ```
-
-## Assertions
-
-- Use descriptive assertions.
-- For database verification, query the database directly and compare fields.
-
-## Mocking
-
-- Prefer third-party fakes first, then reusable test utilities, then patch-based mocks.
-- Use `AsyncMock` for async functions.
-- Avoid `MagicMock` for ORM/domain entities; use `*_orm_factory` fixtures that return real instances.
-- `MagicMock` is acceptable for external boundaries (SDK/client response containers, subprocess handles, and network wrappers).
-- For mocked third-party libraries, raise the real library exception types (for example `stripe.error.StripeError`) instead of mock-specific custom exceptions.
-- In reusable mock library/fake implementations, prefer real SDK/HTTP models and response objects over `MagicMock` whenever practical.
-
-## ORM Factory Fixtures
 
 - Use `*_orm_factory` fixtures to create real ORM instances (for example: `user_orm_factory`, `account_orm_factory`, `order_orm_factory`, `subscription_orm_factory`).
 - ORM factory fixtures must live in shared `conftest.py` files, not inside individual test modules.
@@ -184,15 +156,33 @@ def order_orm_factory(order_fixture, customer_fixture, customer_orm_factory):
     return _build
 ```
 
-## SDK Contract Tests
+## Assertions and Mocking
+
+- Use descriptive assertions.
+- For database verification, query the database directly and compare fields.
+
+- Prefer third-party fakes first, then reusable test utilities, then patch-based mocks.
+- Use `AsyncMock` for async functions.
+- Avoid `MagicMock` for ORM/domain entities; use `*_orm_factory` fixtures that return real instances.
+- `MagicMock` is acceptable for external boundaries (SDK/client response containers, subprocess handles, and network wrappers).
+- For mocked third-party libraries, raise the real library exception types (for example `stripe.error.StripeError`) instead of mock-specific custom exceptions.
+- In reusable mock library/fake implementations, prefer real SDK/HTTP models and response objects over `MagicMock` whenever practical.
 
 - Test the documented and implemented SDK contract paths, not speculative runtime shapes.
 - Do not add defensive tests for unsupported SDK surfaces (for example, missing required methods) when the integration contract guarantees method availability.
 - If an SDK method is required by application code, tests should focus on valid responses and real failure modes from that method.
-- Keep test names aligned with behavior/outcomes, not SDK internals; avoid exact method names in test names (for example, `list_async`) for required SDK methods.
-- Keep test docstrings aligned with behavior/outcomes, not SDK internals; avoid exact method names and wording like "when `<method>` is available" for required SDK methods.
+- Keep test names and docstrings aligned with behavior and outcomes rather than SDK internals; avoid exact required-method names or wording such as "when `<method>` is available."
 
-## Anti-Patterns (Avoid These)
+## Configuration and Failures
+
+- Define test configuration values (hostnames, database URLs, API keys, etc.) in `pyproject.toml` under `[tool.pytest.ini_options]` in the `env` section.
+- Do NOT hardcode configuration values in `conftest.py` files.
+- Access these values via `os.environ` in test code.
+
+- If tests cannot be run locally (for example, missing dependencies, Docker not available, or environment issues), do NOT guess what the issue is. Ask the user for the error logs instead of speculating.
+- When CI tests fail and you cannot access the logs directly, ask the user to provide the failure output before attempting fixes.
+
+## Guardrails
 
 - **Hardcoded test values** - Don't use literal values when fixtures provide them:
   - `UUID("00000000-...")` -> `entity_fixture.id`
@@ -201,34 +191,6 @@ def order_orm_factory(order_fixture, customer_fixture, customer_orm_factory):
 - **SimpleNamespace as fake domain model** - Do not build test entities with `SimpleNamespace`; use fixture-backed models, ORM factory fixtures, or test-only `BaseModel` types.
 - **Local duplicate fixtures/builders** - Do not define ad-hoc helper constructors in test modules when a shared fixture or factory already covers the use case.
 - **Inline `make_*`/`build_*`/`insert_*`/`create_*` builders in test files** - Domain-object/payload/ORM/mock construction belongs in `conftest.py` as a `<noun>_*_factory` fixture, even for the first call site. Test files should compose fixtures, not define them.
-- **MagicMock for domain ORM objects** - Do not use `MagicMock(spec=...)` for ORM/domain entities; use `*_orm_factory` fixtures that return real instances.
 - **Duplicate domain-object setup** - If the same domain object construction appears in multiple tests, extract it to a shared `*_orm_factory` fixture in the nearest `conftest.py`.
-
-```python
-# Bad: MagicMock domain objects
-mock_order = MagicMock(spec=Orders)
-mock_order.customer = MagicMock(spec=Customers)
-mock_order.customer.email = customer_fixture.email
-```
-
-```python
-# Good: real ORM instances from shared fixture factories
-order = order_orm_factory()
-customer = customer_orm_factory(email=customer_fixture.email)
-order.customer = customer
-```
-
-## Configuration
-
-- Define test configuration values (hostnames, database URLs, API keys, etc.) in `pyproject.toml` under `[tool.pytest.ini_options]` in the `env` section.
-- Do NOT hardcode configuration values in `conftest.py` files.
-- Access these values via `os.environ` in test code.
-
-## Test Failures
-
-- If tests cannot be run locally (for example, missing dependencies, Docker not available, or environment issues), do NOT guess what the issue is. Ask the user for the error logs instead of speculating.
-- When CI tests fail and you cannot access the logs directly, ask the user to provide the failure output before attempting fixes.
-
-## Redundancy
 
 - Do not duplicate helper models or utility types across multiple test files. Put shared models in a shared test helper module instead.
