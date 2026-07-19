@@ -213,6 +213,7 @@ tempCodeRunnerFile.py
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+openai.yaml
 
 # Streamlit
 .streamlit/secrets.toml
