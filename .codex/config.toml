@@ -1,3 +1,1 @@
-# >>> agent-sync managed Codex settings >>>
-project_doc_max_bytes = 53770
-# <<< agent-sync managed Codex settings <<<
+project_doc_max_bytes = 53744
