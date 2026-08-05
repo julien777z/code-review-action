@@ -2,26 +2,26 @@
 
 [[package]]
 name = "annotated-types"
-version = "0.7.0"
+version = "0.8.0"
 description = "Reusable constraint types to use with typing.Annotated"
 optional = false
-python-versions = ">=3.8"
+python-versions = ">=3.10"
 groups = ["main"]
 files = [
-    {file = "annotated_types-0.7.0-py3-none-any.whl", hash = "sha256:1f02e8b43a8fbbc3f3e0d4f0f4bfc8131bcb4eebe8849b8e5c773f3a1c582a53"},
-    {file = "annotated_types-0.7.0.tar.gz", hash = "sha256:aff07c09a53a08bc8cfccb9c85b05f1aa9a2a6f23728d790723543408344ce89"},
+    {file = "annotated_types-0.8.0-py3-none-any.whl", hash = "sha256:f072f4d804ea359e4eaf198b1af7a8b0943881a87f31bb764f8bf219bb9419e0"},
+    {file = "annotated_types-0.8.0.tar.gz", hash = "sha256:13b2beaad985e05e2d6407ee4c4f35590b11f8d693a258a561055cac8f64cab7"},
 ]
 
 [[package]]
 name = "anthropic"
-version = "0.116.0"
+version = "0.119.0"
 description = "The official Python library for the anthropic API"
 optional = false
 python-versions = ">=3.9"
 groups = ["main"]
 files = [
-    {file = "anthropic-0.116.0-py3-none-any.whl", hash = "sha256:6c0a7698e8d652455da3499978279bb2588c7264d0a35be3666009a4258c8256"},
-    {file = "anthropic-0.116.0.tar.gz", hash = "sha256:5fc248fbb9fe03ef686f8a774f81586bca31a043260aab88b387ea3660f4a396"},
+    {file = "anthropic-0.119.0-py3-none-any.whl", hash = "sha256:2b39107077489d19d7c66000e9d9263293d431550fcf6b543ead785c6ac85962"},
+    {file = "anthropic-0.119.0.tar.gz", hash = "sha256:40a81b094ae2a0056a77771257943b19bd46edce1326e22f85c2794492097f0a"},
 ]
 
 [package.dependencies]
@@ -35,23 +35,24 @@ sniffio = "*"
 typing-extensions = ">=4.14,<5"
 
 [package.extras]
-aiohttp = ["aiohttp", "httpx-aiohttp (>=0.1.9)"]
+aiohttp = ["aiohttp", "httpx-aiohttp (>=0.1.9,<1)"]
 aws = ["boto3 (>=1.28.57)", "botocore (>=1.31.57)"]
 bedrock = ["boto3 (>=1.28.57)", "botocore (>=1.31.57)"]
+google-cloud = ["google-auth[requests] (>=2,<3)"]
 mcp = ["mcp (>=1.0) ; python_version >= \"3.10\""]
 vertex = ["google-auth[requests] (>=2,<3)"]
 webhooks = ["standardwebhooks (>=1.0.1,<2)"]
 
 [[package]]
 name = "anyio"
-version = "4.14.1"
+version = "4.14.2"
 description = "High-level concurrency and networking framework on top of asyncio or Trio"
 optional = false
 python-versions = ">=3.10"
 groups = ["main"]
 files = [
-    {file = "anyio-4.14.1-py3-none-any.whl", hash = "sha256:4e5533c5b8ff0a24f5d7a176cbe6877129cd183893f66b537f8f227d10527d72"},
-    {file = "anyio-4.14.1.tar.gz", hash = "sha256:8d648a3544c1a700e3ff78615cd679e4c5c3f149904287e73687b2596963629e"},
+    {file = "anyio-4.14.2-py3-none-any.whl", hash = "sha256:9f505dda5ac9f0c8309b5e8bd445a8c2bf7246f3ce950121e45ea15bc41d1494"},
+    {file = "anyio-4.14.2.tar.gz", hash = "sha256:cfa139f3ed1a23ee8f88a145ddb5ac7605b8bbfd8592baacd7ce3d8bb4313c7f"},
 ]
 
 [package.dependencies]
@@ -63,14 +64,14 @@ trio = ["trio (>=0.32.0)"]
 
 [[package]]
 name = "certifi"
-version = "2026.6.17"
+version = "2026.7.22"
 description = "Python package for providing Mozilla's CA Bundle."
 optional = false
 python-versions = ">=3.7"
 groups = ["main"]
 files = [
-    {file = "certifi-2026.6.17-py3-none-any.whl", hash = "sha256:2227dcbaafe0d2f59279d1762ddddc37783ed4354594f194ffc31d20f41fc3db"},
-    {file = "certifi-2026.6.17.tar.gz", hash = "sha256:024c88eeec92ca068db80f02b8b07c9cef7b9fe261d1d535abfd5abd6f6af432"},
+    {file = "certifi-2026.7.22-py3-none-any.whl", hash = "sha256:62f22742b58a1a33014a2b6b706588a8d7e2a88ae7bd1a6ebe8c992928483775"},
+    {file = "certifi-2026.7.22.tar.gz", hash = "sha256:741e2c3b351ddf169a738da9f2c048608ff7f2c5cc02f1ebc6b118bb090d5d55"},
 ]
 
 [[package]]
@@ -88,25 +89,25 @@ files = [
 
 [[package]]
 name = "cursor-sdk"
-version = "0.1.9"
+version = "1.0.24"
 description = "Python client for the Cursor SDK bridge."
 optional = false
 python-versions = ">=3.10"
 groups = ["main"]
 files = [
-    {file = "cursor_sdk-0.1.9-py3-none-macosx_11_0_arm64.whl", hash = "sha256:278cae1728a6db89ead0336cd372419d24ef186aedbffe9b72df2dda27a4b43b"},
-    {file = "cursor_sdk-0.1.9-py3-none-macosx_11_0_x86_64.whl", hash = "sha256:17ea5f7f74b5b2037c6df50b989836544e8f88db8a450536baa37aad635697cd"},
-    {file = "cursor_sdk-0.1.9-py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:664c8913a866ecc35458f2abdd28bad1ab252c33a6f5655090d0a803381206dc"},
-    {file = "cursor_sdk-0.1.9-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:a0a93ed45be76421a4b9723da402ead622490dd0edba171b5c0c69319fd7f6c7"},
-    {file = "cursor_sdk-0.1.9-py3-none-win_amd64.whl", hash = "sha256:e0db9ad4a8ed39bdd1889efa16ab5d6ce6ed86cf4bd63fb779d955cf0b5e2d3b"},
-    {file = "cursor_sdk-0.1.9.tar.gz", hash = "sha256:078cc81faa286ed8827f917378ea21548119e12f03acc9fe78bf88ce56d7086b"},
+    {file = "cursor_sdk-1.0.24-py3-none-macosx_11_0_arm64.whl", hash = "sha256:519ecf37fd346d95cfae364bbe0018201953c2830a5e768bb0dadb92c25cf8a3"},
+    {file = "cursor_sdk-1.0.24-py3-none-macosx_11_0_x86_64.whl", hash = "sha256:74f25d80d12ed2b72a2a089f9a92f7a052e17008b46d899e52fa234a874b1c31"},
+    {file = "cursor_sdk-1.0.24-py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:8b75ccbb47445da7b13df706f219a724c09416a52006017d9c6bc16d27e791ad"},
+    {file = "cursor_sdk-1.0.24-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:c9d8c7af5d9cb86ec1b009deebe9b90dd01823f768a3a3a38329a8e7a92f5751"},
+    {file = "cursor_sdk-1.0.24-py3-none-win_amd64.whl", hash = "sha256:f680de0a68e2100ad353feed4fae989fb7e060dc72f0fa970da27ae3a025a847"},
+    {file = "cursor_sdk-1.0.24.tar.gz", hash = "sha256:5ed3d95adfdb68365ee2cec3ac242d80441eb84b6f4a7f1d3b358a6adbf91004"},
 ]
 
 [package.dependencies]
 httpx = ">=0.27,<1"
 
 [package.extras]
-test = ["pytest (>=8)", "pytest-asyncio (>=0.23)"]
+test = ["packaging (>=24)", "pytest (>=8)", "pytest-asyncio (>=0.23)"]
 
 [[package]]
 name = "distro"
@@ -620,22 +621,19 @@ dev = ["argcomplete", "attrs (>=19.2)", "hypothesis (>=3.56)", "mock", "requests
 
 [[package]]
 name = "pytest-env"
-version = "1.6.0"
+version = "1.7.0"
 description = "pytest plugin that allows you to add environment variables."
 optional = false
 python-versions = ">=3.10"
 groups = ["dev"]
 files = [
-    {file = "pytest_env-1.6.0-py3-none-any.whl", hash = "sha256:1e7f8a62215e5885835daaed694de8657c908505b964ec8097a7ce77b403d9a3"},
-    {file = "pytest_env-1.6.0.tar.gz", hash = "sha256:ac02d6fba16af54d61e311dd70a3c61024a4e966881ea844affc3c8f0bf207d3"},
+    {file = "pytest_env-1.7.0-py3-none-any.whl", hash = "sha256:9ee0f1fe859d23fcdb533fe2909a404b3b133d02674a56df275bbe4df4eb104b"},
+    {file = "pytest_env-1.7.0.tar.gz", hash = "sha256:0c1dc1101fb8d3ab3611e8f8d657ba06c3c0c167fc85c90457e5b27f2508f43e"},
 ]
 
 [package.dependencies]
 pytest = ">=9.0.2"
 python-dotenv = ">=1.2.2"
-
-[package.extras]
-testing = ["covdefaults (>=2.3)", "coverage (>=7.13.4)", "pytest-mock (>=3.15.1)"]
 
 [[package]]
 name = "python-dotenv"
@@ -796,4 +794,4 @@ typing-extensions = ">=4.12.0"
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.11"
-content-hash = "4051bb0232b3ee0e62491e9a34cf38f0b61dac81efb57a6379e6d6dcdb229024"
+content-hash = "5b543ea4526e4659b413ae551fe7ffeeb4be0ee705759cac392836ebfea93f7d"
