@@ -1,5 +1,7 @@
 ---
-alwaysApply: true
+globs:
+- '**/*.py'
+alwaysApply: false
 ---
 
 # HTTP Rules
