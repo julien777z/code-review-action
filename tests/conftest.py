@@ -323,7 +323,9 @@ def findings_session_factory(monkeypatch) -> Callable[..., tuple[GetFindingsSess
                 completion.complete = flush_complete
 
             try:
-                yield FindingsSession(findings=_findings, flush_findings=_flush_findings, flush_completion=completion)
+                yield FindingsSession(
+                    findings=_findings, flush_findings=_flush_findings, flush_completion=completion
+                )
             finally:
                 state.closed += 1
 
@@ -483,7 +485,9 @@ def summary_github_mocks(monkeypatch) -> dict[str, AsyncMock]:
 
 
 @pytest.fixture
-def main_harness(monkeypatch, mock_config, pull_request_factory, pull_request_event_factory) -> Callable[..., dict[str, AsyncMock | PullRequestContext]]:
+def main_harness(
+    monkeypatch, mock_config, pull_request_factory, pull_request_event_factory
+) -> Callable[..., dict[str, AsyncMock | PullRequestContext]]:
     """Patch the seams main() drives and return the mocks; set the event action and review result per call."""
 
     def _setup(
@@ -491,7 +495,9 @@ def main_harness(monkeypatch, mock_config, pull_request_factory, pull_request_ev
     ) -> dict[str, AsyncMock | PullRequestContext]:
         mock_config(review_model=ReviewModel.CURSOR, cursor_api_key="key", **config_overrides)
 
-        run_backend_review = AsyncMock(return_value=ReviewRoundResult(exit_code=run_review_result, diff="REVIEW_DIFF"))
+        run_backend_review = AsyncMock(
+            return_value=ReviewRoundResult(exit_code=run_review_result, diff="REVIEW_DIFF")
+        )
         post_pr_summary = AsyncMock(return_value=None)
         pr = pull_request_factory()
         handlers = BackendHandlers(
@@ -516,7 +522,12 @@ def main_harness(monkeypatch, mock_config, pull_request_factory, pull_request_ev
             lambda: ("pull_request", pull_request_event_factory(action=action)),
         )
 
-        return {"handlers": handlers, "run_backend_review": run_backend_review, "post_pr_summary": post_pr_summary, "pr": pr}
+        return {
+            "handlers": handlers,
+            "run_backend_review": run_backend_review,
+            "post_pr_summary": post_pr_summary,
+            "pr": pr,
+        }
 
     return _setup
 
@@ -574,7 +585,9 @@ def thread_comment_factory() -> Callable[..., ThreadCommentNode]:
 def review_thread_factory(thread_comment_factory) -> Callable[..., ReviewThread]:
     """Build a ReviewThread wrapping a single first comment."""
 
-    def _build(*, id: str = "thread-1", is_resolved: bool = False, is_outdated: bool = False, **comment_kwargs) -> ReviewThread:
+    def _build(
+        *, id: str = "thread-1", is_resolved: bool = False, is_outdated: bool = False, **comment_kwargs
+    ) -> ReviewThread:
         comment = thread_comment_factory(**comment_kwargs)
 
         return ReviewThread(

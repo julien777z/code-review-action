@@ -147,9 +147,7 @@ def finding_anchors(finding: Finding, anchors: dict[str, tuple[set[int], set[int
     return finding.line in (left if finding.side is DiffSide.LEFT else right)
 
 
-def is_postable(
-    finding: Finding, anchors: dict[str, tuple[set[int], set[int]]], unpatched: set[str]
-) -> bool:
+def is_postable(finding: Finding, anchors: dict[str, tuple[set[int], set[int]]], unpatched: set[str]) -> bool:
     """Return whether a finding can be made visible."""
 
     return finding_anchors(finding, anchors) or finding.path in unpatched
@@ -187,7 +185,9 @@ async def publish_finding(
     return FindingPublication.VERDICT
 
 
-async def publish_and_track(pr: PullRequestContext, marker: str, finding: Finding, state: RoundPublishState) -> None:
+async def publish_and_track(
+    pr: PullRequestContext, marker: str, finding: Finding, state: RoundPublishState
+) -> None:
     """Publish a finding and record it as current and published in the round accumulator."""
 
     publication = await publish_finding(pr, marker, finding, state["anchors"])
@@ -341,7 +341,9 @@ async def collect_round_findings(
                     pr, marker, live_session, flush_budget(review_timeout), state
                 )
                 if completed:
-                    logger.info("The agent reported the review as complete; concluding with a normal verdict.")
+                    logger.info(
+                        "The agent reported the review as complete; concluding with a normal verdict."
+                    )
                     state["findings"].timed_out = False
 
     await publish_deferred_lows(pr, marker, state)

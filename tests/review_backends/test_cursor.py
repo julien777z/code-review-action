@@ -106,9 +106,7 @@ class TestReviewSession:
 
         mock_config(cursor_api_key="key")
         agent, runs = cursor_agent_factory(review_chunks=("partial",), flush_chunks=("late",))
-        monkeypatch.setattr(
-            "code_review.review_backends.cursor.create_agent", AsyncMock(return_value=agent)
-        )
+        monkeypatch.setattr("code_review.review_backends.cursor.create_agent", AsyncMock(return_value=agent))
 
         async def run() -> list[str]:
             async with cursor.review_session(pull_request_factory(), review_inputs_factory()) as session:
@@ -129,9 +127,7 @@ class TestReviewSession:
         mock_config(cursor_api_key="key")
         agent, runs = cursor_agent_factory(review_chunks=(), flush_chunks=("late",))
         runs[0].cancel.side_effect = UnsupportedRunOperationError("cancel", "already terminal")
-        monkeypatch.setattr(
-            "code_review.review_backends.cursor.create_agent", AsyncMock(return_value=agent)
-        )
+        monkeypatch.setattr("code_review.review_backends.cursor.create_agent", AsyncMock(return_value=agent))
 
         async def run() -> list[str]:
             async with cursor.review_session(pull_request_factory(), review_inputs_factory()) as session:
@@ -147,9 +143,7 @@ class TestReviewSession:
         mock_config(cursor_api_key="key")
         monkeypatch.setattr("code_review.review_backends.cursor.FLUSH_SEND_RETRY_DELAY", timedelta(0))
         agent, runs = cursor_agent_factory(review_chunks=(), flush_chunks=("late",), busy_sends=2)
-        monkeypatch.setattr(
-            "code_review.review_backends.cursor.create_agent", AsyncMock(return_value=agent)
-        )
+        monkeypatch.setattr("code_review.review_backends.cursor.create_agent", AsyncMock(return_value=agent))
 
         async def run() -> list[str]:
             async with cursor.review_session(pull_request_factory(), review_inputs_factory()) as session:
@@ -166,9 +160,7 @@ class TestReviewSession:
         mock_config(cursor_api_key="key")
         agent, runs = cursor_agent_factory(review_chunks=())
         runs[0].cancel.side_effect = AgentBusyError("stuck")
-        monkeypatch.setattr(
-            "code_review.review_backends.cursor.create_agent", AsyncMock(return_value=agent)
-        )
+        monkeypatch.setattr("code_review.review_backends.cursor.create_agent", AsyncMock(return_value=agent))
 
         async def run() -> None:
             async with cursor.review_session(pull_request_factory(), review_inputs_factory()) as session:

@@ -57,7 +57,9 @@ class TestReviewSession:
             managed_agent_event_factory("session.status_idle", stop_reason="end_turn"),
         ]
         client = managed_agent_client_factory(events)
-        monkeypatch.setattr("code_review.review_backends.claude.anthropic.AsyncAnthropic", lambda **kwargs: client)
+        monkeypatch.setattr(
+            "code_review.review_backends.claude.anthropic.AsyncAnthropic", lambda **kwargs: client
+        )
 
         chunks = asyncio.run(open_and_collect(pull_request_factory(), review_inputs_factory()))
 
@@ -83,7 +85,9 @@ class TestReviewSession:
             managed_agent_event_factory("agent.message", text="after idle"),
         ]
         client = managed_agent_client_factory(events)
-        monkeypatch.setattr("code_review.review_backends.claude.anthropic.AsyncAnthropic", lambda **kwargs: client)
+        monkeypatch.setattr(
+            "code_review.review_backends.claude.anthropic.AsyncAnthropic", lambda **kwargs: client
+        )
 
         chunks = asyncio.run(open_and_collect(pull_request_factory(), review_inputs_factory()))
 
@@ -106,7 +110,9 @@ class TestReviewSession:
             managed_agent_event_factory("session.status_terminated"),
         ]
         client = managed_agent_client_factory(events)
-        monkeypatch.setattr("code_review.review_backends.claude.anthropic.AsyncAnthropic", lambda **kwargs: client)
+        monkeypatch.setattr(
+            "code_review.review_backends.claude.anthropic.AsyncAnthropic", lambda **kwargs: client
+        )
 
         pr = pull_request_factory(repo="octo/repo", head_sha="deadbeef")
         asyncio.run(open_and_collect(pr, review_inputs_factory(pr=pr, diff="DIFF_BODY")))
@@ -140,7 +146,9 @@ class TestReviewSession:
             managed_agent_event_factory("session.status_idle", stop_reason="end_turn"),
         ]
         client = managed_agent_client_factory(review_events, flush_events)
-        monkeypatch.setattr("code_review.review_backends.claude.anthropic.AsyncAnthropic", lambda **kwargs: client)
+        monkeypatch.setattr(
+            "code_review.review_backends.claude.anthropic.AsyncAnthropic", lambda **kwargs: client
+        )
 
         chunks = asyncio.run(open_and_collect(pull_request_factory(), review_inputs_factory(), both=True))
 
@@ -173,7 +181,9 @@ class TestReviewSession:
             managed_agent_event_factory("session.status_idle", stop_reason="end_turn"),
         ]
         client = managed_agent_client_factory(flush_events)
-        monkeypatch.setattr("code_review.review_backends.claude.anthropic.AsyncAnthropic", lambda **kwargs: client)
+        monkeypatch.setattr(
+            "code_review.review_backends.claude.anthropic.AsyncAnthropic", lambda **kwargs: client
+        )
 
         chunks = asyncio.run(open_and_collect(pull_request_factory(), review_inputs_factory(), flush=True))
 
@@ -193,7 +203,9 @@ class TestReviewSession:
         mock_config(anthropic_api_key="key")
         events = [managed_agent_event_factory("session.status_terminated")]
         client = managed_agent_client_factory(events)
-        monkeypatch.setattr("code_review.review_backends.claude.anthropic.AsyncAnthropic", lambda **kwargs: client)
+        monkeypatch.setattr(
+            "code_review.review_backends.claude.anthropic.AsyncAnthropic", lambda **kwargs: client
+        )
 
         chunks = asyncio.run(open_and_collect(pull_request_factory(), review_inputs_factory()))
 
@@ -216,7 +228,9 @@ class TestReviewSession:
             managed_agent_event_factory("session.status_idle", stop_reason="end_turn"),
         ]
         client = managed_agent_client_factory(events)
-        monkeypatch.setattr("code_review.review_backends.claude.anthropic.AsyncAnthropic", lambda **kwargs: client)
+        monkeypatch.setattr(
+            "code_review.review_backends.claude.anthropic.AsyncAnthropic", lambda **kwargs: client
+        )
 
         asyncio.run(open_and_collect(pull_request_factory(), review_inputs_factory()))
 
@@ -226,14 +240,21 @@ class TestReviewSession:
         client.beta.environments.delete.assert_awaited_once()
 
     def test_setup_failure_maps_to_review_failure_and_tears_down(
-        self, monkeypatch, mock_config, pull_request_factory, review_inputs_factory, managed_agent_client_factory
+        self,
+        monkeypatch,
+        mock_config,
+        pull_request_factory,
+        review_inputs_factory,
+        managed_agent_client_factory,
     ) -> None:
         """Test that a failure creating the agent maps to a terminal review failure and still deletes the environment."""
 
         mock_config(anthropic_api_key="key")
         client = managed_agent_client_factory([])
         client.beta.agents.create.side_effect = RuntimeError("boom")
-        monkeypatch.setattr("code_review.review_backends.claude.anthropic.AsyncAnthropic", lambda **kwargs: client)
+        monkeypatch.setattr(
+            "code_review.review_backends.claude.anthropic.AsyncAnthropic", lambda **kwargs: client
+        )
 
         with pytest.raises(ReviewBackendError) as raised:
             asyncio.run(open_and_collect(pull_request_factory(), review_inputs_factory()))
@@ -253,7 +274,9 @@ class TestGenerateText:
 
         mock_config(anthropic_api_key="key")
         client = anthropic_client_factory(text="Generated summary")
-        monkeypatch.setattr("code_review.review_backends.claude.anthropic.AsyncAnthropic", lambda **kwargs: client)
+        monkeypatch.setattr(
+            "code_review.review_backends.claude.anthropic.AsyncAnthropic", lambda **kwargs: client
+        )
 
         assert asyncio.run(claude.generate_text("prompt")) == "Generated summary"
 
@@ -262,7 +285,9 @@ class TestGenerateText:
 
         mock_config(anthropic_api_key="key")
         client = anthropic_client_factory()
-        monkeypatch.setattr("code_review.review_backends.claude.anthropic.AsyncAnthropic", lambda **kwargs: client)
+        monkeypatch.setattr(
+            "code_review.review_backends.claude.anthropic.AsyncAnthropic", lambda **kwargs: client
+        )
 
         asyncio.run(claude.generate_text("Summarize this"))
         kwargs = client.messages.create.await_args.kwargs

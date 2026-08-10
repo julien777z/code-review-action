@@ -72,9 +72,7 @@ class RoundFindings(BaseModel):
         self.current_keys.add(title_key)
         self.severity_by_key[title_key] = finding.severity
 
-    def track_publication(
-        self, finding: Finding, publication: FindingPublication
-    ) -> None:
+    def track_publication(self, finding: Finding, publication: FindingPublication) -> None:
         """Record where a finding was published and count it against the total cap."""
 
         self.published_count += 1
