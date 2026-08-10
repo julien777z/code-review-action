@@ -1,3 +1,6 @@
 {
-  "project_doc_max_bytes": 80645
+  "project_doc_max_bytes": 80645,
+  "features": {
+    "default_mode_request_user_input": true
+  }
 }
