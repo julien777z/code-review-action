@@ -60,7 +60,9 @@ class TestBuildInlineComment:
     def test_render(self, finding_factory) -> None:
         """Test that the request carries the commit id, path, line, side, and severity body."""
 
-        finding = finding_factory(path="src/app.py", line=12, side=DiffSide.RIGHT, title="Leak", severity=Severity.CRITICAL)
+        finding = finding_factory(
+            path="src/app.py", line=12, side=DiffSide.RIGHT, title="Leak", severity=Severity.CRITICAL
+        )
         request = build_inline_comment("sha1", finding, MARKER)
 
         assert request.commit_id == "sha1"
@@ -73,7 +75,9 @@ class TestBuildInlineComment:
         assert request.body.index("**Critical Severity**") < request.body.index(category)
         assert "**Critical Severity**<br><sub>Bug</sub>" in request.body
         assert request.body.index(category) < request.body.index("The loop overruns the array.")
-        assert request.body.index("The loop overruns the array.") < request.body.index(CONFIG["untrusted_input_close"])
+        assert request.body.index("The loop overruns the array.") < request.body.index(
+            CONFIG["untrusted_input_close"]
+        )
         assert request.body.index(CONFIG["untrusted_input_close"]) < request.body.index(DISCLAIMER)
         assert request.body.rstrip().endswith(MARKER)
 

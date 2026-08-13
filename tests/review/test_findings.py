@@ -44,7 +44,9 @@ def posted_titles(post_comment: AsyncMock) -> list[str]:
 class TestStreamFindingsWithRetry:
     """Test that the streaming backend wrapper retries only before the first finding is produced."""
 
-    def test_retries_before_first_finding(self, flaky_stream_factory, review_inputs_factory, finding_factory) -> None:
+    def test_retries_before_first_finding(
+        self, flaky_stream_factory, review_inputs_factory, finding_factory
+    ) -> None:
         """Test that a retryable failure before any finding is retried until findings stream."""
 
         finding = finding_factory()
@@ -113,7 +115,9 @@ class TestFindingKept:
         ],
         ids=["below-min", "meets-min", "excluded", "not-included", "included"],
     )
-    def test_finding_kept(self, mock_config, finding_factory, config_overrides, finding_overrides, kept) -> None:
+    def test_finding_kept(
+        self, mock_config, finding_factory, config_overrides, finding_overrides, kept
+    ) -> None:
         """Test that severity and path filters decide whether a finding is kept."""
 
         mock_config(**config_overrides)
@@ -156,7 +160,15 @@ class TestLowFindingRank:
             (FindingCategory.DOCUMENTATION, FindingCategory.CODE_SIMPLIFICATION),
             (FindingCategory.CODE_SIMPLIFICATION, FindingCategory.OTHER),
         ],
-        ids=["security>bug", "bug>perf", "perf>rule", "rule>test", "test>docs", "docs>simplify", "simplify>other"],
+        ids=[
+            "security>bug",
+            "bug>perf",
+            "perf>rule",
+            "rule>test",
+            "test>docs",
+            "docs>simplify",
+            "simplify>other",
+        ],
     )
     def test_more_important_category_ranks_first(self, finding_factory, higher, lower) -> None:
         """Test that a more important category sorts ahead of a less important one at the same arrival."""
@@ -262,7 +274,13 @@ class TestDeferredLows:
     """Test that low findings are buffered during the stream and flushed under the caps at the end."""
 
     def test_lows_post_after_non_lows(
-        self, mock_config, post_comment_mock, pull_request_factory, review_inputs_factory, findings_session_factory, finding_factory
+        self,
+        mock_config,
+        post_comment_mock,
+        pull_request_factory,
+        review_inputs_factory,
+        findings_session_factory,
+        finding_factory,
     ) -> None:
         """Test that a low arriving before a medium still posts after it, proving the buffer defers lows."""
 
@@ -285,12 +303,20 @@ class TestDeferredLows:
         assert result.current_keys == {("src/app.py", "Low first"), ("src/app.py", "Medium second")}
 
     def test_important_low_beats_earlier_low_under_cap(
-        self, mock_config, post_comment_mock, pull_request_factory, review_inputs_factory, findings_session_factory, finding_factory
+        self,
+        mock_config,
+        post_comment_mock,
+        pull_request_factory,
+        review_inputs_factory,
+        findings_session_factory,
+        finding_factory,
     ) -> None:
         """Test that a later high-priority-category low outranks an earlier one when the low cap is one."""
 
         mock_config(low_findings_cap=1)
-        early = finding_factory(line=10, severity=Severity.LOW, category=FindingCategory.CODE_SIMPLIFICATION, title="Simplify")
+        early = finding_factory(
+            line=10, severity=Severity.LOW, category=FindingCategory.CODE_SIMPLIFICATION, title="Simplify"
+        )
         late = finding_factory(line=20, severity=Severity.LOW, category=FindingCategory.BUG, title="Bug low")
 
         result = asyncio.run(
@@ -309,7 +335,13 @@ class TestDeferredLows:
         assert result.current_keys == {("src/app.py", "Bug low")}
 
     def test_lows_share_the_total_cap_budget(
-        self, mock_config, post_comment_mock, pull_request_factory, review_inputs_factory, findings_session_factory, finding_factory
+        self,
+        mock_config,
+        post_comment_mock,
+        pull_request_factory,
+        review_inputs_factory,
+        findings_session_factory,
+        finding_factory,
     ) -> None:
         """Test that lows are dropped when non-lows already fill the total-findings cap."""
 
@@ -336,7 +368,13 @@ class TestDeferredLows:
         assert result.current_keys == {("src/app.py", "M1"), ("src/app.py", "M2")}
 
     def test_low_matching_existing_thread_is_tracked_not_buffered(
-        self, mock_config, post_comment_mock, pull_request_factory, review_inputs_factory, findings_session_factory, finding_factory
+        self,
+        mock_config,
+        post_comment_mock,
+        pull_request_factory,
+        review_inputs_factory,
+        findings_session_factory,
+        finding_factory,
     ) -> None:
         """Test that a low matching an existing thread is tracked current immediately and never posts a new comment."""
 
@@ -359,11 +397,19 @@ class TestDeferredLows:
         assert result.severity_by_key[("src/app.py", "Existing")] is Severity.LOW
 
     def test_later_non_low_supersedes_earlier_same_title_low(
-        self, mock_config, post_comment_mock, pull_request_factory, review_inputs_factory, findings_session_factory, finding_factory
+        self,
+        mock_config,
+        post_comment_mock,
+        pull_request_factory,
+        review_inputs_factory,
+        findings_session_factory,
+        finding_factory,
     ) -> None:
         """Test that a non-low emitted after a same-title buffered low still publishes and wins the title."""
 
-        low = finding_factory(line=10, severity=Severity.LOW, category=FindingCategory.CODE_SIMPLIFICATION, title="Shared")
+        low = finding_factory(
+            line=10, severity=Severity.LOW, category=FindingCategory.CODE_SIMPLIFICATION, title="Shared"
+        )
         medium = finding_factory(line=20, severity=Severity.MEDIUM, title="Shared")
 
         result = asyncio.run(
@@ -382,7 +428,13 @@ class TestDeferredLows:
         assert result.severity_by_key[("src/app.py", "Shared")] is Severity.MEDIUM
 
     def test_dropped_finding_does_not_claim_its_title(
-        self, mock_config, post_comment_mock, pull_request_factory, review_inputs_factory, findings_session_factory, finding_factory
+        self,
+        mock_config,
+        post_comment_mock,
+        pull_request_factory,
+        review_inputs_factory,
+        findings_session_factory,
+        finding_factory,
     ) -> None:
         """Test that a finding dropped by the total cap does not block a later distinct finding sharing its title."""
 
@@ -406,7 +458,13 @@ class TestDeferredLows:
         assert ("src/app.py", "Contested") not in result.current_keys
 
     def test_buffered_lows_dedupe_by_title(
-        self, mock_config, post_comment_mock, pull_request_factory, review_inputs_factory, findings_session_factory, finding_factory
+        self,
+        mock_config,
+        post_comment_mock,
+        pull_request_factory,
+        review_inputs_factory,
+        findings_session_factory,
+        finding_factory,
     ) -> None:
         """Test that two buffered lows sharing a title on different lines post only once."""
 
@@ -514,7 +572,9 @@ class TestCollectRoundFindingsTimeout:
 
         override_review_timeout(timedelta(seconds=1))
         open_session, state = findings_session_factory(
-            [finding_factory()], block_after_review=True, flush_findings=[finding_factory(line=20, title="Late")]
+            [finding_factory()],
+            block_after_review=True,
+            flush_findings=[finding_factory(line=20, title="Late")],
         )
 
         result = asyncio.run(
@@ -637,7 +697,9 @@ class TestCollectRoundFindingsTimeout:
 
         override_review_timeout(timedelta(seconds=0.5))
         finding = finding_factory(path="src/app.py", line=10, title="Streamed")
-        open_session, state = findings_session_factory([finding], block_after_review=True, **session_overrides)
+        open_session, state = findings_session_factory(
+            [finding], block_after_review=True, **session_overrides
+        )
 
         result = asyncio.run(
             collect_round_findings(

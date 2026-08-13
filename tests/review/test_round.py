@@ -31,7 +31,12 @@ class TestRunReviewRound:
     """Test that the round streams findings, posts each inline, and records the verdict."""
 
     def test_posts_each_anchorable_finding_inline(
-        self, mock_config, review_github_mocks, findings_session_factory, pull_request_factory, finding_factory
+        self,
+        mock_config,
+        review_github_mocks,
+        findings_session_factory,
+        pull_request_factory,
+        finding_factory,
     ) -> None:
         """Test that each anchorable finding is posted as its own inline comment as it streams."""
 
@@ -41,7 +46,9 @@ class TestRunReviewRound:
             finding_factory(path="src/app.py", line=20, title="B"),
         ]
 
-        result = asyncio.run(run_review_round(pull_request_factory(), MARKER, findings_session_factory(findings)[0]))
+        result = asyncio.run(
+            run_review_round(pull_request_factory(), MARKER, findings_session_factory(findings)[0])
+        )
 
         assert result.exit_code == 0
         assert result.diff == ""
@@ -54,7 +61,9 @@ class TestRunReviewRound:
 
         review_github_mocks["pull_request_diff_if_available"].return_value = None
 
-        result = asyncio.run(run_review_round(pull_request_factory(), MARKER, findings_session_factory([])[0]))
+        result = asyncio.run(
+            run_review_round(pull_request_factory(), MARKER, findings_session_factory([])[0])
+        )
 
         assert result.exit_code == 0
         review_github_mocks["post_review"].assert_awaited_once()
@@ -76,7 +85,12 @@ class TestRunReviewRound:
             asyncio.run(run_review_round(pull_request_factory(), MARKER, findings_session_factory([])[0]))
 
     def test_out_of_bounds_goes_to_verdict_body(
-        self, mock_config, review_github_mocks, findings_session_factory, pull_request_factory, finding_factory
+        self,
+        mock_config,
+        review_github_mocks,
+        findings_session_factory,
+        pull_request_factory,
+        finding_factory,
     ) -> None:
         """Test that a finding on a too-large unpatched file goes into the verdict review, not an inline comment."""
 
@@ -148,7 +162,12 @@ class TestRunReviewRound:
         assert review_github_mocks["post_comment"].await_count == 0
 
     def test_head_advanced_before_review_skips(
-        self, mock_config, review_github_mocks, findings_session_factory, pull_request_factory, finding_factory
+        self,
+        mock_config,
+        review_github_mocks,
+        findings_session_factory,
+        pull_request_factory,
+        finding_factory,
     ) -> None:
         """Test that an advanced head before streaming skips the round without posting."""
 
@@ -157,7 +176,9 @@ class TestRunReviewRound:
         findings = [finding_factory(path="src/app.py", line=10)]
 
         result = asyncio.run(
-            run_review_round(pull_request_factory(head_sha="abc123"), MARKER, findings_session_factory(findings)[0])
+            run_review_round(
+                pull_request_factory(head_sha="abc123"), MARKER, findings_session_factory(findings)[0]
+            )
         )
 
         assert result.exit_code == 0
@@ -182,15 +203,24 @@ class TestRunReviewRound:
         assert review_github_mocks["complete_check_run"].await_args.args[2] == "action_required"
 
     def test_rejected_inline_post_goes_to_verdict_body(
-        self, mock_config, review_github_mocks, findings_session_factory, pull_request_factory, finding_factory
+        self,
+        mock_config,
+        review_github_mocks,
+        findings_session_factory,
+        pull_request_factory,
+        finding_factory,
     ) -> None:
         """Test that a finding whose inline post is rejected is still visible in the verdict body."""
 
         review_github_mocks["post_comment"].return_value = False
         review_github_mocks["diff_anchors"].return_value = ({"src/app.py": ({10}, set())}, set())
-        findings = [finding_factory(path="src/app.py", line=10, title="Off-by-one error", severity=Severity.HIGH)]
+        findings = [
+            finding_factory(path="src/app.py", line=10, title="Off-by-one error", severity=Severity.HIGH)
+        ]
 
-        result = asyncio.run(run_review_round(pull_request_factory(), MARKER, findings_session_factory(findings)[0]))
+        result = asyncio.run(
+            run_review_round(pull_request_factory(), MARKER, findings_session_factory(findings)[0])
+        )
 
         assert result.exit_code == 0
         assert review_github_mocks["post_comment"].await_count == 1
@@ -233,7 +263,9 @@ class TestRunReviewRoundTimeout:
             AsyncMock(return_value=round_findings_factory(timed_out=True)),
         )
 
-        result = asyncio.run(run_review_round(pull_request_factory(), MARKER, findings_session_factory([])[0]))
+        result = asyncio.run(
+            run_review_round(pull_request_factory(), MARKER, findings_session_factory([])[0])
+        )
 
         assert result.exit_code == 0
         assert review_github_mocks["post_review"].await_count == 0
@@ -266,7 +298,9 @@ class TestRunReviewRoundTimeout:
             ),
         )
 
-        result = asyncio.run(run_review_round(pull_request_factory(), MARKER, findings_session_factory([])[0]))
+        result = asyncio.run(
+            run_review_round(pull_request_factory(), MARKER, findings_session_factory([])[0])
+        )
 
         assert result.exit_code == 0
         assert review_github_mocks["post_review"].await_count == 1
@@ -312,7 +346,9 @@ class TestRunReviewRoundTimeout:
             AsyncMock(side_effect=asyncio.CancelledError()),
         )
 
-        result = asyncio.run(run_review_round(pull_request_factory(), MARKER, findings_session_factory([])[0]))
+        result = asyncio.run(
+            run_review_round(pull_request_factory(), MARKER, findings_session_factory([])[0])
+        )
 
         assert result.exit_code == 1
         assert review_github_mocks["complete_check_run"].await_args.args[2] == "cancelled"

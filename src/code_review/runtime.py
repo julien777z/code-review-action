@@ -29,7 +29,10 @@ logger = logging.getLogger("code_review")
 PULL_REQUEST_ACTIONS = ("opened", "synchronize", "ready_for_review")
 FIRST_REVIEW_ACTIONS = ("opened", "ready_for_review")
 
-SUMMARY_BASE_ERRORS: Final[tuple[type[Exception], ...]] = (SummaryGenerationError, subprocess.CalledProcessError)
+SUMMARY_BASE_ERRORS: Final[tuple[type[Exception], ...]] = (
+    SummaryGenerationError,
+    subprocess.CalledProcessError,
+)
 
 
 def cursor_error_retryable(exc: Exception) -> bool:
@@ -65,7 +68,9 @@ BACKENDS: Final[dict[Backend, BackendHandlers]] = {
 def backend_review_error(handlers: BackendHandlers, exc: Exception) -> ReviewBackendError:
     """Convert a declared backend failure into the shared review error carrying its retry policy."""
 
-    return ReviewBackendError(f"{handlers['label']} review failed: {exc}", retryable=handlers["retryable"](exc))
+    return ReviewBackendError(
+        f"{handlers['label']} review failed: {exc}", retryable=handlers["retryable"](exc)
+    )
 
 
 async def backend_text_chunks(

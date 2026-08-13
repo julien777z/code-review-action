@@ -49,9 +49,13 @@ def project_rules_instruction() -> str:
     """Compose the project-rules enforcement instruction, pinning the severity when one is configured."""
 
     if SETTINGS.project_rules_severity is not None:
-        severity_clause = f"report every violation as a `{SETTINGS.project_rules_severity.value}`-severity finding"
+        severity_clause = (
+            f"report every violation as a `{SETTINGS.project_rules_severity.value}`-severity finding"
+        )
     else:
-        severity_clause = "report a finding on any changed line that violates them at the severity the violation warrants"
+        severity_clause = (
+            "report a finding on any changed line that violates them at the severity the violation warrants"
+        )
 
     return (
         "Enforce this project's own coding rules and conventions as part of your review: apply any "

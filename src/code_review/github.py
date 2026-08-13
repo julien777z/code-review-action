@@ -160,7 +160,9 @@ async def already_reviewed(repo: str, pr_number: int, head_sha: str, marker: str
 async def head_check_concluded(repo: str, head_sha: str) -> bool:
     """Return True if a terminal review verdict already exists for this head commit."""
 
-    reviewed = " or ".join(f'.conclusion == "{conclusion.value}"' for conclusion in sorted(REVIEWED_CONCLUSIONS))
+    reviewed = " or ".join(
+        f'.conclusion == "{conclusion.value}"' for conclusion in sorted(REVIEWED_CONCLUSIONS)
+    )
     raw = await run_gh(
         [
             "api",

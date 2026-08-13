@@ -62,7 +62,9 @@ async def note_diff_too_large(pr: PullRequestContext, marker: str) -> ReviewRoun
     body = f"The diff is too large to auto-review, so this review was skipped.\n\n{DISCLAIMER}\n\n{marker}"
     check_id = None if SETTINGS.approval_disable else await start_check_run(pr.repo, pr.head_sha)
 
-    await post_review(pr.repo, pr.number, ReviewPayload(commit_id=pr.head_sha, event="COMMENT", body=body, comments=[]))
+    await post_review(
+        pr.repo, pr.number, ReviewPayload(commit_id=pr.head_sha, event="COMMENT", body=body, comments=[])
+    )
     await complete_check_run(
         pr.repo, check_id, CheckConclusion.NEUTRAL, "Diff too large", "The diff is too large to auto-review."
     )
@@ -129,7 +131,9 @@ async def run_review_round(
             )
         except ReviewBackendError as exc:
             logger.error("Review backend failed: %s", exc)
-            await complete_check_run(pr.repo, check_id, CheckConclusion.ACTION_REQUIRED, "Review failed", str(exc))
+            await complete_check_run(
+                pr.repo, check_id, CheckConclusion.ACTION_REQUIRED, "Review failed", str(exc)
+            )
             concluded = True
 
             return ReviewRoundResult(exit_code=1, diff=diff)
@@ -157,7 +161,9 @@ async def run_review_round(
             await post_review_or_warn(pr.repo, pr.number, payload, event)
 
         stale_to_resolve = [] if findings.timed_out else stale_ids
-        logger.info("Resolving %d stale thread(s); %d open issue(s) remain.", len(stale_to_resolve), open_count)
+        logger.info(
+            "Resolving %d stale thread(s); %d open issue(s) remain.", len(stale_to_resolve), open_count
+        )
         await resolve_threads(pr.repo, stale_to_resolve)
 
         await complete_check_run(pr.repo, check_id, conclusion, title, summary)
@@ -177,5 +183,9 @@ async def run_review_round(
 
         if not concluded:
             await complete_check_run(
-                pr.repo, check_id, CheckConclusion.ACTION_REQUIRED, "Review failed", "The review run did not complete."
+                pr.repo,
+                check_id,
+                CheckConclusion.ACTION_REQUIRED,
+                "Review failed",
+                "The review run did not complete.",
             )

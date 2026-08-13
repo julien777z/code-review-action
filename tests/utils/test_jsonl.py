@@ -78,7 +78,9 @@ class TestParseFindingLine:
     def test_normalizes_left_side(self) -> None:
         """Test that a LEFT-side line normalizes the diff side."""
 
-        finding = parse_finding_line('{"path":"a.py","line":3,"side":"LEFT","severity":"low","title":"T","body":"B"}')
+        finding = parse_finding_line(
+            '{"path":"a.py","line":3,"side":"LEFT","severity":"low","title":"T","body":"B"}'
+        )
 
         assert finding is not None
         assert finding.side is DiffSide.LEFT
@@ -86,7 +88,9 @@ class TestParseFindingLine:
     def test_capitalized_severity_normalized(self) -> None:
         """Test that a capitalized severity word is normalized to the enum."""
 
-        finding = parse_finding_line('{"path":"a.py","line":1,"side":"RIGHT","severity":"Critical","title":"T","body":"B"}')
+        finding = parse_finding_line(
+            '{"path":"a.py","line":1,"side":"RIGHT","severity":"Critical","title":"T","body":"B"}'
+        )
 
         assert finding is not None
         assert finding.severity is Severity.CRITICAL
@@ -133,7 +137,9 @@ class TestIterFindings:
     def test_flushes_trailing_line_without_newline(self) -> None:
         """Test that a final line with no trailing newline is still parsed."""
 
-        findings = asyncio.run(collect('{"path":"a.py","line":1,"side":"RIGHT","severity":"high","title":"A","body":"B"}'))
+        findings = asyncio.run(
+            collect('{"path":"a.py","line":1,"side":"RIGHT","severity":"high","title":"A","body":"B"}')
+        )
 
         assert len(findings) == 1
 

@@ -132,7 +132,9 @@ class Settings(BaseSettings):
         if not isinstance(value, str):
             return value
 
-        return frozenset(Severity.from_str(item) for item in split_list(value)) or frozenset({Severity.CRITICAL})
+        return frozenset(Severity.from_str(item) for item in split_list(value)) or frozenset(
+            {Severity.CRITICAL}
+        )
 
     @field_validator("include_paths", "exclude_paths", mode="before")
     @classmethod

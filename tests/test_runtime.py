@@ -70,13 +70,20 @@ class TestReactionSubject:
 
         event = issue_comment_event_factory(comment_id=555)
 
-        assert reaction_subject("issue_comment", event, "octo/repo", 7) == "repos/octo/repo/issues/comments/555"
+        assert (
+            reaction_subject("issue_comment", event, "octo/repo", 7) == "repos/octo/repo/issues/comments/555"
+        )
 
-    @pytest.mark.parametrize("event_name", ["pull_request", "workflow_dispatch"], ids=["pull_request", "dispatch"])
+    @pytest.mark.parametrize(
+        "event_name", ["pull_request", "workflow_dispatch"], ids=["pull_request", "dispatch"]
+    )
     def test_other_events_target_the_pull_request(self, pull_request_event_factory, event_name: str) -> None:
         """Test that pull_request and manual-dispatch events react on the PR itself."""
 
-        assert reaction_subject(event_name, pull_request_event_factory(), "octo/repo", 7) == "repos/octo/repo/issues/7"
+        assert (
+            reaction_subject(event_name, pull_request_event_factory(), "octo/repo", 7)
+            == "repos/octo/repo/issues/7"
+        )
 
 
 class TestResolvePrNumber:
@@ -122,7 +129,10 @@ class TestIsEligible:
 
         mock_config()
 
-        assert is_eligible("pull_request", pull_request_event_factory(action="synchronize", sender_type="Bot")) is True
+        assert (
+            is_eligible("pull_request", pull_request_event_factory(action="synchronize", sender_type="Bot"))
+            is True
+        )
 
     def test_unhandled_action_rejected(self, mock_config, pull_request_event_factory) -> None:
         """Test that a non-review pull_request action is rejected."""
@@ -375,9 +385,7 @@ class TestBackendReviewPolicy:
             label="Cursor",
         )
 
-        findings = asyncio.run(
-            collect_session_findings(handlers, review_inputs_factory(), flush=True)
-        )
+        findings = asyncio.run(collect_session_findings(handlers, review_inputs_factory(), flush=True))
 
         assert findings == []
 
@@ -497,7 +505,9 @@ class TestMain:
 
         assert mocks["post_pr_summary"].await_count == (1 if summary_posted else 0)
         if summary_posted:
-            mocks["post_pr_summary"].assert_awaited_once_with(mocks["pr"], cursor.generate_text, diff="REVIEW_DIFF")
+            mocks["post_pr_summary"].assert_awaited_once_with(
+                mocks["pr"], cursor.generate_text, diff="REVIEW_DIFF"
+            )
 
     def test_summary_skipped_when_disabled(self, main_harness) -> None:
         """Test that a first review does not post a summary when the setting is off."""

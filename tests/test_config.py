@@ -26,7 +26,15 @@ class TestParseBool:
 
     @pytest.mark.parametrize(
         ("raw", "expected"),
-        [("true", True), ("True", True), ("1", True), ("yes", True), ("false", False), ("", False), ("nope", False)],
+        [
+            ("true", True),
+            ("True", True),
+            ("1", True),
+            ("yes", True),
+            ("false", False),
+            ("", False),
+            ("nope", False),
+        ],
         ids=["true", "true-cap", "one", "yes", "false", "empty", "other"],
     )
     def test_parse(self, raw: str, expected: bool) -> None:
@@ -40,7 +48,12 @@ class TestReviewModelParse:
 
     @pytest.mark.parametrize(
         ("raw", "expected"),
-        [("auto", ReviewModel.AUTO), ("CLAUDE", ReviewModel.CLAUDE), ("cursor", ReviewModel.CURSOR), ("", None)],
+        [
+            ("auto", ReviewModel.AUTO),
+            ("CLAUDE", ReviewModel.CLAUDE),
+            ("cursor", ReviewModel.CURSOR),
+            ("", None),
+        ],
         ids=["auto", "claude-upper", "cursor", "empty"],
     )
     def test_parse(self, raw: str, expected: ReviewModel | None) -> None:

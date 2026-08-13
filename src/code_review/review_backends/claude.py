@@ -68,7 +68,9 @@ async def create_environment(client: anthropic.AsyncAnthropic) -> str:
 
     environment = await client.beta.environments.create(
         name=REVIEW_AGENT_NAME,
-        config=BetaCloudConfigParams(type="cloud", networking=BetaUnrestrictedNetworkParam(type="unrestricted")),
+        config=BetaCloudConfigParams(
+            type="cloud", networking=BetaUnrestrictedNetworkParam(type="unrestricted")
+        ),
         betas=[MANAGED_AGENTS_BETA],
     )
 
